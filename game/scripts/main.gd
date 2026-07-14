@@ -16,6 +16,8 @@ var sketch_mode: SketchMode
 var sketch_toolbar: PanelContainer
 var timeline: TimelinePanel
 var help_overlay: HelpOverlay
+var voice_capture: VoiceCapture
+var voice_executor: VoiceExecutor
 var variables_panel: VariablesPanel
 var ops_panel: OpsPanel
 var assembly_panel: AssemblyPanel
@@ -51,6 +53,21 @@ func _ready() -> void:
 	# Keyboard cheat sheet on F1, above everything else.
 	help_overlay = HelpOverlay.new()
 	add_child(help_overlay)
+	# Hold-V push-to-talk → STT (optional) → SxVoice interpreter → actions.
+	voice_capture = VoiceCapture.new()
+	voice_capture.name = "VoiceCapture"
+	voice_capture.status.connect(_on_status)
+	add_child(voice_capture)
+	voice_executor = VoiceExecutor.new()
+	voice_executor.view = view
+	voice_executor.camera = camera
+	voice_executor.sketch_mode = sketch_mode
+	voice_executor.interaction = interaction
+	voice_executor.status.connect(_on_status)
+	voice_capture.set_transcript_provider(voice_executor.handle_text)
+	voice_capture.utterance_ready.connect(func(path: String) -> void:
+		if path != "":
+			voice_executor.handle_wav(path))
 
 
 func _build_world() -> void:

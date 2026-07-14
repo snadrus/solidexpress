@@ -64,6 +64,7 @@ const GLYPHS := {
 	"save": "<path d='M5 5h11l3 3v11H5z'/><path d='M8 5v5h7V5'/><rect x='8' y='13' width='8' height='6'/>",
 	"cancel": "<path d='M6 6l12 12M18 6 6 18'/>",
 	"ok": "<path d='M5 13l4.5 4.5L19 7'/>",
+	"mic": "<path d='M12 4a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V7a3 3 0 0 1 3-3z'/><path d='M7.5 11.5a4.5 4.5 0 0 0 9 0M12 16v3.5M9.5 19.5h5'/>",
 }
 
 static var _cache := {}

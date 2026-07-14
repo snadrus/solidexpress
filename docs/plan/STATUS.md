@@ -158,11 +158,22 @@ Round 14 (integrated, committed):
 
 Round 14 test state: kernel 199 cases / 6955 assertions; Godot (20 suites): integration 97, UI 240, sketch 38, sketch-tools 105, display 72, menu 50, workflow 60, select 24, property 17, infer 18, mate 15, camera 21, help 112, place 20, layout 21, icon 13, visibility 25, viewcube 36, assembly 20, drag 33 — all green.
 
+## Phase 28 — Voice ask bridge (round 19)
+- [x] `sx::voice` deterministic interpreter (text → Intent); Catch2 `[voice]` + golden corpus ≥75% hit rate on 127 phrases
+- [x] `sxvoice` optional STT stub (whisper.cpp when `SX_BUILD_VOICE=ON` + vendored tree); `SxVoiceStt` GDExtension
+- [x] Hold-V `VoiceCapture` overlay (mic pulse, WAV best-effort, headless-safe); Shortcuts "V (hold)"
+- [x] `VoiceExecutor` maps intents → constraints / model ops / views / queries / variables; unmatched → `user://voice/unmatched.jsonl`
+- [x] Phrase corpus + GBNF: `docs/voice/` (127 phrases, `commands.gbnf`)
+- [x] Godot `run_voice_tests` 29 checks
+
+Round 19 test state: kernel 210 cases / 7043 assertions; Godot voice 29 + help 115 — key suites green.
+
 ## Later phases
-See implementation plan.
+See friendliness plan (phases 21-27) + AI-first solver upgrade for unmatched voice.
 
 ## Environment notes
 - System deps installed via apt: ninja-build, zip, libocct-*-dev (7.9.2), libeigen3-dev, libboost-dev
 - Godot 4.7-stable binary at `tools/godot/godot` (gitignored; re-download from godot-builds if missing)
 - Build: `make build` (CMake+Ninja superbuild, ~5 min cold for godot-cpp)
 - PlaneGCS builds as `libplanegcs.so` (LGPL dynamic-link compliance); not yet consumed by sxkernel (Phase 2)
+- Voice STT: default stub (`SX_BUILD_VOICE=OFF`). Enable with vendored `thirdparty/whisper.cpp` + `ggml-tiny.en.bin` under `tools/whisper/` (gitignored)

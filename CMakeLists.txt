@@ -12,6 +12,7 @@ endif()
 
 option(SX_BUILD_GDEXTENSION "Build the sxcore Godot GDExtension" ON)
 option(SX_BUILD_TESTS "Build kernel unit tests" ON)
+option(SX_BUILD_VOICE "Build sxvoice with whisper.cpp when vendored" OFF)
 
 # --- system deps ---
 find_package(OpenCASCADE REQUIRED)
@@ -33,6 +34,9 @@ target_link_libraries(planegcs PUBLIC Eigen3::Eigen)
 target_compile_options(planegcs PRIVATE -w)  # vendored code: silence warnings
 
 add_subdirectory(sxkernel)
+# Always build sxvoice (stub by default). Whisper links only when SX_BUILD_VOICE=ON
+# and thirdparty/whisper.cpp is present — see sxvoice/CMakeLists.txt.
+add_subdirectory(sxvoice)
 
 if(SX_BUILD_GDEXTENSION)
     # Pin the API to the exact 4.7-stable binary in tools/godot (dumped via

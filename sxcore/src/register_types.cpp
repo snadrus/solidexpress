@@ -5,6 +5,8 @@
 
 #include "sx_document.hpp"
 #include "sx_sketch.hpp"
+#include "sx_voice.hpp"
+#include "sx_voice_stt.hpp"
 
 using namespace godot;
 
@@ -12,6 +14,8 @@ static void initialize_sxcore(ModuleInitializationLevel p_level) {
     if (p_level != MODULE_INITIALIZATION_LEVEL_SCENE) return;
     ClassDB::register_class<sx_godot::SxDocument>();
     ClassDB::register_class<sx_godot::SxSketch>();
+    ClassDB::register_class<sx_godot::SxVoice>();
+    ClassDB::register_class<sx_godot::SxVoiceStt>();
 }
 
 static void uninitialize_sxcore(ModuleInitializationLevel p_level) {

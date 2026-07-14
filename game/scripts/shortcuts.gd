@@ -25,6 +25,8 @@ const TABLE: Array[Dictionary] = [
 	{"keys": "Ctrl+Z", "context": "Model", "desc": "Undo"},
 	{"keys": "Ctrl+Y", "context": "Model", "desc": "Redo"},
 	{"keys": "Ctrl+Shift+Z", "context": "Model", "desc": "Redo"},
+	# Voice (voice_capture.gd — hold-to-talk; registry is documentation only)
+	{"keys": "V (hold)", "context": "Model", "desc": "Push-to-talk voice capture"},
 	# Sketch (viewport_interaction._sketch_input)
 	{"keys": "S", "context": "Sketch", "desc": "Select tool"},
 	{"keys": "L", "context": "Sketch", "desc": "Line tool"},

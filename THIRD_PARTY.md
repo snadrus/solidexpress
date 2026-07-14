@@ -13,5 +13,6 @@ Policy: **never GPL/AGPL**. LGPL is allowed with dynamic linking only. Every dep
 | miniz | 3.0.2 | MIT | Static (vendored) | github.com/richgel999/miniz | Zip read/write for `.sxp` container. |
 | nlohmann/json | 3.12.0 | MIT | Header-only (vendored) | github.com/nlohmann/json | Manifest/feature-graph JSON. |
 | Catch2 | 2.13.10 (single header) | BSL-1.0 | Test-only (vendored) | github.com/catchorg/Catch2 | Kernel unit tests. |
+| whisper.cpp | optional (`thirdparty/whisper.cpp`) | MIT | **Separate** static lib into `sxvoice` only | github.com/ggml-org/whisper.cpp | Offline STT. Enabled with `-DSX_BUILD_VOICE=ON` when vendored. Model weights (`tools/whisper/*.bin`) are not committed. |
 
 Known banned (GPL) libraries we must NOT use: libdxfrw, Gmsh, CalculiX, Netgen-GPL variants, Qt (policy: Godot UI only).

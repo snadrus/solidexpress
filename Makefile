@@ -14,6 +14,7 @@ build: configure
 
 test-kernel: build
 	./$(BUILD_DIR)/sxkernel/sxkernel_tests
+	./$(BUILD_DIR)/sxvoice/sxvoice_tests
 
 # First import bakes .godot cache; needed once before running scripts headless.
 import: build
@@ -40,6 +41,7 @@ test-godot: build import
 	$(GODOT) --headless --path game --script tests/run_viewcube_tests.gd
 	$(GODOT) --headless --path game --script tests/run_assembly_tests.gd
 	$(GODOT) --headless --path game --script tests/run_drag_tests.gd
+	$(GODOT) --headless --path game --script tests/run_voice_tests.gd
 
 test: test-kernel test-godot
 	@echo "ALL TESTS PASSED"

@@ -1,0 +1,7 @@
+# Model weights are large binaries — download locally, never commit.
+*.bin
+*.ggml
+*.pt
+*.pth
+*.onnx
+!*.md
