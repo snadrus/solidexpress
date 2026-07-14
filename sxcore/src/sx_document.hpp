@@ -168,6 +168,13 @@ public:
     bool save(const godot::String& path);
     bool load(const godot::String& path);
 
+    // --- datums (reference geometry) ---
+    godot::String add_datum_plane(const godot::Vector3& point, const godot::Vector3& normal);
+    godot::String add_datum_axis(const godot::Vector3& point, const godot::Vector3& dir);
+    godot::String add_datum_point(const godot::Vector3& p);
+    godot::Array datum_list() const;
+    bool remove_datum(const godot::String& id);
+
 protected:
     static void _bind_methods();
 

@@ -13,6 +13,8 @@
 #include <gp_Dir.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Pnt.hxx>
+#include <type_traits>
+#include <variant>
 #include "sx/measure.hpp"
 #include "sx/features.hpp"
 #include "sx/interop.hpp"
@@ -755,6 +757,60 @@ bool SxDocument::load(const String& path) {
     return ok;
 }
 
+String SxDocument::add_datum_plane(const Vector3& point, const Vector3& normal) {
+    auto id = doc_->add_datum_plane({point.x, point.y, point.z},
+                                    {normal.x, normal.y, normal.z});
+    return to_gd(id.str());
+}
+
+String SxDocument::add_datum_axis(const Vector3& point, const Vector3& dir) {
+    auto id =
+        doc_->add_datum_axis({point.x, point.y, point.z}, {dir.x, dir.y, dir.z});
+    return to_gd(id.str());
+}
+
+String SxDocument::add_datum_point(const Vector3& p) {
+    auto id = doc_->add_datum_point({p.x, p.y, p.z});
+    return to_gd(id.str());
+}
+
+Array SxDocument::datum_list() const {
+    Array out;
+    for (const auto& d : doc_->datums()) {
+        Dictionary dict;
+        std::visit(
+            [&](const auto& x) {
+                using T = std::decay_t<decltype(x)>;
+                dict["id"] = to_gd(x.id.str());
+                dict["name"] = to_gd(x.name);
+                if constexpr (std::is_same_v<T, sx::DatumPlane>) {
+                    dict["kind"] = "plane";
+                    dict["origin"] = Vector3(x.origin[0], x.origin[1], x.origin[2]);
+                    dict["normal"] = Vector3(x.normal[0], x.normal[1], x.normal[2]);
+                    dict["x_dir"] = Vector3(x.x_dir[0], x.x_dir[1], x.x_dir[2]);
+                } else if constexpr (std::is_same_v<T, sx::DatumAxis>) {
+                    dict["kind"] = "axis";
+                    dict["point"] = Vector3(x.point[0], x.point[1], x.point[2]);
+                    dict["direction"] =
+                        Vector3(x.direction[0], x.direction[1], x.direction[2]);
+                } else if constexpr (std::is_same_v<T, sx::DatumPoint>) {
+                    dict["kind"] = "point";
+                    dict["position"] =
+                        Vector3(x.position[0], x.position[1], x.position[2]);
+                }
+            },
+            d);
+        out.push_back(dict);
+    }
+    return out;
+}
+
+bool SxDocument::remove_datum(const String& id) {
+    auto eid = parse_id(id);
+    if (eid.is_null()) return false;
+    return doc_->remove_datum(eid);
+}
+
 void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("add_box", "dx", "dy", "dz", "origin"), &SxDocument::add_box);
     ClassDB::bind_method(D_METHOD("add_cylinder", "radius", "height", "origin"), &SxDocument::add_cylinder);
@@ -824,6 +880,13 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("graph_regenerate"), &SxDocument::graph_regenerate);
     ClassDB::bind_method(D_METHOD("save", "path"), &SxDocument::save);
     ClassDB::bind_method(D_METHOD("load", "path"), &SxDocument::load);
+    ClassDB::bind_method(D_METHOD("add_datum_plane", "point", "normal"),
+                         &SxDocument::add_datum_plane);
+    ClassDB::bind_method(D_METHOD("add_datum_axis", "point", "dir"),
+                         &SxDocument::add_datum_axis);
+    ClassDB::bind_method(D_METHOD("add_datum_point", "p"), &SxDocument::add_datum_point);
+    ClassDB::bind_method(D_METHOD("datum_list"), &SxDocument::datum_list);
+    ClassDB::bind_method(D_METHOD("remove_datum", "id"), &SxDocument::remove_datum);
 }
 
 }  // namespace sx_godot

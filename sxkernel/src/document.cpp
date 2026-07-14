@@ -3,12 +3,43 @@
 #include <TopExp.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
 
+#include <cmath>
+
 #include "sx/cards.hpp"
 #include "sx/features.hpp"
 #include "sx/naming.hpp"
 #include "sx/shape_utils.hpp"
 
 namespace sx {
+namespace {
+
+constexpr double kDatumEps = 1e-12;
+
+std::array<double, 3> normalize3(const std::array<double, 3>& v) {
+    const double len = std::sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+    if (len < kDatumEps) return {0, 0, 0};
+    return {v[0] / len, v[1] / len, v[2] / len};
+}
+
+std::array<double, 3> cross3(const std::array<double, 3>& a,
+                             const std::array<double, 3>& b) {
+    return {a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0]};
+}
+
+// Arbitrary unit vector in the plane perpendicular to `n` (assumed unit).
+std::array<double, 3> plane_x_dir(const std::array<double, 3>& n) {
+    const std::array<double, 3> ref =
+        (std::abs(n[0]) < 0.9) ? std::array<double, 3>{1, 0, 0}
+                               : std::array<double, 3>{0, 1, 0};
+    return normalize3(cross3(ref, n));
+}
+
+EntityId datum_entity_id(const Datum& d) {
+    return std::visit([](const auto& x) { return x.id; }, d);
+}
+
+}  // namespace
 
 Document::Document()
     : cards_(std::make_unique<CardRegistry>()),
@@ -197,6 +228,71 @@ void Document::regenerate_cards_for_body(const Body& b) {
         fc.relations = {b.id};
         cards_->upsert(std::move(fc));
     }
+}
+
+void Document::index_datum(Datum&& d) {
+    const EntityId id = datum_entity_id(d);
+    datum_index_[id] = datums_.size();
+    datums_.push_back(std::move(d));
+    bump_revision();
+}
+
+EntityId Document::add_datum_plane(const std::array<double, 3>& origin,
+                                   const std::array<double, 3>& normal,
+                                   const EntityId& keep_id) {
+    DatumPlane p;
+    p.id = keep_id.is_null() ? EntityId::generate() : keep_id;
+    p.name = "Datum Plane " + std::to_string(++datum_plane_seq_);
+    p.origin = origin;
+    p.normal = normalize3(normal);
+    if (p.normal[0] == 0 && p.normal[1] == 0 && p.normal[2] == 0)
+        p.normal = {0, 0, 1};
+    p.x_dir = plane_x_dir(p.normal);
+    const EntityId id = p.id;
+    index_datum(Datum{std::move(p)});
+    return id;
+}
+
+EntityId Document::add_datum_axis(const std::array<double, 3>& point,
+                                  const std::array<double, 3>& direction,
+                                  const EntityId& keep_id) {
+    DatumAxis a;
+    a.id = keep_id.is_null() ? EntityId::generate() : keep_id;
+    a.name = "Datum Axis " + std::to_string(++datum_axis_seq_);
+    a.point = point;
+    a.direction = normalize3(direction);
+    if (a.direction[0] == 0 && a.direction[1] == 0 && a.direction[2] == 0)
+        a.direction = {0, 0, 1};
+    const EntityId id = a.id;
+    index_datum(Datum{std::move(a)});
+    return id;
+}
+
+EntityId Document::add_datum_point(const std::array<double, 3>& position,
+                                   const EntityId& keep_id) {
+    DatumPoint p;
+    p.id = keep_id.is_null() ? EntityId::generate() : keep_id;
+    p.name = "Datum Point " + std::to_string(++datum_point_seq_);
+    p.position = position;
+    const EntityId id = p.id;
+    index_datum(Datum{std::move(p)});
+    return id;
+}
+
+bool Document::remove_datum(const EntityId& id) {
+    auto it = datum_index_.find(id);
+    if (it == datum_index_.end()) return false;
+    const size_t idx = it->second;
+    datums_.erase(datums_.begin() + static_cast<long>(idx));
+    datum_index_.erase(it);
+    for (size_t i = idx; i < datums_.size(); ++i)
+        datum_index_[datum_entity_id(datums_[i])] = i;
+    bump_revision();
+    return true;
+}
+
+void Document::restore_datum(Datum&& d) {
+    index_datum(std::move(d));
 }
 
 }  // namespace sx

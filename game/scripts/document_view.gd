@@ -12,6 +12,9 @@ const BODY_COLOR := Color(0.72, 0.74, 0.78)
 const SELECTED_BODY_COLOR := Color(0.55, 0.68, 0.9)
 const SELECTED_FACE_COLOR := Color(1.0, 0.62, 0.15)
 const EDGE_COLOR := Color(0.12, 0.13, 0.16)
+const DATUM_PLANE_COLOR := Color(0.35, 0.55, 0.85, 0.22)
+const DATUM_AXIS_COLOR := Color(0.85, 0.35, 0.2)
+const DATUM_POINT_COLOR := Color(0.2, 0.7, 0.45)
 
 enum DisplayMode { SHADED, SHADED_EDGES, WIREFRAME }
 
@@ -25,8 +28,12 @@ var display_mode := DisplayMode.SHADED_EDGES
 var section_enabled := false
 
 const EDGE_PICK_TOLERANCE := 2.5  # model units (mm)
+const DATUM_PLANE_HALF := 20.0  # ~40 unit square
+const DATUM_AXIS_HALF_LEN := 100.0
+const DATUM_POINT_RADIUS := 1.5
 
 var _body_nodes := {}  # body_id -> MeshInstance3D
+var _datum_nodes := {}  # datum_id -> Node3D
 var _face_ids := {}    # body_id -> PackedStringArray
 var _body_materials := {}  # body_id -> StandardMaterial3D (tinted by body color)
 var _edge_highlight: MeshInstance3D
@@ -36,6 +43,9 @@ var _selected_face_material: StandardMaterial3D
 var _edge_material: StandardMaterial3D
 var _selected_edge_material: StandardMaterial3D
 var _wireframe_hidden_material: StandardMaterial3D
+var _datum_plane_material: StandardMaterial3D
+var _datum_axis_material: StandardMaterial3D
+var _datum_point_material: StandardMaterial3D
 var _section_shader: Shader
 var _section_point := Vector3.ZERO
 var _section_normal := Vector3.RIGHT
@@ -56,6 +66,17 @@ func _ready() -> void:
 	_wireframe_hidden_material = StandardMaterial3D.new()
 	_wireframe_hidden_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_wireframe_hidden_material.albedo_color = Color(0, 0, 0, 0)
+	_datum_plane_material = StandardMaterial3D.new()
+	_datum_plane_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_datum_plane_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_datum_plane_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_datum_plane_material.albedo_color = DATUM_PLANE_COLOR
+	_datum_axis_material = StandardMaterial3D.new()
+	_datum_axis_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_datum_axis_material.albedo_color = DATUM_AXIS_COLOR
+	_datum_point_material = StandardMaterial3D.new()
+	_datum_point_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_datum_point_material.albedo_color = DATUM_POINT_COLOR
 	_section_shader = _make_section_shader()
 	var hl_mat := StandardMaterial3D.new()
 	hl_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -406,10 +427,101 @@ func refresh() -> void:
 			_body_nodes.erase(body_id)
 			_face_ids.erase(body_id)
 			_body_materials.erase(body_id)
+	_refresh_datums()
 
 
 func body_node(body_id: String) -> MeshInstance3D:
 	return _body_nodes.get(body_id)
+
+
+func datum_node(datum_id: String) -> Node3D:
+	return _datum_nodes.get(datum_id)
+
+
+func _refresh_datums() -> void:
+	var live := {}
+	for d in doc.datum_list():
+		var id: String = d["id"]
+		live[id] = true
+		_rebuild_datum(d)
+	for id in _datum_nodes.keys().duplicate():
+		if not live.has(id):
+			_datum_nodes[id].queue_free()
+			_datum_nodes.erase(id)
+
+
+func _rebuild_datum(d: Dictionary) -> void:
+	var id: String = d["id"]
+	var kind: String = d["kind"]
+	var node: Node3D = _datum_nodes.get(id)
+	if node == null:
+		node = MeshInstance3D.new()
+		node.name = "Datum_" + id.left(8)
+		add_child(node)
+		_datum_nodes[id] = node
+	var mi := node as MeshInstance3D
+	match kind:
+		"plane":
+			mi.mesh = _make_datum_plane_mesh(d)
+			mi.material_override = _datum_plane_material
+			mi.transform = Transform3D.IDENTITY
+		"axis":
+			mi.mesh = _make_datum_axis_mesh(d)
+			mi.material_override = _datum_axis_material
+			mi.transform = Transform3D.IDENTITY
+		"point":
+			var sphere := SphereMesh.new()
+			sphere.radius = DATUM_POINT_RADIUS
+			sphere.height = DATUM_POINT_RADIUS * 2.0
+			sphere.radial_segments = 12
+			sphere.rings = 6
+			mi.mesh = sphere
+			mi.material_override = _datum_point_material
+			var pos: Vector3 = d["position"]
+			mi.transform = Transform3D(Basis.IDENTITY, pos)
+		_:
+			mi.mesh = null
+
+
+func _make_datum_plane_mesh(d: Dictionary) -> ArrayMesh:
+	var origin: Vector3 = d["origin"]
+	var normal: Vector3 = d["normal"]
+	var x_dir: Vector3 = d["x_dir"]
+	var y_dir := normal.cross(x_dir).normalized()
+	if y_dir.length_squared() < 1e-12:
+		y_dir = Vector3.UP if absf(normal.dot(Vector3.UP)) < 0.9 else Vector3.RIGHT
+		y_dir = normal.cross(y_dir).normalized()
+	x_dir = y_dir.cross(normal).normalized()
+	var hx := x_dir * DATUM_PLANE_HALF
+	var hy := y_dir * DATUM_PLANE_HALF
+	var c0 := origin - hx - hy
+	var c1 := origin + hx - hy
+	var c2 := origin + hx + hy
+	var c3 := origin - hx + hy
+	var verts := PackedVector3Array([c0, c1, c2, c0, c2, c3])
+	var norms := PackedVector3Array()
+	for _i in range(6):
+		norms.append(normal)
+	var arrays: Array = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = norms
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
+func _make_datum_axis_mesh(d: Dictionary) -> ImmediateMesh:
+	var point: Vector3 = d["point"]
+	var direction: Vector3 = d["direction"].normalized()
+	var a := point - direction * DATUM_AXIS_HALF_LEN
+	var b := point + direction * DATUM_AXIS_HALF_LEN
+	var im := ImmediateMesh.new()
+	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	im.surface_add_vertex(a)
+	im.surface_add_vertex(b)
+	im.surface_end()
+	return im
 
 
 func _after_mutation() -> void:

@@ -42,6 +42,7 @@ func _init() -> void:
 	test_body_props(main)
 	test_draft(main)
 	test_graph_sweep_loft()
+	test_datums(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -606,3 +607,52 @@ func test_graph_sweep_loft() -> void:
 			loft_body = f["output_body"]
 	check(loft_body != "", "loft has output_body")
 	check(doc.body_volume(loft_body) > 0.0, "lofted body volume > 0")
+
+
+func test_datums(main) -> void:
+	print("- datums: add, visuals, remove, save/load")
+	var view: DocumentView = main.view
+	view.new_document()
+
+	var plane_id: String = view.doc.add_datum_plane(Vector3(0, 0, 0), Vector3(0, 0, 1))
+	var axis_id: String = view.doc.add_datum_axis(Vector3(0, 0, 0), Vector3(0, 1, 0))
+	var point_id: String = view.doc.add_datum_point(Vector3(10, 20, 30))
+	check(plane_id.length() == 36, "add_datum_plane returns uuid")
+	check(axis_id.length() == 36, "add_datum_axis returns uuid")
+	check(point_id.length() == 36, "add_datum_point returns uuid")
+
+	view.refresh()
+	var listed: Array = view.doc.datum_list()
+	check(listed.size() == 3, "datum_list has 3 entries")
+	var kinds := {}
+	for d in listed:
+		kinds[d["kind"]] = true
+	check(kinds.has("plane") and kinds.has("axis") and kinds.has("point"),
+		"datum_list covers all kinds")
+
+	check(view.datum_node(plane_id) != null, "plane visual exists")
+	check(view.datum_node(axis_id) != null, "axis visual exists")
+	check(view.datum_node(point_id) != null, "point visual exists")
+	var plane_mi: MeshInstance3D = view.datum_node(plane_id) as MeshInstance3D
+	check(plane_mi != null and plane_mi.mesh != null, "plane has mesh")
+
+	check(view.doc.remove_datum(axis_id), "remove_datum axis")
+	view.refresh()
+	check(view.doc.datum_list().size() == 2, "datum_list size after remove")
+	check(view.datum_node(axis_id) == null, "axis visual cleared")
+
+	var path := "/tmp/sx_ui_datums.sxp"
+	check(view.save(path), "save datums document")
+	view.new_document()
+	check(view.doc.datum_list().size() == 0, "new document has no datums")
+	check(view.load_from(path), "reload datums file")
+	var reloaded: Array = view.doc.datum_list()
+	check(reloaded.size() == 2, "two datums after reload")
+	var re_ids := {}
+	for d in reloaded:
+		re_ids[d["id"]] = d["kind"]
+	check(re_ids.has(plane_id) and re_ids[plane_id] == "plane", "plane id survived")
+	check(re_ids.has(point_id) and re_ids[point_id] == "point", "point id survived")
+	check(view.datum_node(plane_id) != null, "plane visual after reload")
+	check(view.datum_node(point_id) != null, "point visual after reload")
+	DirAccess.remove_absolute(path)

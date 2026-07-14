@@ -13,8 +13,10 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
+#include "sx/datum.hpp"
 #include "sx/entity.hpp"
 #include "sx/ids.hpp"
 
@@ -22,6 +24,8 @@ namespace sx {
 
 class CardRegistry;
 class FeatureGraph;
+
+using Datum = std::variant<DatumPlane, DatumAxis, DatumPoint>;
 
 struct SubshapeRef {
     EntityId body;
@@ -84,14 +88,36 @@ public:
     // Used by the .sxp loader to restore persisted ids exactly.
     void restore_body(Body&& b);
 
+    // --- datums (reference geometry) ---
+    // Creates a datum plane through `origin` with the given `normal` (normalized
+    // on insert). `x_dir` is chosen perpendicular to the normal. Returns the id.
+    EntityId add_datum_plane(const std::array<double, 3>& origin,
+                             const std::array<double, 3>& normal,
+                             const EntityId& keep_id = {});
+    EntityId add_datum_axis(const std::array<double, 3>& point,
+                            const std::array<double, 3>& direction,
+                            const EntityId& keep_id = {});
+    EntityId add_datum_point(const std::array<double, 3>& position,
+                             const EntityId& keep_id = {});
+    bool remove_datum(const EntityId& id);
+    const std::vector<Datum>& datums() const { return datums_; }
+    // Used by the .sxp loader to restore persisted datums exactly.
+    void restore_datum(Datum&& d);
+
 private:
     void register_subshapes(Body& b, bool fresh_ids);
     void regenerate_cards_for_body(const Body& b);
     void unregister_body_entities(const Body& b);
+    void index_datum(Datum&& d);
 
     std::vector<std::unique_ptr<Body>> bodies_;
     std::unordered_map<EntityId, size_t> body_index_;
     std::unordered_map<EntityId, SubshapeRef> subshape_index_;
+    std::vector<Datum> datums_;
+    std::unordered_map<EntityId, size_t> datum_index_;
+    int datum_plane_seq_ = 0;
+    int datum_axis_seq_ = 0;
+    int datum_point_seq_ = 0;
     std::unique_ptr<CardRegistry> cards_;
     std::unique_ptr<FeatureGraph> graph_;
     uint64_t revision_ = 0;
