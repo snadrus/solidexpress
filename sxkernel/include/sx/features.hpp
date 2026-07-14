@@ -31,6 +31,11 @@ enum class FeatureType {
     Boolean,    // params: {op: "fuse|cut|common", target: <fid>, tool: <fid>}
     Fillet,     // params: {target: <fid>, radius, edges: [1-based map indices]}
     Chamfer,    // params: {target: <fid>, distance, edges: [...]}
+    Mirror,     // params: {target: <fid>, plane_point: [x,y,z], plane_normal: [x,y,z]}
+    LinearPattern,   // params: {target, direction: [x,y,z], spacing, count}
+    CircularPattern, // params: {target, axis_point, axis_dir, count, total_angle}
+    Shell,      // params: {target, faces: [1-based face indices], thickness}
+    Offset,     // params: {target, offset}
 };
 
 const char* to_string(FeatureType t);
@@ -44,8 +49,11 @@ struct Feature {
     nlohmann::json params;
     std::shared_ptr<Sketch> sketch;  // only for FeatureType::Sketch
     // Stable id of the body this feature creates (Primitive, new-body
-    // Extrude/Revolve). Null for sketches and modifying features.
+    // Extrude/Revolve, Mirror). Null for sketches and modifying features.
     EntityId output_body;
+    // Stable ids of additional bodies created by pattern features
+    // (count-1 copies). Empty for all other types.
+    std::vector<EntityId> output_bodies;
 };
 
 class FeatureGraph {

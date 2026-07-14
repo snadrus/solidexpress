@@ -6,15 +6,22 @@
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
+#include <BRepOffsetAPI_MakeOffsetShape.hxx>
+#include <BRepOffsetAPI_MakeThickSolid.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepPrimAPI_MakeRevol.hxx>
 #include <TopExp.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
+#include <TopTools_ListOfShape.hxx>
 #include <TopoDS.hxx>
 #include <gp_Ax1.hxx>
+#include <gp_Ax2.hxx>
+#include <gp_Dir.hxx>
+#include <gp_Pnt.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
 
+#include <cmath>
 #include <stdexcept>
 
 #include "sx/document.hpp"
@@ -35,6 +42,11 @@ const char* to_string(FeatureType t) {
         case FeatureType::Boolean: return "boolean";
         case FeatureType::Fillet: return "fillet";
         case FeatureType::Chamfer: return "chamfer";
+        case FeatureType::Mirror: return "mirror";
+        case FeatureType::LinearPattern: return "linear_pattern";
+        case FeatureType::CircularPattern: return "circular_pattern";
+        case FeatureType::Shell: return "shell";
+        case FeatureType::Offset: return "offset";
     }
     return "unknown";
 }
@@ -47,11 +59,16 @@ FeatureType feature_type_from_string(const std::string& s) {
     if (s == "boolean") return FeatureType::Boolean;
     if (s == "fillet") return FeatureType::Fillet;
     if (s == "chamfer") return FeatureType::Chamfer;
+    if (s == "mirror") return FeatureType::Mirror;
+    if (s == "linear_pattern") return FeatureType::LinearPattern;
+    if (s == "circular_pattern") return FeatureType::CircularPattern;
+    if (s == "shell") return FeatureType::Shell;
+    if (s == "offset") return FeatureType::Offset;
     throw std::invalid_argument("unknown feature type: " + s);
 }
 
 static bool creates_body(const Feature& f) {
-    if (f.type == FeatureType::Primitive) return true;
+    if (f.type == FeatureType::Primitive || f.type == FeatureType::Mirror) return true;
     if (f.type == FeatureType::Extrude || f.type == FeatureType::Revolve)
         return f.params.value("op", "new") == "new";
     return false;
@@ -142,6 +159,36 @@ TopoDS_Shape build_primitive_feature(const json& p) {
     if (kind == "torus") return shape::make_torus(a, b, pl);
     throw std::runtime_error("unknown primitive kind: " + kind);
 }
+
+gp_Pnt pnt_from(const json& a) {
+    return gp_Pnt(a[0].get<double>(), a[1].get<double>(), a[2].get<double>());
+}
+
+gp_Dir dir_from(const json& a) {
+    double x = a[0].get<double>(), y = a[1].get<double>(), z = a[2].get<double>();
+    double len = std::sqrt(x * x + y * y + z * z);
+    if (len < 1e-15) throw std::runtime_error("zero-length direction");
+    return gp_Dir(x / len, y / len, z / len);
+}
+
+void ensure_pattern_slots(Feature& f, int count, Document& doc) {
+    if (count < 2) throw std::runtime_error("pattern count must be >= 2");
+    const size_t needed = static_cast<size_t>(count - 1);
+    if (f.output_bodies.size() > needed) {
+        for (size_t i = needed; i < f.output_bodies.size(); ++i) {
+            if (doc.body(f.output_bodies[i])) doc.remove_body(f.output_bodies[i]);
+        }
+        f.output_bodies.resize(needed);
+    } else {
+        while (f.output_bodies.size() < needed) f.output_bodies.push_back(EntityId::generate());
+    }
+}
+
+void put_body(Document& doc, const EntityId& id, const TopoDS_Shape& shape,
+              const std::string& name) {
+    if (doc.body(id)) doc.replace_body_shape(id, shape);
+    else doc.add_body(shape, name, id);
+}
 }  // namespace
 
 bool FeatureGraph::apply(Document& doc, Feature& f, std::string* err) {
@@ -164,8 +211,7 @@ bool FeatureGraph::apply(Document& doc, Feature& f, std::string* err) {
                 TopoDS_Shape shape = build_primitive_feature(f.params);
                 // Rebuilding into a live body routes through replace_body_shape,
                 // which runs the naming service so subshape ids survive edits.
-                if (doc.body(f.output_body)) doc.replace_body_shape(f.output_body, shape);
-                else doc.add_body(shape, f.name, f.output_body);
+                put_body(doc, f.output_body, shape, f.name);
                 return true;
             }
 
@@ -211,8 +257,7 @@ bool FeatureGraph::apply(Document& doc, Feature& f, std::string* err) {
 
                 std::string op = f.params.value("op", "new");
                 if (op == "new") {
-                    if (doc.body(f.output_body)) doc.replace_body_shape(f.output_body, result);
-                    else doc.add_body(result, f.name, f.output_body);
+                    put_body(doc, f.output_body, result, f.name);
                 } else {
                     EntityId target = find_feature_body("target");
                     const Body* tb = doc.body(target);
@@ -278,6 +323,104 @@ bool FeatureGraph::apply(Document& doc, Feature& f, std::string* err) {
                 doc.replace_body_shape(target, result);
                 return true;
             }
+
+            case FeatureType::Mirror: {
+                EntityId target = find_feature_body("target");
+                const Body* tb = doc.body(target);
+                if (!tb) return fail("missing target body");
+                gp_Trsf t;
+                t.SetMirror(gp_Ax2(pnt_from(f.params.at("plane_point")),
+                                   dir_from(f.params.at("plane_normal"))));
+                TopoDS_Shape mirrored =
+                    BRepBuilderAPI_Transform(tb->shape, t, /*copy=*/true).Shape();
+                if (mirrored.IsNull() || !shape::is_valid(mirrored))
+                    return fail("mirror failed");
+                put_body(doc, f.output_body, mirrored, "Mirror of " + tb->name);
+                return true;
+            }
+
+            case FeatureType::LinearPattern: {
+                EntityId target = find_feature_body("target");
+                const Body* tb = doc.body(target);
+                if (!tb) return fail("missing target body");
+                int count = f.params.value("count", 0);
+                double spacing = f.params.value("spacing", 0.0);
+                ensure_pattern_slots(f, count, doc);
+                gp_Dir dir = dir_from(f.params.at("direction"));
+                for (int i = 1; i < count; ++i) {
+                    gp_Trsf t;
+                    t.SetTranslation(gp_Vec(dir.XYZ() * (spacing * i)));
+                    TopoDS_Shape copy =
+                        BRepBuilderAPI_Transform(tb->shape, t, /*copy=*/true).Shape();
+                    if (copy.IsNull() || !shape::is_valid(copy))
+                        return fail("linear pattern failed");
+                    const std::string name = tb->name + " [" + std::to_string(i + 1) + "]";
+                    put_body(doc, f.output_bodies[static_cast<size_t>(i - 1)], copy, name);
+                }
+                return true;
+            }
+
+            case FeatureType::CircularPattern: {
+                EntityId target = find_feature_body("target");
+                const Body* tb = doc.body(target);
+                if (!tb) return fail("missing target body");
+                int count = f.params.value("count", 0);
+                ensure_pattern_slots(f, count, doc);
+                gp_Ax1 axis(pnt_from(f.params.at("axis_point")),
+                           dir_from(f.params.at("axis_dir")));
+                double total = f.params.value("total_angle", 2.0 * M_PI);
+                double step = total / static_cast<double>(count);
+                for (int i = 1; i < count; ++i) {
+                    gp_Trsf t;
+                    t.SetRotation(axis, step * i);
+                    TopoDS_Shape copy =
+                        BRepBuilderAPI_Transform(tb->shape, t, /*copy=*/true).Shape();
+                    if (copy.IsNull() || !shape::is_valid(copy))
+                        return fail("circular pattern failed");
+                    const std::string name = tb->name + " [" + std::to_string(i + 1) + "]";
+                    put_body(doc, f.output_bodies[static_cast<size_t>(i - 1)], copy, name);
+                }
+                return true;
+            }
+
+            case FeatureType::Shell: {
+                EntityId target = find_feature_body("target");
+                const Body* tb = doc.body(target);
+                if (!tb) return fail("missing target body");
+                TopTools_IndexedMapOfShape faces;
+                TopExp::MapShapes(tb->shape, TopAbs_FACE, faces);
+                TopTools_ListOfShape remove_faces;
+                for (const auto& jf : f.params.at("faces")) {
+                    int idx = jf.get<int>();
+                    if (idx < 1 || idx > faces.Extent()) return fail("face index out of range");
+                    remove_faces.Append(faces(idx));
+                }
+                if (remove_faces.IsEmpty()) return fail("no faces to remove");
+                double thickness = f.params.value("thickness", 1.0);
+                BRepOffsetAPI_MakeThickSolid mk;
+                mk.MakeThickSolidByJoin(tb->shape, remove_faces, -thickness, 1e-3);
+                if (!mk.IsDone()) return fail("shell failed");
+                TopoDS_Shape result = mk.Shape();
+                if (result.IsNull() || !shape::is_valid(result))
+                    return fail("shell result invalid");
+                doc.replace_body_shape(target, result);
+                return true;
+            }
+
+            case FeatureType::Offset: {
+                EntityId target = find_feature_body("target");
+                const Body* tb = doc.body(target);
+                if (!tb) return fail("missing target body");
+                double offset = f.params.value("offset", 0.0);
+                BRepOffsetAPI_MakeOffsetShape mk;
+                mk.PerformByJoin(tb->shape, offset, 1e-3);
+                if (!mk.IsDone()) return fail("offset failed");
+                TopoDS_Shape result = mk.Shape();
+                if (result.IsNull() || !shape::is_valid(result))
+                    return fail("offset result invalid");
+                doc.replace_body_shape(target, result);
+                return true;
+            }
         }
     } catch (const std::exception& e) {
         return fail(e.what());
@@ -292,8 +435,11 @@ bool FeatureGraph::regenerate(Document& doc, std::string* err) {
     // are removed up front; generated_ covers features removed from the
     // timeline since the last regenerate.
     std::vector<EntityId> rebuilt;
-    for (const auto& f : timeline_)
-        if (!f.suppressed && !f.output_body.is_null()) rebuilt.push_back(f.output_body);
+    for (const auto& f : timeline_) {
+        if (f.suppressed) continue;
+        if (!f.output_body.is_null()) rebuilt.push_back(f.output_body);
+        for (const auto& id : f.output_bodies) rebuilt.push_back(id);
+    }
     auto will_rebuild = [&](const EntityId& id) {
         for (const auto& r : rebuilt)
             if (r == id) return true;
@@ -305,6 +451,9 @@ bool FeatureGraph::regenerate(Document& doc, std::string* err) {
     for (const auto& f : timeline_) {
         if (!f.output_body.is_null() && !will_rebuild(f.output_body) && doc.body(f.output_body))
             doc.remove_body(f.output_body);
+        for (const auto& id : f.output_bodies) {
+            if (!will_rebuild(id) && doc.body(id)) doc.remove_body(id);
+        }
     }
     generated_.clear();
     for (auto& f : timeline_) {
@@ -316,12 +465,17 @@ bool FeatureGraph::regenerate(Document& doc, std::string* err) {
             bool past_failure = false;
             for (const auto& g : timeline_) {
                 if (g.id == f.id) past_failure = true;
-                if (past_failure && !g.output_body.is_null() && doc.body(g.output_body))
+                if (!past_failure) continue;
+                if (!g.output_body.is_null() && doc.body(g.output_body))
                     doc.remove_body(g.output_body);
+                for (const auto& id : g.output_bodies) {
+                    if (doc.body(id)) doc.remove_body(id);
+                }
             }
             return false;
         }
         if (!f.output_body.is_null()) generated_.push_back(f.output_body);
+        for (const auto& id : f.output_bodies) generated_.push_back(id);
     }
     return true;
 }
@@ -339,6 +493,10 @@ json FeatureGraph::to_json() const {
         jf["suppressed"] = f.suppressed;
         jf["params"] = f.params;
         if (!f.output_body.is_null()) jf["output_body"] = f.output_body.str();
+        if (!f.output_bodies.empty()) {
+            jf["output_bodies"] = json::array();
+            for (const auto& id : f.output_bodies) jf["output_bodies"].push_back(id.str());
+        }
         if (f.sketch) jf["sketch_data"] = sketch_to_json(*f.sketch);
         j["timeline"].push_back(jf);
     }
@@ -356,6 +514,10 @@ FeatureGraph FeatureGraph::from_json(const json& j) {
         f.params = jf.value("params", json::object());
         if (jf.contains("output_body"))
             f.output_body = EntityId::from_string(jf["output_body"].get<std::string>());
+        if (jf.contains("output_bodies")) {
+            for (const auto& s : jf["output_bodies"])
+                f.output_bodies.push_back(EntityId::from_string(s.get<std::string>()));
+        }
         if (jf.contains("sketch_data")) f.sketch = sketch_from_json(jf["sketch_data"]);
         g.timeline_.push_back(std::move(f));
     }
