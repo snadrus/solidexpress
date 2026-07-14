@@ -2,6 +2,10 @@
 
 Updated by agents on every merge. See `docs/plan/implementation-plan.md` for task definitions.
 
+## Operating protocol (current)
+- Most implementation work goes to Grok background agents with exclusive, non-overlapping file sets and scratch build dirs; Fable only integrates, reviews, fixes failures, and commits.
+- NO actions that require user approval: run only command shapes that auto-approve (sandboxed cmake/ctest builds; allowlisted `make test` and `tools/godot/godot --headless ...`). Subagents must never request elevated permissions — if verification is blocked in the sandbox, report it as pending for the integrator to run.
+
 ## Phase 0 — Foundation
 - [x] 0.1 Repo layout + CMake superbuild + THIRD_PARTY.md (OCCT 7.9.2 system, godot-cpp master pinned to 4.7-stable API dump, PlaneGCS vendored from FreeCAD + shim headers, miniz, nlohmann/json, Catch2)
 - [x] 0.2 sxkernel scaffold: Document, Body, EntityId (UUIDv4), undo/redo CommandStack; commands: AddPrimitive, DeleteBody, TranslateBody, PushPull
