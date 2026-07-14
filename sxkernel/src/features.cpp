@@ -26,6 +26,7 @@
 #include <TopoDS_Wire.hxx>
 #include <gp_Ax1.hxx>
 #include <gp_Ax2.hxx>
+#include <gp_Circ.hxx>
 #include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Trsf.hxx>
@@ -34,6 +35,7 @@
 #include <cmath>
 #include <stdexcept>
 
+#include "sx/curves.hpp"
 #include "sx/document.hpp"
 #include "sx/log.hpp"
 #include "sx/shape_utils.hpp"
@@ -60,6 +62,7 @@ const char* to_string(FeatureType t) {
         case FeatureType::Offset: return "offset";
         case FeatureType::Sweep: return "sweep";
         case FeatureType::Loft: return "loft";
+        case FeatureType::HelixSweep: return "helix_sweep";
     }
     return "unknown";
 }
@@ -80,12 +83,14 @@ FeatureType feature_type_from_string(const std::string& s) {
     if (s == "offset") return FeatureType::Offset;
     if (s == "sweep") return FeatureType::Sweep;
     if (s == "loft") return FeatureType::Loft;
+    if (s == "helix_sweep") return FeatureType::HelixSweep;
     throw std::invalid_argument("unknown feature type: " + s);
 }
 
 static bool creates_body(const Feature& f) {
     if (f.type == FeatureType::Primitive || f.type == FeatureType::Mirror ||
-        f.type == FeatureType::Sweep || f.type == FeatureType::Loft)
+        f.type == FeatureType::Sweep || f.type == FeatureType::Loft ||
+        f.type == FeatureType::HelixSweep)
         return true;
     if (f.type == FeatureType::Extrude || f.type == FeatureType::Revolve)
         return f.params.value("op", "new") == "new";
@@ -306,6 +311,39 @@ TopoDS_Shape sweep_along_polyline(const TopoDS_Shape& face, const json& path) {
     shell.SetMode();
     shell.SetTransitionMode(BRepBuilderAPI_RightCorner);
     shell.Add(profile_wire, /*withContact=*/Standard_False,
+              /*withCorrection=*/Standard_True);
+    shell.Build();
+    if (!shell.IsDone()) throw std::runtime_error("MakePipeShell failed");
+    if (!shell.MakeSolid()) throw std::runtime_error("MakePipeShell could not make solid");
+    return shell.Shape();
+}
+
+// Pipe a circular profile along a helix spine (spring / thread groundwork).
+// Profile placement is analytic (not sampled from the wire):
+//   start = axis.Location + radius · XDir  (cylinder UV=(0,0))
+//   tangent at θ=0: s·radius·YDir + (pitch/(2π))·ZDir, s=±1 for handedness
+// PipeShell Frenet + withCorrection matches the proven curves test config.
+TopoDS_Shape helix_sweep_solid(const gp_Ax2& axis, double helix_r, double pitch,
+                               double turns, bool left_handed, double profile_r) {
+    if (helix_r <= 0.0) throw std::runtime_error("helix radius must be positive");
+    if (turns <= 0.0) throw std::runtime_error("helix turns must be positive");
+    if (profile_r <= 0.0) throw std::runtime_error("profile_radius must be positive");
+
+    TopoDS_Wire spine = curves::helix(axis, helix_r, pitch, turns, left_handed);
+
+    const gp_Pnt start = axis.Location().Translated(gp_Vec(axis.XDirection()) * helix_r);
+    const double sense = left_handed ? -1.0 : 1.0;
+    gp_Vec tangent = gp_Vec(axis.YDirection()) * (sense * helix_r) +
+                     gp_Vec(axis.Direction()) * (pitch / (2.0 * M_PI));
+    if (tangent.Magnitude() < 1e-15) throw std::runtime_error("degenerate helix tangent");
+
+    gp_Circ circ(gp_Ax2(start, gp_Dir(tangent)), profile_r);
+    TopoDS_Wire profile =
+        BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(circ).Edge()).Wire();
+
+    BRepOffsetAPI_MakePipeShell shell(spine);
+    shell.SetMode();  // Frenet
+    shell.Add(profile, /*withContact=*/Standard_False,
               /*withCorrection=*/Standard_True);
     shell.Build();
     if (!shell.IsDone()) throw std::runtime_error("MakePipeShell failed");
@@ -635,6 +673,33 @@ bool FeatureGraph::apply(Document& doc, Feature& f,
                 if (result.IsNull() || !shape::is_valid(result))
                     return fail("loft result invalid");
                 if (shape::count(result).solids < 1) return fail("loft result is not a solid");
+                put_body(doc, f.output_body, result, f.name);
+                return true;
+            }
+
+            case FeatureType::HelixSweep: {
+                if (!params.contains("axis_point") || !params.contains("axis_dir"))
+                    return fail("missing axis_point/axis_dir");
+                const double profile_r = num_param(params, "profile_radius", 1.0, env);
+                const double radius = num_param(params, "radius", 0.0, env);
+                const double pitch = num_param(params, "pitch", 0.0, env);
+                const double turns = num_param(params, "turns", 0.0, env);
+                const bool left_handed = params.value("left_handed", false);
+                gp_Ax2 axis(pnt_from(params.at("axis_point")),
+                           dir_from(params.at("axis_dir")));
+                TopoDS_Shape result;
+                try {
+                    result = helix_sweep_solid(axis, radius, pitch, turns, left_handed,
+                                               profile_r);
+                } catch (const Standard_Failure& e) {
+                    return fail(std::string("helix sweep failed: ") + e.GetMessageString());
+                } catch (const std::runtime_error& e) {
+                    return fail(e.what());
+                }
+                if (result.IsNull() || !shape::is_valid(result))
+                    return fail("helix sweep result invalid");
+                if (shape::count(result).solids < 1)
+                    return fail("helix sweep result is not a solid");
                 put_body(doc, f.output_body, result, f.name);
                 return true;
             }
