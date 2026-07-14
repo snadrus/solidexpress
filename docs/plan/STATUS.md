@@ -122,10 +122,14 @@ Godot suites: integration 97 checks, UI 114 checks, sketch 23 checks.
 - [x] Sketch trim tool ([trim]): lines split/shortened at intersections, circles become arcs
 - [x] WorldGizmos: origin triad + XY grid, G toggles (old main.gd grid removed)
 
+- [x] Trim tool in sketch mode (T key), stale dimension labels pruned
+- [x] ImportStep timeline base feature ([featimport]): path + index + scale, parametric
+- [x] Component instances on Document ([instances]): transform placements, .sxp persisted, cascade on source delete
+
 ## In flight (background agents)
-- Trim tool in sketch mode UI (T key)
-- STEP import as a timeline base feature
-- Kernel component instances (assembly groundwork)
+- Instances: bindings + viewport rendering + ops-panel placement
+- Modeled thread graph feature (helix cut)
+- Sketch extend tool + sketch linear pattern
 
 ## Later phases
 Not started. See implementation plan.
