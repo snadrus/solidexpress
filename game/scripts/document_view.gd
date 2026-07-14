@@ -19,9 +19,15 @@ const DATUM_POINT_COLOR := Color(0.2, 0.7, 0.45)
 enum DisplayMode { SHADED, SHADED_EDGES, WIREFRAME }
 
 var doc: SxDocument = SxDocument.new()
+## Primary (most recent) selection — single-select API, kept for panels/tests.
 var selected_body := ""
 var selected_face := ""
 var selected_edge := ""
+## Multi-select sets (Ctrl+click). Always contain the primary selection too:
+## whole bodies, individual faces, and individual edges respectively.
+var selected_bodies: Array[String] = []
+var selected_faces: Array[String] = []
+var selected_edges: Array[String] = []
 var display_mode := DisplayMode.SHADED_EDGES
 ## True while a section (clipping) plane is active on body meshes.
 ## Edge overlay lines are not clipped in v1.
@@ -230,12 +236,19 @@ func graph_changed() -> void:
 
 # --- selection ---
 
-## Ray in model space. Returns true on hit.
-func select_ray(origin: Vector3, direction: Vector3) -> bool:
+## Ray in model space. Returns true on hit. With `additive` (Ctrl+click) the
+## hit entity is toggled into the multi-select sets instead of replacing the
+## selection: a face (or edge) when the hit body is already selected, else
+## the whole body.
+func select_ray(origin: Vector3, direction: Vector3, additive := false) -> bool:
 	var hit: Dictionary = doc.pick(origin, direction)
 	if hit.is_empty():
-		clear_selection()
+		if not additive:
+			clear_selection()
 		return false
+	if additive:
+		_toggle_hit(hit)
+		return true
 	# First click on a body selects the body; clicking again refines to an
 	# edge (when the hit point is within tolerance of one) or the hit face.
 	if selected_body == hit["body"]:
@@ -248,6 +261,83 @@ func select_ray(origin: Vector3, direction: Vector3) -> bool:
 			return true
 	select_entity(hit["body"], "")
 	return true
+
+
+func _toggle_hit(hit: Dictionary) -> void:
+	var body: String = hit["body"]
+	var body_selected := body == selected_body or selected_bodies.has(body)
+	# In a multi-body set, ctrl+click on a member deselects it (SolidWorks
+	# behavior); refinement to faces/edges applies to single-body selections.
+	if selected_bodies.size() > 1 and selected_bodies.has(body):
+		selected_bodies.erase(body)
+	elif body_selected:
+		# Refine within an already-selected body: edge first, then face.
+		var edge := _edge_near_point(body, hit["point"])
+		if edge != "":
+			_toggle_in(selected_edges, edge)
+		else:
+			_toggle_in(selected_faces, hit["face"])
+		# Keep the body's whole-body tint only if it has no sub-selection left.
+		if selected_faces.is_empty() and selected_edges.is_empty():
+			if not selected_bodies.has(body):
+				selected_bodies.append(body)
+		else:
+			selected_bodies.erase(body)
+	else:
+		_toggle_in(selected_bodies, body)
+	_sync_primary_from_sets()
+	_apply_selection_materials()
+	_highlight_edge()
+	selection_changed.emit(selected_body, selected_face)
+
+
+func _toggle_in(arr: Array[String], id: String) -> void:
+	if arr.has(id):
+		arr.erase(id)
+	else:
+		arr.append(id)
+
+
+## Primary selection mirrors the most recently added set entry so existing
+## single-select consumers (panels, cards) keep working during multi-select.
+func _sync_primary_from_sets() -> void:
+	if not selected_edges.is_empty():
+		selected_edge = selected_edges.back()
+		selected_body = _owner_body_of(selected_edge)
+		selected_face = ""
+	elif not selected_faces.is_empty():
+		selected_face = selected_faces.back()
+		selected_edge = ""
+		selected_body = _owner_body_of(selected_face)
+	elif not selected_bodies.is_empty():
+		selected_body = selected_bodies.back()
+		selected_face = ""
+		selected_edge = ""
+	else:
+		selected_body = ""
+		selected_face = ""
+		selected_edge = ""
+
+
+func _owner_body_of(subshape_id: String) -> String:
+	for body_id in _face_ids:
+		var faces: PackedStringArray = _face_ids[body_id]
+		if faces.has(subshape_id):
+			return body_id
+	# Not a face: check edges per body.
+	for body_id in _body_nodes:
+		var lines: Dictionary = doc.get_edge_lines(body_id)
+		if lines.has(subshape_id):
+			return body_id
+	return selected_body
+
+
+## Number of selected entities across all sets (0 when nothing selected).
+func selection_size() -> int:
+	var n := selected_bodies.size() + selected_faces.size() + selected_edges.size()
+	if n == 0 and selected_body != "":
+		n = 1
+	return n
 
 
 ## Closest edge of `body_id` to a model-space point, "" when none in tolerance.
@@ -275,6 +365,9 @@ func select_edge(body_id: String, edge_id: String) -> void:
 	selected_body = body_id
 	selected_face = ""
 	selected_edge = edge_id
+	selected_bodies.clear()
+	selected_faces.clear()
+	selected_edges.assign([edge_id] if edge_id != "" else [])
 	_apply_selection_materials()
 	_highlight_edge()
 	selection_changed.emit(selected_body, selected_face)
@@ -288,6 +381,9 @@ func select_entity(body_id: String, face_id: String) -> void:
 	selected_body = body_id
 	selected_face = face_id
 	selected_edge = ""
+	selected_bodies.assign([body_id] if body_id != "" and face_id == "" else [])
+	selected_faces.assign([face_id] if face_id != "" else [])
+	selected_edges.clear()
 	_apply_selection_materials()
 	_highlight_edge()
 	selection_changed.emit(selected_body, selected_face)
@@ -620,31 +716,43 @@ func _rebuild_edges(edge_node: MeshInstance3D, body_id: String) -> void:
 
 
 func _highlight_edge() -> void:
-	if selected_edge == "" or selected_body == "":
-		_edge_highlight.mesh = null
-		return
-	var lines: Dictionary = doc.get_edge_lines(selected_body)
-	if not lines.has(selected_edge):
-		_edge_highlight.mesh = null
-		return
-	var pts: PackedVector3Array = lines[selected_edge]
-	if pts.size() < 2:
+	# Highlight all selected edges (multi-select) in one overlay mesh.
+	var targets: Array[String] = selected_edges.duplicate()
+	if targets.is_empty() and selected_edge != "":
+		targets.append(selected_edge)
+	if targets.is_empty():
 		_edge_highlight.mesh = null
 		return
 	var im := ImmediateMesh.new()
-	im.surface_begin(Mesh.PRIMITIVE_LINES)
-	for i in range(pts.size() - 1):
-		im.surface_add_vertex(pts[i])
-		im.surface_add_vertex(pts[i + 1])
-	im.surface_end()
-	_edge_highlight.mesh = im
+	var have_any := false
+	for body_id in _body_nodes:
+		var lines: Dictionary = doc.get_edge_lines(body_id)
+		for edge_id in targets:
+			if not lines.has(edge_id):
+				continue
+			var pts: PackedVector3Array = lines[edge_id]
+			if pts.size() < 2:
+				continue
+			if not have_any:
+				im.surface_begin(Mesh.PRIMITIVE_LINES)
+				have_any = true
+			for i in range(pts.size() - 1):
+				im.surface_add_vertex(pts[i])
+				im.surface_add_vertex(pts[i + 1])
+	if have_any:
+		im.surface_end()
+		_edge_highlight.mesh = im
+	else:
+		_edge_highlight.mesh = null
 
 
 func _apply_selection_materials() -> void:
 	for body_id in _body_nodes:
 		var node: MeshInstance3D = _body_nodes[body_id]
 		var faces: PackedStringArray = _face_ids.get(body_id, PackedStringArray())
-		var body_selected: bool = body_id == selected_body
+		var body_selected: bool = body_id == selected_body or selected_bodies.has(body_id)
+		var whole_body_selected: bool = selected_bodies.has(body_id) \
+			or (body_id == selected_body and selected_face == "" and selected_edge == "")
 		var base: StandardMaterial3D = _body_materials.get(body_id, _base_material)
 		var edges: MeshInstance3D = node.get_node_or_null("Edges") as MeshInstance3D
 		if edges != null:
@@ -654,24 +762,27 @@ func _apply_selection_materials() -> void:
 			else:
 				edges.material_override = _edge_material
 		for i in range(node.mesh.get_surface_count() if node.mesh else 0):
+			var face_here := faces[i] if i < faces.size() else ""
+			var face_selected: bool = face_here != "" \
+				and (face_here == selected_face or selected_faces.has(face_here))
 			var mat: Material
 			if display_mode == DisplayMode.WIREFRAME:
 				if section_enabled:
 					mat = _make_section_material(Color(0, 0, 0, 0))
 				else:
 					mat = _wireframe_hidden_material
-			elif body_selected and selected_face == "":
-				if section_enabled:
-					mat = _make_section_material(SELECTED_BODY_COLOR)
-				else:
-					mat = _selected_body_material
-			elif body_selected and i < faces.size() and faces[i] == selected_face:
+			elif face_selected:
 				if section_enabled:
 					mat = _make_section_material(
 						SELECTED_FACE_COLOR, SELECTED_FACE_COLOR, 0.35
 					)
 				else:
 					mat = _selected_face_material
+			elif whole_body_selected:
+				if section_enabled:
+					mat = _make_section_material(SELECTED_BODY_COLOR)
+				else:
+					mat = _selected_body_material
 			else:
 				if section_enabled:
 					mat = _make_section_material(base.albedo_color)

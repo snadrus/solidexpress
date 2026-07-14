@@ -205,8 +205,11 @@ func _on_color_changed(color: Color) -> void:
 
 # --- body ops ---
 
-# Fillet/chamfer target: the selected edge when there is one, else all edges.
+# Fillet/chamfer target: all multi-selected edges when present, else the
+# single selected edge, else all edges of the body.
 func _round_targets() -> PackedStringArray:
+	if not view.selected_edges.is_empty():
+		return PackedStringArray(view.selected_edges)
 	if view.selected_edge != "":
 		return PackedStringArray([view.selected_edge])
 	return view.doc.get_edge_ids(view.selected_body)
@@ -224,8 +227,12 @@ func _apply_dressup(fillet: bool) -> void:
 	if view.selected_body == "":
 		return
 	var name := "Fillet" if fillet else "Chamfer"
-	var scope := "edge" if view.selected_edge != "" else "all edges"
 	var targets := _round_targets()
+	var scope := "all edges"
+	if view.selected_edges.size() > 1:
+		scope = "%d edges" % view.selected_edges.size()
+	elif view.selected_edge != "":
+		scope = "edge"
 	var value: float = _radius_spin.value
 	# Timeline bodies get a parametric feature; free bodies (e.g. STEP imports)
 	# use the direct command.
@@ -309,12 +316,15 @@ func _offset() -> void:
 
 
 func _shell() -> void:
-	var face := view.selected_face
-	if face == "":
+	# Multi-selected faces all open; else the single selected face.
+	var faces := PackedStringArray(view.selected_faces)
+	if faces.is_empty() and view.selected_face != "":
+		faces = PackedStringArray([view.selected_face])
+	if faces.is_empty():
 		return
-	if view.doc.shell_body(PackedStringArray([face]), _thickness_spin.value):
+	if view.doc.shell_body(faces, _thickness_spin.value):
 		view.graph_changed()
-		status.emit("Shelled, wall %.1f mm" % _thickness_spin.value)
+		status.emit("Shelled %d face(s), wall %.1f mm" % [faces.size(), _thickness_spin.value])
 	else:
 		status.emit("Shell failed (thickness too large?)")
 
