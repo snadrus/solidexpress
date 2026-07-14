@@ -134,6 +134,12 @@ public:
                                     const godot::Vector2& axis_point,
                                     const godot::Vector2& axis_dir, double angle,
                                     const godot::String& op, const godot::String& target_fid);
+    // Dress-up features on a timeline body. Edge ids are converted to the
+    // 1-based edge-map indices the graph stores.
+    godot::String graph_add_fillet(const godot::String& target_fid,
+                                   const godot::PackedStringArray& edge_ids, double radius);
+    godot::String graph_add_chamfer(const godot::String& target_fid,
+                                    const godot::PackedStringArray& edge_ids, double distance);
     bool graph_set_params(const godot::String& fid, const godot::String& params_json);
     bool graph_set_suppressed(const godot::String& fid, bool suppressed);
     bool graph_remove(const godot::String& fid);
@@ -151,6 +157,8 @@ private:
     godot::String add_primitive(sx::PrimitiveType type, double a, double b, double c,
                                 const godot::Vector3& origin);
     bool apply_graph_edit(const std::string& label, const std::function<bool()>& mutate);
+    godot::String graph_add_dressup(bool fillet, const godot::String& target_fid,
+                                    const godot::PackedStringArray& edge_ids, double value);
 
     std::unique_ptr<sx::Document> doc_;
     sx::CommandStack stack_;

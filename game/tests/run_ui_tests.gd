@@ -281,12 +281,29 @@ func test_edge_selection(main) -> void:
 	check(view.selected_edge != "", "edge picked near hit point")
 	check(view.selection_card().contains("50.0"), "edge card shows length 50")
 
-	# Targeted fillet: only the selected edge is rounded (10 faces stays 7).
+	# Targeted fillet: only the selected edge is rounded (6 faces becomes 7).
+	# The body came from the palette, so the fillet lands on the timeline.
+	var feats0: int = view.doc.graph_features().size()
 	var vol0: float = view.doc.body_volume(a)
 	ops._radius_spin.value = 3.0
 	ops._fillet_all()
 	check(view.doc.body_volume(a) < vol0, "edge fillet removed material")
 	check(view.doc.get_face_ids(a).size() == 7, "only one edge filleted (7 faces)")
+	check(view.doc.graph_features().size() == feats0 + 1, "fillet is a timeline feature")
+
+	# The fillet radius is parametric.
+	var fillet_fid := ""
+	for f in view.doc.graph_features():
+		if f["type"] == "fillet":
+			fillet_fid = f["id"]
+	var fparams: Dictionary = {}
+	for f in view.doc.graph_features():
+		if f["id"] == fillet_fid:
+			fparams = JSON.parse_string(f["params"])
+	fparams["radius"] = 8.0
+	var vol_r3: float = view.doc.body_volume(a)
+	check(view.doc.graph_set_params(fillet_fid, JSON.stringify(fparams)), "fillet radius edited")
+	check(view.doc.body_volume(a) < vol_r3, "bigger radius removed more material")
 
 	# Clicking mid-face selects the face, not an edge.
 	view.select_entity(a, "")

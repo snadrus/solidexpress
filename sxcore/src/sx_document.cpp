@@ -580,6 +580,41 @@ String SxDocument::graph_add_revolve(const String& sketch_fid, const Vector2& ax
     return ok ? to_gd(fid.str()) : String();
 }
 
+String SxDocument::graph_add_dressup(bool fillet, const String& target_fid,
+                                     const PackedStringArray& edge_ids, double value) {
+    // Convert stable edge ids to the 1-based map indices stored in params.
+    std::vector<int> indices;
+    for (int i = 0; i < edge_ids.size(); ++i) {
+        auto ref = doc_->find_subshape(parse_id(edge_ids[i]));
+        if (!ref || ref->kind != sx::EntityKind::Edge) {
+            sx::log::error("graph_add_dressup: not an edge id");
+            return {};
+        }
+        indices.push_back(ref->index);
+    }
+    sx::EntityId fid;
+    bool ok = apply_graph_edit(fillet ? "fillet" : "chamfer", [&] {
+        sx::Feature f;
+        f.type = fillet ? sx::FeatureType::Fillet : sx::FeatureType::Chamfer;
+        f.params = {{"target", to_std(target_fid)},
+                    {fillet ? "radius" : "distance", value},
+                    {"edges", indices}};
+        fid = doc_->graph().add(std::move(f));
+        return true;
+    });
+    return ok ? to_gd(fid.str()) : String();
+}
+
+String SxDocument::graph_add_fillet(const String& target_fid, const PackedStringArray& edge_ids,
+                                    double radius) {
+    return graph_add_dressup(true, target_fid, edge_ids, radius);
+}
+
+String SxDocument::graph_add_chamfer(const String& target_fid, const PackedStringArray& edge_ids,
+                                     double distance) {
+    return graph_add_dressup(false, target_fid, edge_ids, distance);
+}
+
 bool SxDocument::graph_set_params(const String& fid, const String& params_json) {
     nlohmann::json p;
     try {
@@ -679,6 +714,8 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("graph_add_sketch", "sketch"), &SxDocument::graph_add_sketch);
     ClassDB::bind_method(D_METHOD("graph_add_extrude", "sketch_fid", "distance", "symmetric", "op", "target_fid"), &SxDocument::graph_add_extrude);
     ClassDB::bind_method(D_METHOD("graph_add_revolve", "sketch_fid", "axis_point", "axis_dir", "angle", "op", "target_fid"), &SxDocument::graph_add_revolve);
+    ClassDB::bind_method(D_METHOD("graph_add_fillet", "target_fid", "edge_ids", "radius"), &SxDocument::graph_add_fillet);
+    ClassDB::bind_method(D_METHOD("graph_add_chamfer", "target_fid", "edge_ids", "distance"), &SxDocument::graph_add_chamfer);
     ClassDB::bind_method(D_METHOD("graph_set_params", "fid", "params_json"), &SxDocument::graph_set_params);
     ClassDB::bind_method(D_METHOD("graph_set_suppressed", "fid", "suppressed"), &SxDocument::graph_set_suppressed);
     ClassDB::bind_method(D_METHOD("graph_remove", "fid"), &SxDocument::graph_remove);

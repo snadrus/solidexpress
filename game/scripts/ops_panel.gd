@@ -128,25 +128,38 @@ func _round_targets() -> PackedStringArray:
 
 
 func _fillet_all() -> void:
-	if view.selected_body == "":
-		return
-	var scope := "edge" if view.selected_edge != "" else "all edges"
-	if view.doc.fillet_edges(_round_targets(), _radius_spin.value):
-		view.graph_changed()
-		status.emit("Filleted %s r=%.1f" % [scope, _radius_spin.value])
-	else:
-		status.emit("Fillet failed (radius too large?)")
+	_apply_dressup(true)
 
 
 func _chamfer_all() -> void:
+	_apply_dressup(false)
+
+
+func _apply_dressup(fillet: bool) -> void:
 	if view.selected_body == "":
 		return
+	var name := "Fillet" if fillet else "Chamfer"
 	var scope := "edge" if view.selected_edge != "" else "all edges"
-	if view.doc.chamfer_edges(_round_targets(), _radius_spin.value):
-		view.graph_changed()
-		status.emit("Chamfered %s d=%.1f" % [scope, _radius_spin.value])
+	var targets := _round_targets()
+	var value: float = _radius_spin.value
+	# Timeline bodies get a parametric feature; free bodies (e.g. STEP imports)
+	# use the direct command.
+	var fid := view.feature_of_body(view.selected_body)
+	var ok: bool
+	if fid != "":
+		if fillet:
+			ok = view.doc.graph_add_fillet(fid, targets, value) != ""
+		else:
+			ok = view.doc.graph_add_chamfer(fid, targets, value) != ""
+	elif fillet:
+		ok = view.doc.fillet_edges(targets, value)
 	else:
-		status.emit("Chamfer failed (distance too large?)")
+		ok = view.doc.chamfer_edges(targets, value)
+	if ok:
+		view.graph_changed()
+		status.emit("%s %s %.1f applied" % [name, scope, value])
+	else:
+		status.emit("%s failed (value too large?)" % name)
 
 
 func _mirror() -> void:
