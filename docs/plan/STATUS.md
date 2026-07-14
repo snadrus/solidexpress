@@ -106,10 +106,14 @@ Godot suites: integration 97 checks, UI 114 checks, sketch 23 checks.
 - [x] Construction toggle (X) + section view toggle (K) wired into the viewport
 - [x] Datums stored on Document, persisted in .sxp (datums.json), bound to GDScript, drawn in viewport (no cards yet — EntityKind lacks datum kinds)
 
+- [x] Hole as parametric graph feature ([feathole]) + ops-panel Hole row (type/diameter/depth)
+- [x] Datum EntityKinds + auto-registered semantic cards (survive .sxp load)
+- [x] Sketch on selected axis-aligned planar face (outward normal, cut/fuse target kept)
+
 ## In flight (background agents)
-- Hole as a parametric graph feature + ops-panel UI
-- Datum EntityKinds + semantic cards
-- Sketch on a selected planar face
+- Global variables/equations table driving feature params
+- Sketch snapping (endpoint/midpoint/center + axis alignment)
+- Helix/spiral curve builder (threads groundwork)
 
 ## Later phases
 Not started. See implementation plan.
