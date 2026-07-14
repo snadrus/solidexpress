@@ -258,3 +258,143 @@ TEST_CASE("trim_entity replaces circle with remaining arc",
     while (sweep < 0) sweep += 2.0 * 3.14159265358979323846;
     REQUIRE(sweep > 3.14159265358979323846);  // more than half remains
 }
+
+TEST_CASE("extend_entity lengthens line to perpendicular ahead",
+          "[sketchtools][extend]") {
+    Sketch sk("ExtAhead");
+    auto h = sk.add_line(0, 0, 5, 0);
+    sk.add_line(10, -5, 10, 5);
+    size_t n_before = sk.entities().size();
+
+    REQUIRE(extend_entity(sk, h.str(), 4.5, 0.0));
+    REQUIRE(sk.entities().size() == n_before);
+    REQUIRE(sk.entity(h) != nullptr);
+
+    auto start = *sk.point_pos({h, PointRole::Start});
+    auto end = *sk.point_pos({h, PointRole::End});
+    REQUIRE(start[0] == Approx(0.0).margin(1e-9));
+    REQUIRE(start[1] == Approx(0.0).margin(1e-9));
+    REQUIRE(end[0] == Approx(10.0).margin(1e-9));
+    REQUIRE(end[1] == Approx(0.0).margin(1e-9));
+}
+
+TEST_CASE("extend_entity returns false with nothing ahead",
+          "[sketchtools][extend]") {
+    Sketch sk("ExtNone");
+    auto h = sk.add_line(0, 0, 5, 0);
+    sk.add_line(0, 5, 10, 5);  // parallel, no intersection
+    size_t n_before = sk.entities().size();
+    uint64_t rev = sk.revision();
+
+    REQUIRE_FALSE(extend_entity(sk, h.str(), 4.5, 0.0));
+    REQUIRE(sk.entities().size() == n_before);
+    REQUIRE(sk.revision() == rev);
+    auto s = *sk.point_pos({h, PointRole::Start});
+    auto e = *sk.point_pos({h, PointRole::End});
+    REQUIRE(s[0] == Approx(0.0));
+    REQUIRE(e[0] == Approx(5.0));
+}
+
+TEST_CASE("extend_entity picks nearest endpoint (extends start)",
+          "[sketchtools][extend]") {
+    Sketch sk("ExtStart");
+    auto h = sk.add_line(5, 0, 10, 0);
+    sk.add_line(0, -5, 0, 5);  // ahead of the start end
+    size_t n_before = sk.entities().size();
+
+    // Pick near start → extend start leftward to x=0.
+    REQUIRE(extend_entity(sk, h.str(), 5.2, 0.0));
+    REQUIRE(sk.entities().size() == n_before);
+    REQUIRE(sk.entity(h) != nullptr);
+
+    auto start = *sk.point_pos({h, PointRole::Start});
+    auto end = *sk.point_pos({h, PointRole::End});
+    REQUIRE(start[0] == Approx(0.0).margin(1e-9));
+    REQUIRE(start[1] == Approx(0.0).margin(1e-9));
+    REQUIRE(end[0] == Approx(10.0).margin(1e-9));
+    REQUIRE(end[1] == Approx(0.0).margin(1e-9));
+}
+
+TEST_CASE("pattern_entities copies line with dx=15 count=3",
+          "[sketchtools][skpattern]") {
+    Sketch sk("PatLine");
+    auto la = sk.add_line(0, 0, 10, 0);
+    size_t n_before = sk.entities().size();
+
+    auto ids = pattern_entities(sk, {la.str()}, 15.0, 0.0, 3);
+    REQUIRE(ids.size() == 2);
+    REQUIRE(sk.entities().size() == n_before + 2);
+
+    // Original untouched.
+    auto o0 = *sk.point_pos({la, PointRole::Start});
+    auto o1 = *sk.point_pos({la, PointRole::End});
+    REQUIRE(o0[0] == Approx(0.0));
+    REQUIRE(o0[1] == Approx(0.0));
+    REQUIRE(o1[0] == Approx(10.0));
+    REQUIRE(o1[1] == Approx(0.0));
+
+    EntityId c1 = EntityId::from_string(ids[0]);
+    EntityId c2 = EntityId::from_string(ids[1]);
+    auto a0 = *sk.point_pos({c1, PointRole::Start});
+    auto a1 = *sk.point_pos({c1, PointRole::End});
+    REQUIRE(a0[0] == Approx(15.0).margin(1e-9));
+    REQUIRE(a0[1] == Approx(0.0).margin(1e-9));
+    REQUIRE(a1[0] == Approx(25.0).margin(1e-9));
+    REQUIRE(a1[1] == Approx(0.0).margin(1e-9));
+
+    auto b0 = *sk.point_pos({c2, PointRole::Start});
+    auto b1 = *sk.point_pos({c2, PointRole::End});
+    REQUIRE(b0[0] == Approx(30.0).margin(1e-9));
+    REQUIRE(b0[1] == Approx(0.0).margin(1e-9));
+    REQUIRE(b1[0] == Approx(40.0).margin(1e-9));
+    REQUIRE(b1[1] == Approx(0.0).margin(1e-9));
+}
+
+TEST_CASE("pattern_entities copies circle with dy=10 count=2",
+          "[sketchtools][skpattern]") {
+    Sketch sk("PatCirc");
+    auto c = sk.add_circle(1, 2, 5);
+    size_t n_before = sk.entities().size();
+
+    auto ids = pattern_entities(sk, {c.str()}, 0.0, 10.0, 2);
+    REQUIRE(ids.size() == 1);
+    REQUIRE(sk.entities().size() == n_before + 1);
+
+    REQUIRE(sk.param(sk.entity(c)->params[0]) == Approx(1.0));
+    REQUIRE(sk.param(sk.entity(c)->params[1]) == Approx(2.0));
+    REQUIRE(sk.param(sk.entity(c)->params[2]) == Approx(5.0));
+
+    EntityId nid = EntityId::from_string(ids[0]);
+    const SketchEntity* ne = sk.entity(nid);
+    REQUIRE(ne != nullptr);
+    REQUIRE(ne->type == SketchEntityType::Circle);
+    REQUIRE(sk.param(ne->params[0]) == Approx(1.0).margin(1e-9));
+    REQUIRE(sk.param(ne->params[1]) == Approx(12.0).margin(1e-9));
+    REQUIRE(sk.param(ne->params[2]) == Approx(5.0).margin(1e-9));
+}
+
+TEST_CASE("pattern_entities count=1 leaves sketch unchanged",
+          "[sketchtools][skpattern]") {
+    Sketch sk("PatOne");
+    auto la = sk.add_line(0, 0, 10, 0);
+    size_t n_before = sk.entities().size();
+    uint64_t rev = sk.revision();
+
+    auto ids = pattern_entities(sk, {la.str()}, 15.0, 0.0, 1);
+    REQUIRE(ids.empty());
+    REQUIRE(sk.entities().size() == n_before);
+    REQUIRE(sk.revision() == rev);
+}
+
+TEST_CASE("pattern_entities propagates construction flag",
+          "[sketchtools][skpattern]") {
+    Sketch sk("PatConstr");
+    auto la = sk.add_line(0, 0, 5, 0);
+    sk.set_construction(la, true);
+
+    auto ids = pattern_entities(sk, {la.str()}, 10.0, 0.0, 2);
+    REQUIRE(ids.size() == 1);
+    EntityId nid = EntityId::from_string(ids[0]);
+    REQUIRE(sk.is_construction(nid));
+    REQUIRE(sk.entity(nid)->type == SketchEntityType::Line);
+}

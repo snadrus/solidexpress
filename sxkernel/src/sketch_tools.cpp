@@ -416,4 +416,159 @@ bool trim_entity(Sketch& s, const std::string& entity_id, double px, double py) 
     return false;
 }
 
+namespace {
+
+// Line A unrestricted vs segment B (u in [0,1]): return t on A if they meet.
+std::optional<double> line_seg_intersect_t(Vec2 a0, Vec2 a1, Vec2 b0, Vec2 b1) {
+    Vec2 da = sub(a1, a0);
+    Vec2 db = sub(b1, b0);
+    double den = cross(da, db);
+    if (std::abs(den) < 1e-15) return std::nullopt;
+    Vec2 ab = sub(b0, a0);
+    double t = cross(ab, db) / den;
+    double u = cross(ab, da) / den;
+    if (u < -k_eps || u > 1.0 + k_eps) return std::nullopt;
+    return t;
+}
+
+// Line A unrestricted vs full circle: all real t values.
+std::vector<double> line_circle_intersect_t_all(Vec2 a0, Vec2 a1, Vec2 c,
+                                                double r) {
+    std::vector<double> out;
+    if (r <= 0) return out;
+    Vec2 d = sub(a1, a0);
+    Vec2 f = sub(a0, c);
+    double A = dot(d, d);
+    if (A < 1e-30) return out;
+    double B = 2.0 * dot(f, d);
+    double C = dot(f, f) - r * r;
+    double disc = B * B - 4.0 * A * C;
+    if (disc < -k_eps) return out;
+    if (disc < 0) disc = 0;
+    double sqrt_d = std::sqrt(disc);
+    for (double sign : {-1.0, 1.0}) {
+        out.push_back((-B + sign * sqrt_d) / (2.0 * A));
+    }
+    if (out.size() == 2 && std::abs(out[0] - out[1]) < k_eps) out.pop_back();
+    return out;
+}
+
+bool collect_extend_hits(const Sketch& s, const SketchEntity& line,
+                         EntityId self_id, std::vector<double>& ts) {
+    Vec2 a0 = line_end(s, line, PointRole::Start);
+    Vec2 a1 = line_end(s, line, PointRole::End);
+    for (const SketchEntity& other : s.entities()) {
+        if (other.id == self_id || other.construction) continue;
+        if (other.type == SketchEntityType::Line) {
+            Vec2 b0 = line_end(s, other, PointRole::Start);
+            Vec2 b1 = line_end(s, other, PointRole::End);
+            if (auto t = line_seg_intersect_t(a0, a1, b0, b1)) ts.push_back(*t);
+        } else if (other.type == SketchEntityType::Circle) {
+            Vec2 c = {s.param(other.params[0]), s.param(other.params[1])};
+            double r = s.param(other.params[2]);
+            auto hits = line_circle_intersect_t_all(a0, a1, c, r);
+            ts.insert(ts.end(), hits.begin(), hits.end());
+        }
+    }
+    unique_sorted(ts);
+    return !ts.empty();
+}
+
+}  // namespace
+
+bool extend_entity(Sketch& s, const std::string& entity_id, double px,
+                   double py) {
+    EntityId id = EntityId::from_string(entity_id);
+    const SketchEntity* e = s.entity(id);
+    if (!e || e->type != SketchEntityType::Line) return false;
+
+    Vec2 a0 = line_end(s, *e, PointRole::Start);
+    Vec2 a1 = line_end(s, *e, PointRole::End);
+    Vec2 d = sub(a1, a0);
+    double len2 = dot(d, d);
+    if (len2 < 1e-30) return false;
+
+    // Nearest endpoint to the pick.
+    double d0 = hypot2(sub({px, py}, a0));
+    double d1 = hypot2(sub({px, py}, a1));
+    bool extend_start = d0 <= d1;
+
+    std::vector<double> ts;
+    if (!collect_extend_hits(s, *e, id, ts)) return false;
+
+    std::optional<double> best;
+    if (extend_start) {
+        // Forward from start is t < 0; nearest is the largest t < 0.
+        for (double t : ts) {
+            if (t < -k_eps && (!best || t > *best)) best = t;
+        }
+        if (!best) return false;
+        set_line_end(s, *e, PointRole::Start, add(a0, mul(d, *best)));
+    } else {
+        // Forward from end is t > 1; nearest is the smallest t > 1.
+        for (double t : ts) {
+            if (t > 1.0 + k_eps && (!best || t < *best)) best = t;
+        }
+        if (!best) return false;
+        set_line_end(s, *e, PointRole::End, add(a0, mul(d, *best)));
+    }
+    return true;
+}
+
+std::vector<std::string> pattern_entities(Sketch& s,
+                                          const std::vector<std::string>& entity_ids,
+                                          double dx, double dy, int count) {
+    std::vector<std::string> out;
+    if (count < 2) return out;
+    if (std::hypot(dx, dy) < 1e-15) return out;
+
+    out.reserve(entity_ids.size() * static_cast<size_t>(count - 1));
+
+    for (const std::string& sid : entity_ids) {
+        EntityId id = EntityId::from_string(sid);
+        const SketchEntity* e = s.entity(id);
+        if (!e) continue;
+
+        const bool constr = e->construction;
+        const SketchEntityType typ = e->type;
+
+        // Snapshot geometry before creating copies (params stay valid).
+        double p0 = 0, p1 = 0, p2 = 0, p3 = 0, p4 = 0;
+        if (typ == SketchEntityType::Line) {
+            p0 = s.param(e->params[0]);
+            p1 = s.param(e->params[1]);
+            p2 = s.param(e->params[2]);
+            p3 = s.param(e->params[3]);
+        } else if (typ == SketchEntityType::Circle) {
+            p0 = s.param(e->params[0]);
+            p1 = s.param(e->params[1]);
+            p2 = s.param(e->params[2]);
+        } else if (typ == SketchEntityType::Arc) {
+            p0 = s.param(e->params[0]);
+            p1 = s.param(e->params[1]);
+            p2 = s.param(e->params[2]);
+            p3 = s.param(e->params[3]);
+            p4 = s.param(e->params[4]);
+        } else {
+            continue;  // points unsupported
+        }
+
+        for (int i = 1; i < count; ++i) {
+            double ox = dx * i;
+            double oy = dy * i;
+            EntityId nid;
+            if (typ == SketchEntityType::Line) {
+                nid = s.add_line(p0 + ox, p1 + oy, p2 + ox, p3 + oy);
+            } else if (typ == SketchEntityType::Circle) {
+                nid = s.add_circle(p0 + ox, p1 + oy, p2);
+            } else {
+                nid = s.add_arc(p0 + ox, p1 + oy, p2, p3, p4);
+            }
+            if (constr) s.set_construction(nid, true);
+            out.push_back(nid.str());
+        }
+    }
+    return out;
+}
+
 }  // namespace sx::sketch_tools
