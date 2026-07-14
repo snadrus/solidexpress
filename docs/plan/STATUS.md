@@ -92,6 +92,8 @@ Godot suites: integration 97 checks, UI 114 checks, sketch 23 checks.
 
 - [x] Sketch corner fillet + entity offset tools ([sketchtools])
 
+- [x] Sketch fillet/offset exposed in sketch mode (SxSketch bindings + fillet_selected/offset_selected)
+
 ## In flight (background agents)
 - Draft bindings + ops-panel UI
 
