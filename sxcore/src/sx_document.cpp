@@ -10,6 +10,7 @@
 #include "sx/commands_sketch.hpp"
 #include "sx/commands_transform.hpp"
 #include <cmath>
+#include <limits>
 #include <gp_Dir.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Pnt.hxx>
@@ -770,6 +771,57 @@ Dictionary SxDocument::graph_regenerate() {
     return out;
 }
 
+bool SxDocument::set_variable(const String& name, const String& expr) {
+    if (name.is_empty()) return false;
+    return apply_graph_edit("set variable", [&] {
+        doc_->graph().variables().set(to_std(name), to_std(expr));
+        return true;
+    });
+}
+
+bool SxDocument::remove_variable(const String& name) {
+    // Unlike other graph edits, keep the removal even when regenerate fails
+    // (features may still reference the name). Undo restores the prior
+    // snapshot; graph_regenerate exposes the error.
+    nlohmann::json before = doc_->graph().to_json();
+    if (!doc_->graph().variables().remove(to_std(name))) return false;
+    nlohmann::json after = doc_->graph().to_json();
+    std::string err;
+    if (!doc_->graph().regenerate(*doc_, &err) && !err.empty()) {
+        sx::log::error(std::string("remove variable: ") + err);
+    }
+    stack_.push(*doc_, std::make_unique<sx::GraphSnapshotCommand>(
+        "remove variable", std::move(before), std::move(after)));
+    return true;
+}
+
+Array SxDocument::list_variables() const {
+    Array out;
+    std::map<std::string, double> values;
+    std::string eval_err;
+    try {
+        values = doc_->graph().variables().evaluate();
+    } catch (const std::exception& e) {
+        eval_err = e.what();
+    }
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    for (const auto& e : doc_->graph().variables().entries()) {
+        Dictionary d;
+        d["name"] = to_gd(e.first);
+        d["expr"] = to_gd(e.second);
+        auto it = values.find(e.first);
+        if (it != values.end()) {
+            d["value"] = it->second;
+            d["error"] = String();
+        } else {
+            d["value"] = nan;
+            d["error"] = to_gd(eval_err.empty() ? "evaluation failed" : eval_err);
+        }
+        out.push_back(d);
+    }
+    return out;
+}
+
 bool SxDocument::save(const String& path) {
     std::string err;
     bool ok = sx::save_sxp(*doc_, to_std(path), &err);
@@ -909,6 +961,9 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("graph_set_suppressed", "fid", "suppressed"), &SxDocument::graph_set_suppressed);
     ClassDB::bind_method(D_METHOD("graph_remove", "fid"), &SxDocument::graph_remove);
     ClassDB::bind_method(D_METHOD("graph_regenerate"), &SxDocument::graph_regenerate);
+    ClassDB::bind_method(D_METHOD("set_variable", "name", "expr"), &SxDocument::set_variable);
+    ClassDB::bind_method(D_METHOD("remove_variable", "name"), &SxDocument::remove_variable);
+    ClassDB::bind_method(D_METHOD("list_variables"), &SxDocument::list_variables);
     ClassDB::bind_method(D_METHOD("save", "path"), &SxDocument::save);
     ClassDB::bind_method(D_METHOD("load", "path"), &SxDocument::load);
     ClassDB::bind_method(D_METHOD("add_datum_plane", "point", "normal"),

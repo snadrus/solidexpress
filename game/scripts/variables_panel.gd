@@ -1,0 +1,145 @@
+class_name VariablesPanel
+extends PanelContainer
+## Global equations table. One row per variable: name, expression (editable),
+## computed value, delete. Add row at the bottom. Refresh on document revision
+## (same document_changed hook the timeline uses).
+
+signal status(text: String)
+
+var view: DocumentView
+
+var _list: VBoxContainer
+var _rows := {}  # name -> row control
+var _name_edit: LineEdit
+var _expr_edit: LineEdit
+var _refreshing := false
+
+
+func _ready() -> void:
+	custom_minimum_size = Vector2(260, 0)
+	var vbox := VBoxContainer.new()
+	add_child(vbox)
+	var title := Label.new()
+	title.text = "Variables"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(title)
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(250, 120)
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	vbox.add_child(scroll)
+	_list = VBoxContainer.new()
+	_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(_list)
+
+	var add_row := HBoxContainer.new()
+	vbox.add_child(add_row)
+	_name_edit = LineEdit.new()
+	_name_edit.placeholder_text = "name"
+	_name_edit.custom_minimum_size = Vector2(70, 0)
+	add_row.add_child(_name_edit)
+	_expr_edit = LineEdit.new()
+	_expr_edit.placeholder_text = "expression"
+	_expr_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_expr_edit.text_submitted.connect(func(_t: String) -> void: _on_add())
+	add_row.add_child(_expr_edit)
+	var add_btn := Button.new()
+	add_btn.text = "Add"
+	add_btn.pressed.connect(_on_add)
+	add_row.add_child(add_btn)
+
+	view.document_changed.connect(refresh)
+	refresh()
+
+
+func refresh() -> void:
+	if _refreshing:
+		return
+	_refreshing = true
+	for child in _list.get_children():
+		child.queue_free()
+	_rows.clear()
+	for entry in view.doc.list_variables():
+		_list.add_child(_make_row(entry))
+	_refreshing = false
+
+
+func add_variable(name: String, expr: String) -> bool:
+	if name.strip_edges() == "" or expr.strip_edges() == "":
+		return false
+	if view.doc.set_variable(name.strip_edges(), expr.strip_edges()):
+		view.graph_changed()
+		status.emit("Variable %s = %s" % [name.strip_edges(), expr.strip_edges()])
+		return true
+	status.emit("Failed to set variable %s" % name)
+	return false
+
+
+func edit_variable(name: String, expr: String) -> bool:
+	if view.doc.set_variable(name, expr):
+		view.graph_changed()
+		status.emit("Updated %s" % name)
+		return true
+	status.emit("Failed to update %s" % name)
+	return false
+
+
+func delete_variable(name: String) -> bool:
+	if view.doc.remove_variable(name):
+		view.graph_changed()
+		status.emit("Removed %s" % name)
+		return true
+	status.emit("Cannot remove %s" % name)
+	return false
+
+
+func _on_add() -> void:
+	if add_variable(_name_edit.text, _expr_edit.text):
+		_name_edit.text = ""
+		_expr_edit.text = ""
+
+
+func _make_row(entry: Dictionary) -> Control:
+	var name: String = entry["name"]
+	var row := HBoxContainer.new()
+	_rows[name] = row
+
+	var name_lbl := Label.new()
+	name_lbl.text = name
+	name_lbl.custom_minimum_size = Vector2(70, 0)
+	name_lbl.add_theme_font_size_override("font_size", 12)
+	row.add_child(name_lbl)
+
+	var expr_edit := LineEdit.new()
+	expr_edit.text = str(entry["expr"])
+	expr_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	expr_edit.add_theme_font_size_override("font_size", 12)
+	expr_edit.text_submitted.connect(func(t: String) -> void: edit_variable(name, t))
+	row.add_child(expr_edit)
+
+	var val_lbl := Label.new()
+	var err: String = entry.get("error", "")
+	var val = entry.get("value", null)
+	if err != "" or val == null or (val is float and is_nan(val)):
+		val_lbl.text = "?"
+		val_lbl.modulate = Color(1, 0.45, 0.4)
+		if err != "":
+			val_lbl.tooltip_text = err
+	else:
+		val_lbl.text = _fmt_value(float(val))
+	val_lbl.custom_minimum_size = Vector2(48, 0)
+	val_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	val_lbl.add_theme_font_size_override("font_size", 12)
+	row.add_child(val_lbl)
+
+	var del := Button.new()
+	del.text = "x"
+	del.tooltip_text = "Delete variable"
+	del.pressed.connect(func() -> void: delete_variable(name))
+	row.add_child(del)
+	return row
+
+
+func _fmt_value(v: float) -> String:
+	if absf(v - roundf(v)) < 1e-9:
+		return str(int(roundf(v)))
+	return "%.4g" % v

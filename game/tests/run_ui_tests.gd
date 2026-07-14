@@ -44,6 +44,7 @@ func _init() -> void:
 	test_graph_sweep_loft()
 	test_datums(main)
 	test_hole(main)
+	test_variables(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -696,3 +697,70 @@ func test_hole(main) -> void:
 	check(has_hole, "hole feature on timeline")
 	check(view.doc.undo(), "undo hole")
 	check(absf(view.doc.body_volume(body) - vol0) < 1e-6, "undo restored original volume")
+
+
+func test_variables(main) -> void:
+	print("- variables panel + expression params")
+	var view: DocumentView = main.view
+	var vp: VariablesPanel = main.variables_panel
+	check(vp != null, "variables panel exists")
+	check(main.get_node("UI/Variables") != null, "Variables node in UI dock")
+	view.new_document()
+
+	check(view.doc.set_variable("w", "20"), "set_variable w=20")
+	view.graph_changed()
+	var box_fid: String = view.doc.graph_add_primitive("box", 10.0, 10.0, 10.0, Vector3.ZERO)
+	check(box_fid != "", "box feature added for variables test")
+	var feats: Array = view.doc.graph_features()
+	var params: Dictionary = JSON.parse_string(feats[0]["params"])
+	params["a"] = "=w"
+	params["b"] = "=w"
+	params["c"] = 10.0
+	check(view.doc.graph_set_params(box_fid, JSON.stringify(params)), "box a/b = =w")
+	view.graph_changed()
+	var body: String = ""
+	for f in view.doc.graph_features():
+		if f["id"] == box_fid:
+			body = f["output_body"]
+	check(body != "", "box has output_body")
+	var vol0: float = view.doc.body_volume(body)
+	check(absf(vol0 - 20.0 * 20.0 * 10.0) < 1e-3, "volume tracks w=20 (%.0f)" % vol0)
+
+	check(view.doc.set_variable("w", "30"), "set_variable w=30")
+	view.graph_changed()
+	var vol1: float = view.doc.body_volume(body)
+	check(absf(vol1 - 30.0 * 30.0 * 10.0) < 1e-3, "volume tracks w=30 (%.0f)" % vol1)
+
+	var listed: Array = view.doc.list_variables()
+	check(listed.size() == 1, "list_variables has one entry")
+	check(listed[0]["name"] == "w" and listed[0]["expr"] == "30", "list entry name/expr")
+	check(absf(float(listed[0]["value"]) - 30.0) < 1e-9, "list_variables value is 30")
+	check(str(listed[0].get("error", "")) == "", "list entry has no error")
+
+	check(view.doc.remove_variable("w"), "remove_variable works")
+	view.graph_changed()
+	var regen: Dictionary = view.doc.graph_regenerate()
+	check(not regen["ok"] and str(regen["error"]).length() > 0,
+			"regenerate reports missing reference")
+	check(view.doc.list_variables().is_empty(), "variable gone after remove")
+	check(view.undo(), "undo remove_variable")
+	check(absf(view.doc.body_volume(body) - vol1) < 1e-3, "undo restored volume")
+	listed = view.doc.list_variables()
+	check(listed.size() == 1 and listed[0]["name"] == "w", "undo restored variable")
+
+	# Drive the panel's add/edit methods directly.
+	view.new_document()
+	vp.refresh()
+	check(vp.add_variable("h", "12"), "panel add_variable")
+	check(vp._rows.has("h"), "panel row for h after add")
+	check(vp.edit_variable("h", "24"), "panel edit_variable")
+	var panel_list: Array = view.doc.list_variables()
+	var found_h := false
+	for e in panel_list:
+		if e["name"] == "h":
+			found_h = true
+			check(e["expr"] == "24", "panel edit updated expr")
+			check(absf(float(e["value"]) - 24.0) < 1e-9, "panel edit value is 24")
+	check(found_h, "h present after panel edit")
+	check(vp.delete_variable("h"), "panel delete_variable")
+	check(not vp._rows.has("h"), "panel row cleared after delete")

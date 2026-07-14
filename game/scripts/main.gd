@@ -13,6 +13,7 @@ var autosave_timer: Timer
 var sketch_mode: SketchMode
 var sketch_toolbar: PanelContainer
 var timeline: TimelinePanel
+var variables_panel: VariablesPanel
 var ops_panel: OpsPanel
 var dim_value: SpinBox
 var finish_op: OptionButton
@@ -244,7 +245,7 @@ func _build_ui() -> void:
 	ui.add_child(ops_panel)
 	ops_panel.status.connect(_on_status)
 
-	# Left, below palette: feature timeline.
+	# Left, below palette: feature timeline + variables.
 	timeline = TimelinePanel.new()
 	timeline.name = "Timeline"
 	timeline.view = view
@@ -255,6 +256,18 @@ func _build_ui() -> void:
 	timeline.offset_bottom = -42
 	ui.add_child(timeline)
 	timeline.status.connect(_on_status)
+
+	variables_panel = VariablesPanel.new()
+	variables_panel.name = "Variables"
+	variables_panel.view = view
+	variables_panel.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	variables_panel.anchor_top = 1.0
+	variables_panel.offset_left = 280
+	variables_panel.offset_right = 540
+	variables_panel.offset_top = -420
+	variables_panel.offset_bottom = -42
+	ui.add_child(variables_panel)
+	variables_panel.status.connect(_on_status)
 
 	# Bottom: status bar.
 	var status_bar := PanelContainer.new()

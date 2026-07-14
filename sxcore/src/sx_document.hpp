@@ -170,6 +170,16 @@ public:
     // Returns {ok: bool, error: String}.
     godot::Dictionary graph_regenerate();
 
+    // --- variables (equations table) ---
+    // Upsert / remove a named expression. Both go through apply_graph_edit so
+    // they regenerate and are undoable (the table serializes with the graph).
+    // remove_variable keeps the removal even if regenerate fails (features may
+    // still reference the name); inspect via graph_regenerate / undo.
+    bool set_variable(const godot::String& name, const godot::String& expr);
+    bool remove_variable(const godot::String& name);
+    // Array of {name, expr, value (float; NAN on error), error: String}.
+    godot::Array list_variables() const;
+
     // --- persistence ---
     bool save(const godot::String& path);
     bool load(const godot::String& path);
