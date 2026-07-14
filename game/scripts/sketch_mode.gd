@@ -18,6 +18,9 @@ var sketch: SxSketch
 var view: DocumentView
 var tool: Tool = Tool.NONE
 var active := false
+## Feature id of the body being sketched on ("" when on the ground plane);
+## used as the boolean target for cut/fuse finishes.
+var target_fid := ""
 
 # Sketch plane frame in model space.
 var plane_origin := Vector3.ZERO
@@ -86,20 +89,59 @@ func cancel() -> void:
 
 ## Finish the sketch and extrude by `distance` (model units). Routed through
 ## the feature graph: adds a sketch feature plus an extrude feature so both
-## appear on the timeline and stay editable.
-func finish_extrude(distance: float) -> void:
+## appear on the timeline and stay editable. op: "new" | "cut" | "fuse";
+## cut/fuse require a target body (the one sketched on) and cut extrudes
+## into the body (negated distance).
+func finish_extrude(distance: float, op: String = "new") -> void:
 	if not active:
 		return
+	if op != "new" and target_fid == "":
+		status.emit("No target body — sketch on a face to cut/fuse")
+		return
+	if op == "cut":
+		distance = -absf(distance)
 	var sk_fid: String = view.doc.graph_add_sketch(sketch)
-	var ex_fid: String = view.doc.graph_add_extrude(sk_fid, distance, false, "new", "")
-	if ex_fid == "":
+	var ex_fid: String = view.doc.graph_add_extrude(
+		sk_fid, distance, false, op, target_fid if op != "new" else "")
+	_finish_feature(sk_fid, ex_fid, op, "Extrude failed — is the profile closed?")
+
+
+## Finish the sketch and revolve. The axis is the selected line when one is
+## selected (select tool), otherwise the sketch Y axis through the origin.
+func finish_revolve(angle: float = TAU, op: String = "new") -> void:
+	if not active:
+		return
+	if op != "new" and target_fid == "":
+		status.emit("No target body — sketch on a face to cut/fuse")
+		return
+	var axis_point := Vector2.ZERO
+	var axis_dir := Vector2(0, 1)
+	if selected.size() == 1:
+		var info: Dictionary = sketch.entity_info(selected[0])
+		if info.get("type", "") == "line":
+			axis_point = info["start"]
+			axis_dir = (info["end"] - info["start"]).normalized()
+			sketch.set_construction(selected[0], true)
+	var sk_fid: String = view.doc.graph_add_sketch(sketch)
+	var rv_fid: String = view.doc.graph_add_revolve(
+		sk_fid, axis_point, axis_dir, angle, op, target_fid if op != "new" else "")
+	_finish_feature(sk_fid, rv_fid, op, "Revolve failed — closed profile on one side of the axis?")
+
+
+func _finish_feature(sk_fid: String, feat_fid: String, op: String, fail_msg: String) -> void:
+	if feat_fid == "":
 		view.doc.graph_remove(sk_fid)
-	var body_id: String = view.body_of_feature(ex_fid)
+	var body_id: String
+	if op == "new":
+		body_id = view.body_of_feature(feat_fid)
+	else:
+		# Modifying feature: the target body was updated in place.
+		body_id = view.body_of_feature(target_fid) if feat_fid != "" else ""
 	active = false
 	_tool_points.clear()
 	_clear_meshes()
-	if body_id == "":
-		status.emit("Extrude failed — is the profile closed?")
+	if feat_fid == "":
+		status.emit(fail_msg)
 		cancelled.emit()
 	else:
 		view.refresh()

@@ -34,6 +34,7 @@ func _init() -> void:
 	await test_timeline(main)
 	test_ops_panel(main)
 	test_sketch_constraints(main)
+	test_revolve_and_cut(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -205,6 +206,59 @@ func test_sketch_constraints(main) -> void:
 	check(sm.selected.is_empty(), "empty click clears selection")
 	check(sm.constrain("horizontal") == "", "constrain with no selection is no-op")
 	sm.cancel()
+
+
+func test_revolve_and_cut(main) -> void:
+	print("- revolve and extrude-cut via sketch finish")
+	var view: DocumentView = main.view
+	var sm: SketchMode = main.sketch_mode
+
+	# Revolve: 20x20 rectangle centered at x=40, around the sketch Y axis.
+	view.clear_selection()
+	main._start_sketch()
+	sm.set_tool(SketchMode.Tool.RECT)
+	sm.click(Vector2(30, 0))
+	sm.click(Vector2(50, 20))
+	var count0: int = view.doc.body_ids().size()
+	sm.finish_revolve(TAU, "new")
+	check(view.doc.body_ids().size() == count0 + 1, "revolve created a body")
+	var ring: String = view.selected_body
+	# Pappus: V = 2*pi*R_centroid*A = 2*pi*40*400.
+	check(absf(view.doc.body_volume(ring) - TAU * 40.0 * 400.0) < 300.0,
+		"revolved volume matches Pappus")
+	view.delete_selected()
+
+	# Extrude-cut: sketch a circle on a box top face, cut 20 deep.
+	var box: String = view.insert_primitive("box", Vector3(800, 800, 0))
+	var vol0: float = view.doc.body_volume(box)
+	view.select_entity(box, "")
+	view.select_ray(Vector3(800, 800, 500), Vector3(0, 0, -1))
+	check(view.selected_face != "", "top face selected for sketch")
+	main._start_sketch()
+	check(sm.target_fid != "", "cut target feature recorded")
+	sm.set_tool(SketchMode.Tool.CIRCLE)
+	sm.click(Vector2(0, 0))
+	sm.click(Vector2(10, 0))
+	sm.finish_extrude(20.0, "cut")
+	var vol1: float = view.doc.body_volume(box)
+	check(absf((vol0 - vol1) - PI * 100.0 * 20.0) < 50.0,
+		"cut removed a 10x20 cylinder (%.0f removed)" % (vol0 - vol1))
+	check(view.doc.body_ids().size() == count0 + 1, "cut did not add a body")
+
+	# The cut is parametric: deepen it via the timeline params.
+	var cut_fid := ""
+	for f in view.doc.graph_features():
+		if f["type"] == "extrude":
+			cut_fid = f["id"]
+	check(cut_fid != "", "cut feature on timeline")
+	var params: Dictionary = {}
+	for f in view.doc.graph_features():
+		if f["id"] == cut_fid:
+			params = JSON.parse_string(f["params"])
+	params["distance"] = -40.0
+	check(view.doc.graph_set_params(cut_fid, JSON.stringify(params)), "deepen cut")
+	var vol2: float = view.doc.body_volume(box)
+	check(vol1 - vol2 > PI * 100.0 * 15.0, "cut got deeper")
 
 
 func test_ops_panel(main) -> void:

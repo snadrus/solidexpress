@@ -127,6 +127,11 @@ public:
     godot::String graph_add_extrude(const godot::String& sketch_fid, double distance,
                                     bool symmetric, const godot::String& op,
                                     const godot::String& target_fid);
+    // Axis in sketch 2D coordinates (point + direction on the sketch plane).
+    godot::String graph_add_revolve(const godot::String& sketch_fid,
+                                    const godot::Vector2& axis_point,
+                                    const godot::Vector2& axis_dir, double angle,
+                                    const godot::String& op, const godot::String& target_fid);
     bool graph_set_params(const godot::String& fid, const godot::String& params_json);
     bool graph_set_suppressed(const godot::String& fid, bool suppressed);
     bool graph_remove(const godot::String& fid);

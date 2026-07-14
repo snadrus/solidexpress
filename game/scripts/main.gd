@@ -17,6 +17,11 @@ var sketch_toolbar: PanelContainer
 var timeline: TimelinePanel
 var ops_panel: OpsPanel
 var dim_value: SpinBox
+var finish_op: OptionButton
+
+
+func _finish_op_name() -> String:
+	return ["new", "cut", "fuse"][finish_op.selected]
 var extrude_distance: SpinBox
 var _last_saved_revision := 0
 
@@ -256,10 +261,22 @@ func _build_ui() -> void:
 	extrude_distance.value = 20
 	extrude_distance.suffix = "mm"
 	hbox.add_child(extrude_distance)
+	finish_op = OptionButton.new()
+	for op_name in ["New", "Cut", "Fuse"]:
+		finish_op.add_item(op_name)
+	finish_op.tooltip_text = "How the result combines with the body sketched on"
+	hbox.add_child(finish_op)
 	var finish_btn := Button.new()
-	finish_btn.text = "Finish"
-	finish_btn.pressed.connect(func() -> void: sketch_mode.finish_extrude(extrude_distance.value))
+	finish_btn.text = "Extrude"
+	finish_btn.pressed.connect(func() -> void:
+		sketch_mode.finish_extrude(extrude_distance.value, _finish_op_name()))
 	hbox.add_child(finish_btn)
+	var revolve_btn := Button.new()
+	revolve_btn.text = "Revolve"
+	revolve_btn.tooltip_text = "Full revolve around the selected line (or sketch Y axis)"
+	revolve_btn.pressed.connect(func() -> void:
+		sketch_mode.finish_revolve(TAU, _finish_op_name()))
+	hbox.add_child(revolve_btn)
 	var cancel_btn := Button.new()
 	cancel_btn.text = "Cancel"
 	cancel_btn.pressed.connect(sketch_mode.cancel)
@@ -323,7 +340,9 @@ func _start_sketch() -> void:
 		return
 	var origin := Vector3.ZERO
 	var normal := Vector3(0, 0, 1)
+	sketch_mode.target_fid = ""
 	if view.selected_face != "":
+		sketch_mode.target_fid = view.feature_of_body(view.selected_body)
 		var n := view.selected_face_normal()
 		if n != Vector3.ZERO:
 			normal = n

@@ -551,6 +551,25 @@ String SxDocument::graph_add_extrude(const String& sketch_fid, double distance,
     return ok ? to_gd(fid.str()) : String();
 }
 
+String SxDocument::graph_add_revolve(const String& sketch_fid, const Vector2& axis_point,
+                                     const Vector2& axis_dir, double angle, const String& op,
+                                     const String& target_fid) {
+    sx::EntityId fid;
+    bool ok = apply_graph_edit("revolve", [&] {
+        sx::Feature f;
+        f.type = sx::FeatureType::Revolve;
+        f.params = {{"sketch", to_std(sketch_fid)},
+                    {"axis_point", {axis_point.x, axis_point.y}},
+                    {"axis_dir", {axis_dir.x, axis_dir.y}},
+                    {"angle", angle},
+                    {"op", to_std(op)}};
+        if (!target_fid.is_empty()) f.params["target"] = to_std(target_fid);
+        fid = doc_->graph().add(std::move(f));
+        return true;
+    });
+    return ok ? to_gd(fid.str()) : String();
+}
+
 bool SxDocument::graph_set_params(const String& fid, const String& params_json) {
     nlohmann::json p;
     try {
@@ -647,6 +666,7 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("graph_add_primitive", "kind", "a", "b", "c", "origin"), &SxDocument::graph_add_primitive);
     ClassDB::bind_method(D_METHOD("graph_add_sketch", "sketch"), &SxDocument::graph_add_sketch);
     ClassDB::bind_method(D_METHOD("graph_add_extrude", "sketch_fid", "distance", "symmetric", "op", "target_fid"), &SxDocument::graph_add_extrude);
+    ClassDB::bind_method(D_METHOD("graph_add_revolve", "sketch_fid", "axis_point", "axis_dir", "angle", "op", "target_fid"), &SxDocument::graph_add_revolve);
     ClassDB::bind_method(D_METHOD("graph_set_params", "fid", "params_json"), &SxDocument::graph_set_params);
     ClassDB::bind_method(D_METHOD("graph_set_suppressed", "fid", "suppressed"), &SxDocument::graph_set_suppressed);
     ClassDB::bind_method(D_METHOD("graph_remove", "fid"), &SxDocument::graph_remove);
