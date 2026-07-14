@@ -27,6 +27,9 @@ func _init() -> void:
 	test_modeling_ops()
 	test_interop()
 	test_feature_graph()
+	test_transforms()
+	test_shell_offset()
+	test_measure()
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
 
@@ -104,6 +107,75 @@ func test_feature_graph() -> void:
 	var regen: Dictionary = doc2.graph_regenerate()
 	check(regen["ok"], "loaded graph regenerates")
 	DirAccess.remove_absolute(path)
+
+
+func test_transforms() -> void:
+	print("- mirror, patterns, rotate")
+	var doc := SxDocument.new()
+	var a: String = doc.add_box(10, 10, 10, Vector3.ZERO)
+	var m: String = doc.mirror_body(a, Vector3(20, 0, 0), Vector3(1, 0, 0), true)
+	check(m.length() == 36, "mirror returns uuid")
+	check(doc.body_ids().size() == 2, "mirror keeps original")
+	check(absf(doc.body_volume(m) - 1000.0) < 1e-4, "mirrored volume equal")
+
+	var copies: PackedStringArray = doc.linear_pattern(a, Vector3(1, 0, 0), 15.0, 4)
+	check(copies.size() == 3, "linear pattern count=4 makes 3 copies")
+	check(doc.body_ids().size() == 5, "five bodies after pattern")
+	check(doc.undo(), "pattern undo")
+	check(doc.body_ids().size() == 2, "copies gone after undo")
+
+	var ring: PackedStringArray = doc.circular_pattern(a, Vector3(50, 0, 0), Vector3(0, 0, 1), 6, TAU)
+	check(ring.size() == 5, "circular pattern count=6 makes 5 copies")
+	check(doc.undo(), "circular undo")
+
+	var vol0: float = doc.body_volume(a)
+	check(doc.rotate_body(a, Vector3.ZERO, Vector3(0, 0, 1), PI / 4.0), "rotate accepted")
+	check(absf(doc.body_volume(a) - vol0) < 1e-6, "volume unchanged by rotate")
+
+
+func test_shell_offset() -> void:
+	print("- shell and offset")
+	var doc := SxDocument.new()
+	var a: String = doc.add_box(20, 20, 20, Vector3.ZERO)
+	# Find the top face by picking straight down.
+	var hit: Dictionary = doc.pick(Vector3(10, 10, 500), Vector3(0, 0, -1))
+	check(not hit.is_empty(), "top face picked")
+	var vol0: float = doc.body_volume(a)
+	check(doc.shell_body(PackedStringArray([hit["face"]]), 2.0), "shell applies")
+	check(doc.body_volume(a) < vol0 * 0.5, "shell hollowed the box")
+	check(doc.undo(), "shell undo")
+	check(absf(doc.body_volume(a) - vol0) < 1e-6, "volume restored")
+
+	check(doc.offset_body(a, 2.0), "offset applies")
+	# Arc-join offset rounds edges/corners: 20^3 + 6 slabs + 12 quarter-cylinders
+	# + 8 eighth-spheres = 13587.5.
+	var expected := 8000.0 + 6.0 * 400.0 * 2.0 + 12.0 * (PI * 4.0 / 4.0 * 20.0) + (4.0 / 3.0) * PI * 8.0
+	check(absf(doc.body_volume(a) - expected) < expected * 0.01, "offset volume matches rounded-corner box")
+
+
+func test_measure() -> void:
+	print("- measurement")
+	var doc := SxDocument.new()
+	var a: String = doc.add_box(10, 10, 10, Vector3.ZERO)
+	var b: String = doc.add_box(10, 10, 10, Vector3(25, 0, 0))
+	var d: Dictionary = doc.measure_distance(a, b)
+	check(not d.is_empty() and absf(d["distance"] - 15.0) < 1e-6, "min distance 15")
+
+	var bb: Dictionary = doc.measure_bbox(a)
+	check(not bb.is_empty(), "bbox returned")
+	check(bb["max"].x - bb["min"].x > 9.9 and bb["max"].x - bb["min"].x < 10.2, "bbox x span ~10")
+
+	var mp: Dictionary = doc.measure_mass(a)
+	check(absf(mp["volume"] - 1000.0) < 1e-4, "mass volume 1000")
+	check(absf(mp["surface_area"] - 600.0) < 1e-4, "surface area 600")
+	check(mp["center_of_mass"].distance_to(Vector3(5, 5, 5)) < 1e-6, "center of mass at 5,5,5")
+
+	var edges: PackedStringArray = doc.get_edge_ids(a)
+	check(absf(doc.measure_edge_length(edges[0]) - 10.0) < 1e-6, "edge length 10")
+	var faces: PackedStringArray = doc.get_face_ids(a)
+	check(absf(doc.measure_face_area(faces[0]) - 100.0) < 1e-6, "face area 100")
+	var angle: float = doc.measure_face_angle(faces[0], faces[1])
+	check(angle >= 0.0, "face angle valid")
 
 
 func test_interop() -> void:

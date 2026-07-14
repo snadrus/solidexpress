@@ -49,6 +49,37 @@ public:
     bool fillet_edges(const godot::PackedStringArray& edge_ids, double radius);
     bool chamfer_edges(const godot::PackedStringArray& edge_ids, double distance);
 
+    // --- transforms & patterns ---
+    // Returns the new body's uuid ("" on failure).
+    godot::String mirror_body(const godot::String& body_id, const godot::Vector3& plane_point,
+                              const godot::Vector3& plane_normal, bool keep_original);
+    // Returns uuids of the new copies (count includes the original).
+    godot::PackedStringArray linear_pattern(const godot::String& body_id,
+                                            const godot::Vector3& direction, double spacing,
+                                            int count);
+    godot::PackedStringArray circular_pattern(const godot::String& body_id,
+                                              const godot::Vector3& axis_point,
+                                              const godot::Vector3& axis_dir, int count,
+                                              double total_angle);
+    bool rotate_body(const godot::String& body_id, const godot::Vector3& axis_point,
+                     const godot::Vector3& axis_dir, double angle);
+
+    // --- shell / offset ---
+    bool shell_body(const godot::PackedStringArray& faces_to_remove, double thickness);
+    bool offset_body(const godot::String& body_id, double offset);
+
+    // --- measurement ---
+    // {distance: float, point_a: Vector3, point_b: Vector3} or {} on failure.
+    godot::Dictionary measure_distance(const godot::String& a, const godot::String& b) const;
+    // {min: Vector3, max: Vector3} or {}.
+    godot::Dictionary measure_bbox(const godot::String& id) const;
+    // {volume, surface_area, center_of_mass: Vector3} or {}.
+    godot::Dictionary measure_mass(const godot::String& body_id) const;
+    double measure_edge_length(const godot::String& edge_id) const;
+    double measure_face_area(const godot::String& face_id) const;
+    // Radians; -1.0 when faces are not planar / invalid.
+    double measure_face_angle(const godot::String& f1, const godot::String& f2) const;
+
     // --- interop ---
     bool export_step(const godot::String& path);
     bool export_stl(const godot::String& path, bool binary);

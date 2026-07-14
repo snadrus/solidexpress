@@ -5,7 +5,10 @@
 #include "sx/commands_boolean.hpp"
 #include "sx/commands_dress.hpp"
 #include "sx/commands_graph.hpp"
+#include "sx/commands_hollow.hpp"
 #include "sx/commands_sketch.hpp"
+#include "sx/commands_transform.hpp"
+#include "sx/measure.hpp"
 #include "sx/features.hpp"
 #include "sx/interop.hpp"
 #include "sx_sketch.hpp"
@@ -199,6 +202,134 @@ bool SxDocument::export_stl(const String& path, bool binary) {
     bool ok = sx::interop::export_stl(*doc_, to_std(path), binary, &err);
     if (!ok) sx::log::error("export_stl: " + err);
     return ok;
+}
+
+String SxDocument::mirror_body(const String& body_id, const Vector3& plane_point,
+                               const Vector3& plane_normal, bool keep_original) {
+    auto cmd = std::make_unique<sx::MirrorBodyCommand>(
+        parse_id(body_id), std::array<double, 3>{plane_point.x, plane_point.y, plane_point.z},
+        std::array<double, 3>{plane_normal.x, plane_normal.y, plane_normal.z}, keep_original);
+    sx::MirrorBodyCommand* raw = cmd.get();
+    try {
+        stack_.push(*doc_, std::move(cmd));
+    } catch (const std::exception& e) {
+        sx::log::error(std::string("mirror_body failed: ") + e.what());
+        return {};
+    }
+    return to_gd(raw->created_body().str());
+}
+
+PackedStringArray SxDocument::linear_pattern(const String& body_id, const Vector3& direction,
+                                             double spacing, int count) {
+    auto cmd = std::make_unique<sx::LinearPatternCommand>(
+        parse_id(body_id), std::array<double, 3>{direction.x, direction.y, direction.z},
+        spacing, count);
+    sx::LinearPatternCommand* raw = cmd.get();
+    PackedStringArray out;
+    try {
+        stack_.push(*doc_, std::move(cmd));
+    } catch (const std::exception& e) {
+        sx::log::error(std::string("linear_pattern failed: ") + e.what());
+        return out;
+    }
+    for (const auto& id : raw->created_bodies()) out.push_back(to_gd(id.str()));
+    return out;
+}
+
+PackedStringArray SxDocument::circular_pattern(const String& body_id, const Vector3& axis_point,
+                                               const Vector3& axis_dir, int count,
+                                               double total_angle) {
+    auto cmd = std::make_unique<sx::CircularPatternCommand>(
+        parse_id(body_id), std::array<double, 3>{axis_point.x, axis_point.y, axis_point.z},
+        std::array<double, 3>{axis_dir.x, axis_dir.y, axis_dir.z}, count, total_angle);
+    sx::CircularPatternCommand* raw = cmd.get();
+    PackedStringArray out;
+    try {
+        stack_.push(*doc_, std::move(cmd));
+    } catch (const std::exception& e) {
+        sx::log::error(std::string("circular_pattern failed: ") + e.what());
+        return out;
+    }
+    for (const auto& id : raw->created_bodies()) out.push_back(to_gd(id.str()));
+    return out;
+}
+
+bool SxDocument::rotate_body(const String& body_id, const Vector3& axis_point,
+                             const Vector3& axis_dir, double angle) {
+    try {
+        stack_.push(*doc_, std::make_unique<sx::RotateBodyCommand>(
+                               parse_id(body_id),
+                               std::array<double, 3>{axis_point.x, axis_point.y, axis_point.z},
+                               std::array<double, 3>{axis_dir.x, axis_dir.y, axis_dir.z}, angle));
+    } catch (const std::exception& e) {
+        sx::log::error(std::string("rotate_body failed: ") + e.what());
+        return false;
+    }
+    return true;
+}
+
+bool SxDocument::shell_body(const PackedStringArray& faces_to_remove, double thickness) {
+    try {
+        stack_.push(*doc_, std::make_unique<sx::ShellCommand>(parse_ids(faces_to_remove),
+                                                              thickness));
+    } catch (const std::exception& e) {
+        sx::log::error(std::string("shell_body failed: ") + e.what());
+        return false;
+    }
+    return true;
+}
+
+bool SxDocument::offset_body(const String& body_id, double offset) {
+    try {
+        stack_.push(*doc_, std::make_unique<sx::OffsetBodyCommand>(parse_id(body_id), offset));
+    } catch (const std::exception& e) {
+        sx::log::error(std::string("offset_body failed: ") + e.what());
+        return false;
+    }
+    return true;
+}
+
+Dictionary SxDocument::measure_distance(const String& a, const String& b) const {
+    Dictionary out;
+    auto r = sx::measure::min_distance(*doc_, parse_id(a), parse_id(b));
+    if (!r) return out;
+    out["distance"] = r->distance;
+    out["point_a"] = Vector3(r->point_a[0], r->point_a[1], r->point_a[2]);
+    out["point_b"] = Vector3(r->point_b[0], r->point_b[1], r->point_b[2]);
+    return out;
+}
+
+Dictionary SxDocument::measure_bbox(const String& id) const {
+    Dictionary out;
+    auto r = sx::measure::bounding_box(*doc_, parse_id(id));
+    if (!r) return out;
+    out["min"] = Vector3(r->min[0], r->min[1], r->min[2]);
+    out["max"] = Vector3(r->max[0], r->max[1], r->max[2]);
+    return out;
+}
+
+Dictionary SxDocument::measure_mass(const String& body_id) const {
+    Dictionary out;
+    auto r = sx::measure::mass_properties(*doc_, parse_id(body_id));
+    if (!r) return out;
+    out["volume"] = r->volume;
+    out["surface_area"] = r->surface_area;
+    out["center_of_mass"] =
+        Vector3(r->center_of_mass[0], r->center_of_mass[1], r->center_of_mass[2]);
+    return out;
+}
+
+double SxDocument::measure_edge_length(const String& edge_id) const {
+    return sx::measure::edge_length(*doc_, parse_id(edge_id));
+}
+
+double SxDocument::measure_face_area(const String& face_id) const {
+    return sx::measure::face_area(*doc_, parse_id(face_id));
+}
+
+double SxDocument::measure_face_angle(const String& f1, const String& f2) const {
+    auto r = sx::measure::angle_between_faces(*doc_, parse_id(f1), parse_id(f2));
+    return r ? *r : -1.0;
 }
 
 PackedStringArray SxDocument::import_step(const String& path) {
@@ -481,6 +612,18 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("boolean_op", "target_body", "tool_body", "op", "keep_tool"), &SxDocument::boolean_op);
     ClassDB::bind_method(D_METHOD("fillet_edges", "edge_ids", "radius"), &SxDocument::fillet_edges);
     ClassDB::bind_method(D_METHOD("chamfer_edges", "edge_ids", "distance"), &SxDocument::chamfer_edges);
+    ClassDB::bind_method(D_METHOD("mirror_body", "body_id", "plane_point", "plane_normal", "keep_original"), &SxDocument::mirror_body);
+    ClassDB::bind_method(D_METHOD("linear_pattern", "body_id", "direction", "spacing", "count"), &SxDocument::linear_pattern);
+    ClassDB::bind_method(D_METHOD("circular_pattern", "body_id", "axis_point", "axis_dir", "count", "total_angle"), &SxDocument::circular_pattern);
+    ClassDB::bind_method(D_METHOD("rotate_body", "body_id", "axis_point", "axis_dir", "angle"), &SxDocument::rotate_body);
+    ClassDB::bind_method(D_METHOD("shell_body", "faces_to_remove", "thickness"), &SxDocument::shell_body);
+    ClassDB::bind_method(D_METHOD("offset_body", "body_id", "offset"), &SxDocument::offset_body);
+    ClassDB::bind_method(D_METHOD("measure_distance", "a", "b"), &SxDocument::measure_distance);
+    ClassDB::bind_method(D_METHOD("measure_bbox", "id"), &SxDocument::measure_bbox);
+    ClassDB::bind_method(D_METHOD("measure_mass", "body_id"), &SxDocument::measure_mass);
+    ClassDB::bind_method(D_METHOD("measure_edge_length", "edge_id"), &SxDocument::measure_edge_length);
+    ClassDB::bind_method(D_METHOD("measure_face_area", "face_id"), &SxDocument::measure_face_area);
+    ClassDB::bind_method(D_METHOD("measure_face_angle", "f1", "f2"), &SxDocument::measure_face_angle);
     ClassDB::bind_method(D_METHOD("export_step", "path"), &SxDocument::export_step);
     ClassDB::bind_method(D_METHOD("export_stl", "path", "binary"), &SxDocument::export_stl);
     ClassDB::bind_method(D_METHOD("import_step", "path"), &SxDocument::import_step);
