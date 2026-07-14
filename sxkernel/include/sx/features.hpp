@@ -36,6 +36,8 @@ enum class FeatureType {
     CircularPattern, // params: {target, axis_point, axis_dir, count, total_angle}
     Shell,      // params: {target, faces: [1-based face indices], thickness}
     Offset,     // params: {target, offset}
+    Sweep,      // params: {sketch: <fid>, path: [[x,y,z], ...]}
+    Loft,       // params: {sketches: [<fid>, ...], ruled: bool}
 };
 
 const char* to_string(FeatureType t);
@@ -49,7 +51,8 @@ struct Feature {
     nlohmann::json params;
     std::shared_ptr<Sketch> sketch;  // only for FeatureType::Sketch
     // Stable id of the body this feature creates (Primitive, new-body
-    // Extrude/Revolve, Mirror). Null for sketches and modifying features.
+    // Extrude/Revolve, Mirror, Sweep, Loft). Null for sketches and modifying
+    // features.
     EntityId output_body;
     // Stable ids of additional bodies created by pattern features
     // (count-1 copies). Empty for all other types.

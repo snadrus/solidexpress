@@ -3,17 +3,27 @@
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
+#include <BRepBuilderAPI_TransitionMode.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <BRepOffsetAPI_MakeOffsetShape.hxx>
+#include <BRepOffsetAPI_MakePipe.hxx>
+#include <BRepOffsetAPI_MakePipeShell.hxx>
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
+#include <BRepOffsetAPI_ThruSections.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepPrimAPI_MakeRevol.hxx>
+#include <BRepTools.hxx>
+#include <Standard_Failure.hxx>
 #include <TopExp.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
 #include <TopTools_ListOfShape.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Face.hxx>
+#include <TopoDS_Wire.hxx>
 #include <gp_Ax1.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Dir.hxx>
@@ -47,6 +57,8 @@ const char* to_string(FeatureType t) {
         case FeatureType::CircularPattern: return "circular_pattern";
         case FeatureType::Shell: return "shell";
         case FeatureType::Offset: return "offset";
+        case FeatureType::Sweep: return "sweep";
+        case FeatureType::Loft: return "loft";
     }
     return "unknown";
 }
@@ -64,11 +76,15 @@ FeatureType feature_type_from_string(const std::string& s) {
     if (s == "circular_pattern") return FeatureType::CircularPattern;
     if (s == "shell") return FeatureType::Shell;
     if (s == "offset") return FeatureType::Offset;
+    if (s == "sweep") return FeatureType::Sweep;
+    if (s == "loft") return FeatureType::Loft;
     throw std::invalid_argument("unknown feature type: " + s);
 }
 
 static bool creates_body(const Feature& f) {
-    if (f.type == FeatureType::Primitive || f.type == FeatureType::Mirror) return true;
+    if (f.type == FeatureType::Primitive || f.type == FeatureType::Mirror ||
+        f.type == FeatureType::Sweep || f.type == FeatureType::Loft)
+        return true;
     if (f.type == FeatureType::Extrude || f.type == FeatureType::Revolve)
         return f.params.value("op", "new") == "new";
     return false;
@@ -134,6 +150,11 @@ bool FeatureGraph::has_dependents(const EntityId& id) const {
             if (f.params.contains(key) && f.params[key].get<std::string>() == needle)
                 return true;
         }
+        if (f.params.contains("sketches") && f.params["sketches"].is_array()) {
+            for (const auto& s : f.params["sketches"]) {
+                if (s.is_string() && s.get<std::string>() == needle) return true;
+            }
+        }
     }
     return false;
 }
@@ -188,6 +209,44 @@ void put_body(Document& doc, const EntityId& id, const TopoDS_Shape& shape,
               const std::string& name) {
     if (doc.body(id)) doc.replace_body_shape(id, shape);
     else doc.add_body(shape, name, id);
+}
+
+TopoDS_Wire make_polyline_wire(const json& path) {
+    if (!path.is_array() || path.size() < 2)
+        throw std::runtime_error("path needs at least two points");
+    BRepBuilderAPI_MakeWire mk;
+    for (size_t i = 1; i < path.size(); ++i) {
+        gp_Pnt a = pnt_from(path[i - 1]);
+        gp_Pnt b = pnt_from(path[i]);
+        if (a.Distance(b) < 1e-12) throw std::runtime_error("zero-length path segment");
+        BRepBuilderAPI_MakeEdge edge(a, b);
+        if (!edge.IsDone()) throw std::runtime_error("failed to build path edge");
+        mk.Add(edge.Edge());
+    }
+    if (!mk.IsDone()) throw std::runtime_error("failed to build path wire");
+    return mk.Wire();
+}
+
+TopoDS_Shape sweep_along_polyline(const TopoDS_Shape& face, const json& path) {
+    TopoDS_Wire spine = make_polyline_wire(path);
+    TopTools_IndexedMapOfShape edges;
+    TopExp::MapShapes(spine, TopAbs_EDGE, edges);
+    if (edges.Extent() <= 1) {
+        BRepOffsetAPI_MakePipe pipe(spine, face);
+        if (!pipe.IsDone()) throw std::runtime_error("MakePipe failed");
+        return pipe.Shape();
+    }
+    TopoDS_Wire profile_wire = BRepTools::OuterWire(TopoDS::Face(face));
+    if (profile_wire.IsNull()) throw std::runtime_error("profile has no outer wire");
+    BRepOffsetAPI_MakePipeShell shell(spine);
+    shell.SetMode();
+    shell.SetTransitionMode(BRepBuilderAPI_RightCorner);
+    shell.Add(profile_wire, /*withContact=*/Standard_False,
+              /*withCorrection=*/Standard_True);
+    shell.Build();
+    if (!shell.IsDone()) throw std::runtime_error("MakePipeShell failed");
+    if (!shell.MakeSolid()) throw std::runtime_error("MakePipeShell could not make solid");
+    return shell.Shape();
 }
 }  // namespace
 
@@ -419,6 +478,66 @@ bool FeatureGraph::apply(Document& doc, Feature& f, std::string* err) {
                 if (result.IsNull() || !shape::is_valid(result))
                     return fail("offset result invalid");
                 doc.replace_body_shape(target, result);
+                return true;
+            }
+
+            case FeatureType::Sweep: {
+                EntityId sketch_fid =
+                    EntityId::from_string(f.params.at("sketch").get<std::string>());
+                const Feature* skf = feature(sketch_fid);
+                if (!skf || !skf->sketch) return fail("missing sketch feature");
+                std::string perr;
+                TopoDS_Shape face = skf->sketch->profile_face(&perr);
+                if (face.IsNull()) return fail("profile: " + perr);
+                TopoDS_Shape result;
+                try {
+                    result = sweep_along_polyline(face, f.params.at("path"));
+                } catch (const Standard_Failure& e) {
+                    return fail(std::string("sweep failed: ") + e.GetMessageString());
+                } catch (const std::runtime_error& e) {
+                    return fail(e.what());
+                }
+                if (result.IsNull() || !shape::is_valid(result))
+                    return fail("sweep result invalid");
+                if (shape::count(result).solids < 1) return fail("sweep result is not a solid");
+                put_body(doc, f.output_body, result, f.name);
+                return true;
+            }
+
+            case FeatureType::Loft: {
+                if (!f.params.contains("sketches") || !f.params["sketches"].is_array() ||
+                    f.params["sketches"].size() < 2)
+                    return fail("need at least two sketch features");
+                bool ruled = f.params.value("ruled", false);
+                BRepOffsetAPI_ThruSections loft(/*isSolid=*/Standard_True, ruled);
+                size_t i = 0;
+                for (const auto& js : f.params["sketches"]) {
+                    EntityId sketch_fid = EntityId::from_string(js.get<std::string>());
+                    const Feature* skf = feature(sketch_fid);
+                    if (!skf || !skf->sketch)
+                        return fail("missing sketch feature " + std::to_string(i));
+                    std::string perr;
+                    TopoDS_Shape face_shape = skf->sketch->profile_face(&perr);
+                    if (face_shape.IsNull())
+                        return fail("profile " + std::to_string(i) + ": " + perr);
+                    TopoDS_Wire wire = BRepTools::OuterWire(TopoDS::Face(face_shape));
+                    if (wire.IsNull())
+                        return fail("profile " + std::to_string(i) + ": no outer wire");
+                    loft.AddWire(wire);
+                    ++i;
+                }
+                TopoDS_Shape result;
+                try {
+                    loft.Build();
+                    if (!loft.IsDone()) return fail("ThruSections failed");
+                    result = loft.Shape();
+                } catch (const Standard_Failure& e) {
+                    return fail(std::string("ThruSections failed: ") + e.GetMessageString());
+                }
+                if (result.IsNull() || !shape::is_valid(result))
+                    return fail("loft result invalid");
+                if (shape::count(result).solids < 1) return fail("loft result is not a solid");
+                put_body(doc, f.output_body, result, f.name);
                 return true;
             }
         }
