@@ -120,6 +120,14 @@ bool Document::rename_body(const EntityId& body_id, const std::string& name) {
 bool Document::remove_body(const EntityId& body_id) {
     auto it = body_index_.find(body_id);
     if (it == body_index_.end()) return false;
+    // Cascade: drop every instance whose source is this body.
+    {
+        std::vector<EntityId> orphaned;
+        for (const auto& inst : instances_) {
+            if (inst.source_body == body_id) orphaned.push_back(inst.id);
+        }
+        for (const auto& id : orphaned) remove_instance(id);
+    }
     size_t idx = it->second;
     unregister_body_entities(*bodies_[idx]);
     cards_->erase(body_id);
@@ -337,6 +345,59 @@ bool Document::remove_datum(const EntityId& id) {
 void Document::restore_datum(Datum&& d) {
     upsert_card_for_datum(d);
     index_datum(std::move(d));
+}
+
+EntityId Document::add_instance(const EntityId& source_body,
+                                const std::array<double, 3>& translation,
+                                const std::array<double, 4>& rotation_quat,
+                                const std::string& name) {
+    if (!body(source_body)) return {};
+    Instance inst;
+    inst.id = EntityId::generate();
+    inst.source_body = source_body;
+    inst.translation = translation;
+    inst.rotation_quat = rotation_quat;
+    inst.name = name;
+    const EntityId id = inst.id;
+    instance_index_[id] = instances_.size();
+    instances_.push_back(std::move(inst));
+    bump_revision();
+    return id;
+}
+
+bool Document::remove_instance(const EntityId& id) {
+    auto it = instance_index_.find(id);
+    if (it == instance_index_.end()) return false;
+    const size_t idx = it->second;
+    instances_.erase(instances_.begin() + static_cast<long>(idx));
+    instance_index_.erase(it);
+    for (size_t i = idx; i < instances_.size(); ++i)
+        instance_index_[instances_[i].id] = i;
+    bump_revision();
+    return true;
+}
+
+bool Document::set_instance_transform(const EntityId& id,
+                                      const std::array<double, 3>& translation,
+                                      const std::array<double, 4>& rotation_quat) {
+    auto it = instance_index_.find(id);
+    if (it == instance_index_.end()) return false;
+    Instance& inst = instances_[it->second];
+    inst.translation = translation;
+    inst.rotation_quat = rotation_quat;
+    bump_revision();
+    return true;
+}
+
+const Instance* Document::instance(const EntityId& id) const {
+    auto it = instance_index_.find(id);
+    return it == instance_index_.end() ? nullptr : &instances_[it->second];
+}
+
+void Document::restore_instance(Instance&& inst) {
+    instance_index_[inst.id] = instances_.size();
+    instances_.push_back(std::move(inst));
+    bump_revision();
 }
 
 }  // namespace sx

@@ -10,6 +10,7 @@
 #include "sx/datum.hpp"
 #include "sx/document.hpp"
 #include "sx/features.hpp"
+#include "sx/instances.hpp"
 #include "sx/log.hpp"
 #include "sx/shape_utils.hpp"
 
@@ -76,8 +77,12 @@ bool save_sxp(const Document& doc, const std::string& path, std::string* err) {
             d);
     }
 
+    json instances_json = json::array();
+    for (const auto& inst : doc.instances()) instances_json.push_back(inst);
+
     ok = ok && add("features.json", doc.graph().to_json().dump(2));
     ok = ok && add("datums.json", datums_json.dump(2));
+    ok = ok && add("instances.json", instances_json.dump(2));
     ok = ok && add("manifest.json", manifest.dump(2));
     ok = ok && mz_zip_writer_finalize_archive(&zip) == MZ_TRUE;
     mz_zip_writer_end(&zip);
@@ -130,7 +135,7 @@ bool load_sxp(Document& doc, const std::string& path, std::string* err) {
         return false;
     }
 
-    // Clear existing bodies before loading.
+    // Clear existing bodies before loading (also cascades instance removal).
     for (const auto& id : doc.body_ids()) doc.remove_body(id);
     {
         std::vector<EntityId> datum_ids;
@@ -139,6 +144,12 @@ bool load_sxp(Document& doc, const std::string& path, std::string* err) {
             datum_ids.push_back(std::visit([](const auto& x) { return x.id; }, d));
         }
         for (const auto& id : datum_ids) doc.remove_datum(id);
+    }
+    {
+        std::vector<EntityId> instance_ids;
+        instance_ids.reserve(doc.instances().size());
+        for (const auto& inst : doc.instances()) instance_ids.push_back(inst.id);
+        for (const auto& id : instance_ids) doc.remove_instance(id);
     }
 
     try {
@@ -199,6 +210,25 @@ bool load_sxp(Document& doc, const std::string& path, std::string* err) {
             }
         } catch (const std::exception& e) {
             log::warn(std::string("sxp: ignoring bad datums.json: ") + e.what());
+        }
+    }
+
+    // Instances are optional for backward compatibility with older .sxp files.
+    std::string instances_text = read_entry(zip, "instances.json", &found);
+    if (found) {
+        try {
+            json ij = json::parse(instances_text);
+            for (const auto& ji : ij) {
+                Instance inst = ji.get<Instance>();
+                if (!doc.body(inst.source_body)) {
+                    log::warn("sxp: dropping instance '" + inst.name +
+                              "' — missing source body " + inst.source_body.str());
+                    continue;
+                }
+                doc.restore_instance(std::move(inst));
+            }
+        } catch (const std::exception& e) {
+            log::warn(std::string("sxp: ignoring bad instances.json: ") + e.what());
         }
     }
 

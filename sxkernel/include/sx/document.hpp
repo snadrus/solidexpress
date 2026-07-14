@@ -19,6 +19,7 @@
 #include "sx/datum.hpp"
 #include "sx/entity.hpp"
 #include "sx/ids.hpp"
+#include "sx/instances.hpp"
 
 namespace sx {
 
@@ -109,6 +110,24 @@ public:
     // without those APIs should call this after restore so cards exist.
     void ensure_datum_cards();
 
+    // --- instances (assembly placements of a source body) ---
+    // Semantic cards are intentionally skipped: EntityKind has no Instance
+    // value and entity.hpp is owned elsewhere this round; Component exists
+    // but using Body as a stand-in would be misleading. Revisit when an
+    // Instance (or Component) card kind is wired end-to-end.
+    EntityId add_instance(const EntityId& source_body,
+                          const std::array<double, 3>& translation,
+                          const std::array<double, 4>& rotation_quat,
+                          const std::string& name);
+    bool remove_instance(const EntityId& id);
+    bool set_instance_transform(const EntityId& id,
+                                const std::array<double, 3>& translation,
+                                const std::array<double, 4>& rotation_quat);
+    const Instance* instance(const EntityId& id) const;
+    const std::vector<Instance>& instances() const { return instances_; }
+    // Used by the .sxp loader to restore persisted instances exactly.
+    void restore_instance(Instance&& inst);
+
 private:
     void register_subshapes(Body& b, bool fresh_ids);
     void regenerate_cards_for_body(const Body& b);
@@ -124,6 +143,8 @@ private:
     int datum_plane_seq_ = 0;
     int datum_axis_seq_ = 0;
     int datum_point_seq_ = 0;
+    std::vector<Instance> instances_;
+    std::unordered_map<EntityId, size_t> instance_index_;
     std::unique_ptr<CardRegistry> cards_;
     std::unique_ptr<FeatureGraph> graph_;
     uint64_t revision_ = 0;
