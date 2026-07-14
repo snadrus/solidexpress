@@ -71,12 +71,16 @@ const SCHEMAS := {
 		{"key": "pitch", "label": "Pitch", "kind": "float", "min": 0.01, "max": 100.0, "step": 0.25},
 		{"key": "turns", "label": "Turns", "kind": "float", "min": 0.1, "max": 1000.0, "step": 0.5},
 		{"key": "depth", "label": "Depth", "kind": "float", "min": 0.01, "max": 100.0, "step": 0.1},
+		{"key": "profile_angle_deg", "label": "Profile angle", "kind": "float", "min": 30.0, "max": 90.0, "step": 5.0},
 	],
 	"import_step": [
 		{"key": "scale", "label": "Scale", "kind": "float", "min": 0.001, "max": 1000.0, "step": 0.1},
 	],
 	"loft": [
 		{"key": "ruled", "label": "Ruled", "kind": "bool"},
+	],
+	"boolean": [
+		{"key": "op", "label": "Operation", "kind": "enum", "options": ["fuse", "cut", "common"]},
 	],
 }
 
