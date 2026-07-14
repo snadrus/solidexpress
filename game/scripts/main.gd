@@ -106,7 +106,9 @@ func _build_ui() -> void:
 	var file_btn := MenuButton.new()
 	file_btn.text = "File"
 	file_btn.flat = false
-	menu_bar.add_child(file_btn)
+	var menu_row := HBoxContainer.new()
+	menu_bar.add_child(menu_row)
+	menu_row.add_child(file_btn)
 	var popup := file_btn.get_popup()
 	popup.add_item("New", 0)
 	popup.add_item("Open...", 1)
@@ -119,6 +121,23 @@ func _build_ui() -> void:
 	popup.add_separator()
 	popup.add_item("Export AI Context...", 7)
 	popup.id_pressed.connect(_on_file_menu)
+
+	# Insert menu: reference geometry.
+	var insert_btn := MenuButton.new()
+	insert_btn.text = "Insert"
+	insert_btn.flat = false
+	menu_row.add_child(insert_btn)
+	var insert_popup := insert_btn.get_popup()
+	insert_popup.add_item("Datum Plane XY", 0)
+	insert_popup.add_item("Datum Plane XZ", 1)
+	insert_popup.add_item("Datum Plane YZ", 2)
+	insert_popup.add_separator()
+	insert_popup.add_item("Datum Axis X", 3)
+	insert_popup.add_item("Datum Axis Y", 4)
+	insert_popup.add_item("Datum Axis Z", 5)
+	insert_popup.add_separator()
+	insert_popup.add_item("Datum Point at Origin", 6)
+	insert_popup.id_pressed.connect(_on_insert_menu)
 
 	file_dialog = FileDialog.new()
 	file_dialog.access = FileDialog.ACCESS_FILESYSTEM
@@ -447,6 +466,23 @@ func _on_file_menu(id: int) -> void:
 			_show_file_dialog(FileAction.EXPORT_STL, FileDialog.FILE_MODE_SAVE_FILE, "*.stl ; STL")
 		7:
 			_show_file_dialog(FileAction.EXPORT_CONTEXT, FileDialog.FILE_MODE_SAVE_FILE, "*.md ; Markdown")
+
+
+func _on_insert_menu(id: int) -> void:
+	var did := ""
+	match id:
+		0: did = view.doc.add_datum_plane(Vector3.ZERO, Vector3(0, 0, 1))
+		1: did = view.doc.add_datum_plane(Vector3.ZERO, Vector3(0, 1, 0))
+		2: did = view.doc.add_datum_plane(Vector3.ZERO, Vector3(1, 0, 0))
+		3: did = view.doc.add_datum_axis(Vector3.ZERO, Vector3(1, 0, 0))
+		4: did = view.doc.add_datum_axis(Vector3.ZERO, Vector3(0, 1, 0))
+		5: did = view.doc.add_datum_axis(Vector3.ZERO, Vector3(0, 0, 1))
+		6: did = view.doc.add_datum_point(Vector3.ZERO)
+	if did != "":
+		view.graph_changed()
+		_on_status("Datum added")
+	else:
+		_on_status("Datum creation failed")
 
 
 func _show_file_dialog(action: FileAction, mode: FileDialog.FileMode, filter: String) -> void:
