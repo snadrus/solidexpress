@@ -1,0 +1,2 @@
+FreeCAD commit: 46a04980691fdf0d59c27a6fc41135777908dde3 (2026-07-13 22:28:28 +0200)
+NOTE: patched #include "../../SketcherGlobal.h" -> <SketcherGlobal.h> (provided by ../planegcs-shim)

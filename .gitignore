@@ -1,0 +1,8 @@
+build/
+tools/godot/
+game/bin/
+game/.godot/
+*.tmp
+.cache/
+compile_commands.json
+/tmp/
