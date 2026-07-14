@@ -1,8 +1,0 @@
-/home/andy/projects/solidexpress/build-io/CMakeFiles/miniz.dir
-/home/andy/projects/solidexpress/build-io/CMakeFiles/planegcs.dir
-/home/andy/projects/solidexpress/build-io/CMakeFiles/edit_cache.dir
-/home/andy/projects/solidexpress/build-io/CMakeFiles/rebuild_cache.dir
-/home/andy/projects/solidexpress/build-io/sxkernel/CMakeFiles/sxkernel.dir
-/home/andy/projects/solidexpress/build-io/sxkernel/CMakeFiles/sxkernel_tests.dir
-/home/andy/projects/solidexpress/build-io/sxkernel/CMakeFiles/edit_cache.dir
-/home/andy/projects/solidexpress/build-io/sxkernel/CMakeFiles/rebuild_cache.dir
