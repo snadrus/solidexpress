@@ -1,0 +1,178 @@
+#include "sx_sketch.hpp"
+
+#include <godot_cpp/core/class_db.hpp>
+#include <godot_cpp/variant/vector2.hpp>
+
+using namespace godot;
+
+namespace sx_godot {
+
+static std::string to_std(const String& s) { return s.utf8().get_data(); }
+static String to_gd(const std::string& s) { return String::utf8(s.c_str()); }
+
+static sx::EntityId parse_id(const String& s) {
+    try {
+        return sx::EntityId::from_string(to_std(s));
+    } catch (...) {
+        return {};
+    }
+}
+
+static sx::PointRole parse_role(const String& s) {
+    std::string r = to_std(s);
+    if (r == "start") return sx::PointRole::Start;
+    if (r == "end") return sx::PointRole::End;
+    if (r == "center") return sx::PointRole::Center;
+    return sx::PointRole::Self;
+}
+
+static std::optional<sx::ConstraintType> parse_constraint_type(const String& s) {
+    std::string t = to_std(s);
+    using CT = sx::ConstraintType;
+    for (CT ct : {CT::Coincident, CT::Horizontal, CT::Vertical, CT::Parallel,
+                  CT::Perpendicular, CT::PointOnLine, CT::Tangent, CT::Equal,
+                  CT::Distance, CT::Radius, CT::Angle}) {
+        if (t == sx::to_string(ct)) return ct;
+    }
+    return std::nullopt;
+}
+
+SxSketch::SxSketch()
+    : sketch_(std::make_shared<sx::Sketch>("Sketch")),
+      solver_(sx::make_planegcs_backend()) {}
+
+void SxSketch::set_plane(const Vector3& origin, const Vector3& x_dir, const Vector3& y_dir) {
+    sx::SketchPlane plane;
+    plane.origin = {origin.x, origin.y, origin.z};
+    plane.x_dir = {x_dir.x, x_dir.y, x_dir.z};
+    plane.y_dir = {y_dir.x, y_dir.y, y_dir.z};
+    // Sketch plane is immutable per sketch (features depend on it); recreate,
+    // carrying nothing — callers set the plane before drawing.
+    sketch_ = std::make_shared<sx::Sketch>(sketch_->name(), plane);
+}
+
+String SxSketch::add_point(double x, double y) {
+    return to_gd(sketch_->add_point(x, y).str());
+}
+String SxSketch::add_line(double x1, double y1, double x2, double y2) {
+    return to_gd(sketch_->add_line(x1, y1, x2, y2).str());
+}
+String SxSketch::add_circle(double cx, double cy, double r) {
+    return to_gd(sketch_->add_circle(cx, cy, r).str());
+}
+String SxSketch::add_arc(double cx, double cy, double r, double a0, double a1) {
+    return to_gd(sketch_->add_arc(cx, cy, r, a0, a1).str());
+}
+
+bool SxSketch::remove_entity(const String& id) {
+    return sketch_->remove_entity(parse_id(id));
+}
+
+void SxSketch::set_construction(const String& id, bool construction) {
+    sketch_->set_construction(parse_id(id), construction);
+}
+
+PackedStringArray SxSketch::entity_ids() const {
+    PackedStringArray out;
+    for (const auto& e : sketch_->entities()) out.push_back(to_gd(e.id.str()));
+    return out;
+}
+
+Dictionary SxSketch::entity_info(const String& id) const {
+    Dictionary out;
+    const sx::SketchEntity* e = sketch_->entity(parse_id(id));
+    if (!e) return out;
+    auto p = [&](size_t i) { return sketch_->param(e->params[i]); };
+    out["construction"] = e->construction;
+    switch (e->type) {
+        case sx::SketchEntityType::Point:
+            out["type"] = "point";
+            out["position"] = Vector2(p(0), p(1));
+            break;
+        case sx::SketchEntityType::Line:
+            out["type"] = "line";
+            out["start"] = Vector2(p(0), p(1));
+            out["end"] = Vector2(p(2), p(3));
+            break;
+        case sx::SketchEntityType::Circle:
+            out["type"] = "circle";
+            out["center"] = Vector2(p(0), p(1));
+            out["radius"] = p(2);
+            break;
+        case sx::SketchEntityType::Arc:
+            out["type"] = "arc";
+            out["center"] = Vector2(p(0), p(1));
+            out["radius"] = p(2);
+            out["start_angle"] = p(3);
+            out["end_angle"] = p(4);
+            out["start"] = Vector2(p(5), p(6));
+            out["end"] = Vector2(p(7), p(8));
+            break;
+    }
+    return out;
+}
+
+String SxSketch::add_constraint(const String& type, const Array& refs, double value) {
+    auto ct = parse_constraint_type(type);
+    if (!ct) return {};
+    std::vector<sx::PointRef> prefs;
+    for (int i = 0; i < refs.size(); ++i) {
+        Dictionary d = refs[i];
+        sx::PointRef pr;
+        pr.entity = parse_id(d.get("entity", ""));
+        pr.role = parse_role(d.get("role", "self"));
+        if (pr.entity.is_null()) return {};
+        prefs.push_back(pr);
+    }
+    return to_gd(sketch_->add_constraint(*ct, std::move(prefs), value).str());
+}
+
+bool SxSketch::remove_constraint(const String& id) {
+    return sketch_->remove_constraint(parse_id(id));
+}
+
+bool SxSketch::set_constraint_value(const String& id, double value) {
+    return sketch_->set_constraint_value(parse_id(id), value);
+}
+
+PackedStringArray SxSketch::constraint_ids() const {
+    PackedStringArray out;
+    for (const auto& c : sketch_->constraints()) out.push_back(to_gd(c.id.str()));
+    return out;
+}
+
+Dictionary SxSketch::solve() {
+    sx::SolveResult res = solver_->solve(*sketch_);
+    Dictionary out;
+    switch (res.status) {
+        case sx::SolveStatus::Success: out["status"] = "success"; break;
+        case sx::SolveStatus::Converged: out["status"] = "converged"; break;
+        case sx::SolveStatus::Failed: out["status"] = "failed"; break;
+    }
+    out["dofs"] = res.dofs;
+    PackedStringArray conflicting, redundant;
+    for (const auto& id : res.conflicting) conflicting.push_back(to_gd(id.str()));
+    for (const auto& id : res.redundant) redundant.push_back(to_gd(id.str()));
+    out["conflicting"] = conflicting;
+    out["redundant"] = redundant;
+    return out;
+}
+
+void SxSketch::_bind_methods() {
+    ClassDB::bind_method(D_METHOD("set_plane", "origin", "x_dir", "y_dir"), &SxSketch::set_plane);
+    ClassDB::bind_method(D_METHOD("add_point", "x", "y"), &SxSketch::add_point);
+    ClassDB::bind_method(D_METHOD("add_line", "x1", "y1", "x2", "y2"), &SxSketch::add_line);
+    ClassDB::bind_method(D_METHOD("add_circle", "cx", "cy", "r"), &SxSketch::add_circle);
+    ClassDB::bind_method(D_METHOD("add_arc", "cx", "cy", "r", "start_angle", "end_angle"), &SxSketch::add_arc);
+    ClassDB::bind_method(D_METHOD("remove_entity", "id"), &SxSketch::remove_entity);
+    ClassDB::bind_method(D_METHOD("set_construction", "id", "construction"), &SxSketch::set_construction);
+    ClassDB::bind_method(D_METHOD("entity_ids"), &SxSketch::entity_ids);
+    ClassDB::bind_method(D_METHOD("entity_info", "id"), &SxSketch::entity_info);
+    ClassDB::bind_method(D_METHOD("add_constraint", "type", "refs", "value"), &SxSketch::add_constraint);
+    ClassDB::bind_method(D_METHOD("remove_constraint", "id"), &SxSketch::remove_constraint);
+    ClassDB::bind_method(D_METHOD("set_constraint_value", "id", "value"), &SxSketch::set_constraint_value);
+    ClassDB::bind_method(D_METHOD("constraint_ids"), &SxSketch::constraint_ids);
+    ClassDB::bind_method(D_METHOD("solve"), &SxSketch::solve);
+}
+
+}  // namespace sx_godot

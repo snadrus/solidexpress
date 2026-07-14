@@ -25,6 +25,22 @@ Test state: `make test` → kernel 24 cases / 5373 assertions PASS; Godot integr
 
 Key files: `game/scripts/document_view.gd` (view-model), `viewport_interaction.gd` (input), `orbit_camera.gd`, `palette_button.gd`, `main.gd` (composition root). Tests: `game/tests/run_ui_tests.gd`.
 
+## Phase 2 — Sketching + solver
+- [x] 2.1 Sketch model: Point/Line/Circle/Arc entities, 11 constraint types, stable param storage (`sx/sketch.hpp`)
+- [x] 2.2 SolverBackend seam (`sx/solver.hpp`) + PlaneGCS backend (DogLeg, diagnostics: dofs/conflicting/redundant) — AI-first backend plugs in here later
+- [x] 2.3 Profile→face builder (closed loop chaining of lines/arcs, circle→disk, construction geometry excluded)
+- [x] 2.4 Extrude (incl. symmetric) + Revolve commands, undoable, snapshot pattern
+- [x] 2.5 SxSketch GDExtension binding (entities, constraints, solve, entity_info snapshots) + `SxDocument.extrude_sketch/revolve_sketch`
+- [ ] 2.6 Sketch mode UI (draw on picked face, constraint toolbar, dimension input)
+- [ ] 2.7 Sketch persistence in .sxp + semantic cards for sketch entities
+
+Test state additions: kernel [sketch]+[extrude] 14 cases; Godot sketch binding 23 checks PASS (parametric re-solve verified).
+
+## In flight (background agents)
+- STEP/IGES/STL interop module ([interop])
+- Boolean commands fuse/cut/common ([booleans])
+- Fillet/chamfer commands ([dress])
+
 ## Later phases
 Not started. See implementation plan.
 

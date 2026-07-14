@@ -29,6 +29,15 @@ public:
     godot::String add_cone(double r1, double r2, double height, const godot::Vector3& origin);
     godot::String add_torus(double major_r, double minor_r, const godot::Vector3& origin);
 
+    // --- sketch features ---
+    // Extrudes the sketch's closed profile along its plane normal; returns the
+    // new body's uuid ("" on failure).
+    godot::String extrude_sketch(const godot::Ref<class SxSketch>& sketch, double distance,
+                                 bool symmetric);
+    godot::String revolve_sketch(const godot::Ref<class SxSketch>& sketch,
+                                 const godot::Vector2& axis_point,
+                                 const godot::Vector2& axis_dir, double angle);
+
     // --- editing ---
     bool delete_body(const godot::String& body_id);
     bool translate_body(const godot::String& body_id, const godot::Vector3& delta);

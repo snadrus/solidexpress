@@ -1,6 +1,9 @@
 #include "sx_document.hpp"
 
 #include <godot_cpp/core/class_db.hpp>
+
+#include "sx/commands_sketch.hpp"
+#include "sx_sketch.hpp"
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
@@ -62,6 +65,36 @@ String SxDocument::add_cone(double r1, double r2, double height, const Vector3& 
 }
 String SxDocument::add_torus(double major_r, double minor_r, const Vector3& origin) {
     return add_primitive(sx::PrimitiveType::Torus, major_r, minor_r, 0, origin);
+}
+
+String SxDocument::extrude_sketch(const Ref<SxSketch>& sketch, double distance,
+                                  bool symmetric) {
+    if (sketch.is_null()) return {};
+    auto cmd = std::make_unique<sx::ExtrudeCommand>(sketch->sketch(), distance, symmetric);
+    sx::ExtrudeCommand* raw = cmd.get();
+    try {
+        stack_.push(*doc_, std::move(cmd));
+    } catch (const std::exception& e) {
+        sx::log::error(std::string("extrude failed: ") + e.what());
+        return {};
+    }
+    return to_gd(raw->created_body().str());
+}
+
+String SxDocument::revolve_sketch(const Ref<SxSketch>& sketch, const Vector2& axis_point,
+                                  const Vector2& axis_dir, double angle) {
+    if (sketch.is_null()) return {};
+    auto cmd = std::make_unique<sx::RevolveCommand>(
+        sketch->sketch(), std::array<double, 2>{axis_point.x, axis_point.y},
+        std::array<double, 2>{axis_dir.x, axis_dir.y}, angle);
+    sx::RevolveCommand* raw = cmd.get();
+    try {
+        stack_.push(*doc_, std::move(cmd));
+    } catch (const std::exception& e) {
+        sx::log::error(std::string("revolve failed: ") + e.what());
+        return {};
+    }
+    return to_gd(raw->created_body().str());
 }
 
 bool SxDocument::delete_body(const String& body_id) {
@@ -243,6 +276,8 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("add_sphere", "radius", "origin"), &SxDocument::add_sphere);
     ClassDB::bind_method(D_METHOD("add_cone", "r1", "r2", "height", "origin"), &SxDocument::add_cone);
     ClassDB::bind_method(D_METHOD("add_torus", "major_r", "minor_r", "origin"), &SxDocument::add_torus);
+    ClassDB::bind_method(D_METHOD("extrude_sketch", "sketch", "distance", "symmetric"), &SxDocument::extrude_sketch);
+    ClassDB::bind_method(D_METHOD("revolve_sketch", "sketch", "axis_point", "axis_dir", "angle"), &SxDocument::revolve_sketch);
     ClassDB::bind_method(D_METHOD("delete_body", "body_id"), &SxDocument::delete_body);
     ClassDB::bind_method(D_METHOD("translate_body", "body_id", "delta"), &SxDocument::translate_body);
     ClassDB::bind_method(D_METHOD("push_pull", "face_id", "distance"), &SxDocument::push_pull);
