@@ -96,8 +96,11 @@ Godot suites: integration 97 checks, UI 114 checks, sketch 23 checks.
 
 - [x] Face draft in ops panel (angle spinbox, +Z pull, bbox-bottom neutral plane)
 
+- [x] Section view: clipping plane via discard shader (set_section_plane/clear_section_plane)
+
 ## In flight (background agents)
-- (none)
+- Sweep/loft timeline bindings (graph_add_sweep/graph_add_loft)
+- Sketch construction geometry
 
 ## Later phases
 Not started. See implementation plan.
