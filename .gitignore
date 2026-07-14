@@ -1,5 +1,12 @@
 build/
 build-*/
+# scratch HOME dirs from sandboxed headless Godot runs
+.godot-home/
+.godot-test-home/
+.godot_home/
+.tmp-godot-home/
+.tmp-home/
+.tmp_godot_home/
 tools/godot/
 game/bin/
 game/.godot/
