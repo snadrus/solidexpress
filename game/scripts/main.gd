@@ -3,8 +3,6 @@
 # bar). Phase 1 drag-and-drop experience.
 extends Node3D
 
-const SAVE_PATH := "user://untitled.sxp"
-
 var model_space: Node3D
 var view: DocumentView
 var camera: OrbitCamera
@@ -20,6 +18,10 @@ var dim_value: SpinBox
 var finish_op: OptionButton
 var alias_edit: LineEdit
 var notes_edit: TextEdit
+var file_dialog: FileDialog
+var current_path := ""
+enum FileAction { NONE, OPEN, SAVE_AS, IMPORT_STEP, EXPORT_STEP, EXPORT_STL }
+var _file_action: FileAction = FileAction.NONE
 
 
 func _finish_op_name() -> String:
@@ -124,11 +126,38 @@ func _build_ui() -> void:
 	interaction.sketch_mode = sketch_mode
 	ui.add_child(interaction)
 
+	# Top-left: file menu.
+	var menu_bar := PanelContainer.new()
+	menu_bar.name = "FileMenu"
+	menu_bar.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	menu_bar.position = Vector2(12, 12)
+	ui.add_child(menu_bar)
+	var file_btn := MenuButton.new()
+	file_btn.text = "File"
+	file_btn.flat = false
+	menu_bar.add_child(file_btn)
+	var popup := file_btn.get_popup()
+	popup.add_item("New", 0)
+	popup.add_item("Open...", 1)
+	popup.add_item("Save", 2)
+	popup.add_item("Save As...", 3)
+	popup.add_separator()
+	popup.add_item("Import STEP...", 4)
+	popup.add_item("Export STEP...", 5)
+	popup.add_item("Export STL...", 6)
+	popup.id_pressed.connect(_on_file_menu)
+
+	file_dialog = FileDialog.new()
+	file_dialog.access = FileDialog.ACCESS_FILESYSTEM
+	file_dialog.min_size = Vector2i(700, 460)
+	file_dialog.file_selected.connect(_on_file_selected)
+	ui.add_child(file_dialog)
+
 	# Left: primitive palette.
 	var palette := PanelContainer.new()
 	palette.name = "Palette"
 	palette.set_anchors_preset(Control.PRESET_TOP_LEFT)
-	palette.position = Vector2(12, 12)
+	palette.position = Vector2(12, 56)
 	ui.add_child(palette)
 	var vbox := VBoxContainer.new()
 	palette.add_child(vbox)
@@ -413,12 +442,73 @@ func _on_status(text: String) -> void:
 		status_label.text = text
 
 
+func _on_file_menu(id: int) -> void:
+	match id:
+		0:  # New
+			view.new_document()
+			current_path = ""
+			_on_status("New document")
+		1:
+			_show_file_dialog(FileAction.OPEN, FileDialog.FILE_MODE_OPEN_FILE, "*.sxp ; SolidExpress")
+		2:
+			_save_current()
+		3:
+			_show_file_dialog(FileAction.SAVE_AS, FileDialog.FILE_MODE_SAVE_FILE, "*.sxp ; SolidExpress")
+		4:
+			_show_file_dialog(FileAction.IMPORT_STEP, FileDialog.FILE_MODE_OPEN_FILE, "*.step, *.stp ; STEP")
+		5:
+			_show_file_dialog(FileAction.EXPORT_STEP, FileDialog.FILE_MODE_SAVE_FILE, "*.step, *.stp ; STEP")
+		6:
+			_show_file_dialog(FileAction.EXPORT_STL, FileDialog.FILE_MODE_SAVE_FILE, "*.stl ; STL")
+
+
+func _show_file_dialog(action: FileAction, mode: FileDialog.FileMode, filter: String) -> void:
+	_file_action = action
+	file_dialog.file_mode = mode
+	file_dialog.filters = PackedStringArray([filter])
+	file_dialog.popup_centered()
+
+
+func _save_current() -> void:
+	if current_path == "":
+		_show_file_dialog(FileAction.SAVE_AS, FileDialog.FILE_MODE_SAVE_FILE, "*.sxp ; SolidExpress")
+		return
+	if view.save(current_path):
+		_last_saved_revision = view.doc.revision()
+		_on_status("Saved " + current_path)
+	else:
+		_on_status("Save FAILED: " + current_path)
+
+
+func _on_file_selected(path: String) -> void:
+	var action := _file_action
+	_file_action = FileAction.NONE
+	match action:
+		FileAction.OPEN:
+			if view.load_from(path):
+				current_path = path
+				_on_status("Opened " + path)
+			else:
+				_on_status("Open failed: " + path)
+		FileAction.SAVE_AS:
+			if not path.ends_with(".sxp"):
+				path += ".sxp"
+			current_path = path
+			_save_current()
+		FileAction.IMPORT_STEP:
+			var ids: PackedStringArray = view.doc.import_step(path)
+			view.graph_changed()
+			_on_status("%d bodies imported" % ids.size() if ids.size() > 0 else "Import failed")
+		FileAction.EXPORT_STEP:
+			_on_status("Exported STEP" if view.doc.export_step(path) else "STEP export failed")
+		FileAction.EXPORT_STL:
+			_on_status("Exported STL" if view.doc.export_stl(path, true) else "STL export failed")
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and event.ctrl_pressed:
 		match event.keycode:
 			KEY_S:
-				var path := ProjectSettings.globalize_path(SAVE_PATH)
-				_on_status("Saved to " + path if view.save(path) else "Save FAILED")
+				_save_current()
 			KEY_O:
-				var path := ProjectSettings.globalize_path(SAVE_PATH)
-				_on_status("Loaded " + path if view.load_from(path) else "Load failed (no file?)")
+				_show_file_dialog(FileAction.OPEN, FileDialog.FILE_MODE_OPEN_FILE, "*.sxp ; SolidExpress")

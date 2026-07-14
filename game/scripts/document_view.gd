@@ -291,6 +291,12 @@ func load_from(path: String) -> bool:
 	return ok
 
 
+func new_document() -> void:
+	doc = SxDocument.new()
+	clear_selection()
+	_after_mutation()
+
+
 # --- rendering ---
 
 func refresh() -> void:

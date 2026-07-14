@@ -37,6 +37,7 @@ func _init() -> void:
 	test_revolve_and_cut(main)
 	test_card_editing(main)
 	test_edge_selection(main)
+	test_file_actions(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -208,6 +209,37 @@ func test_sketch_constraints(main) -> void:
 	check(sm.selected.is_empty(), "empty click clears selection")
 	check(sm.constrain("horizontal") == "", "constrain with no selection is no-op")
 	sm.cancel()
+
+
+func test_file_actions(main) -> void:
+	print("- file menu actions")
+	var view: DocumentView = main.view
+	check(main.file_dialog is FileDialog, "file dialog exists")
+	check(main.get_node("UI/FileMenu") != null, "file menu exists")
+
+	# Save As via the dialog callback, then New, then Open round-trips.
+	var count0: int = view.doc.body_ids().size()
+	check(count0 > 0, "document has bodies to save")
+	main._file_action = main.FileAction.SAVE_AS
+	main._on_file_selected("/tmp/sx_ui_file_test")  # extension auto-appended
+	check(main.current_path == "/tmp/sx_ui_file_test.sxp", "save-as sets current path")
+	check(FileAccess.file_exists("/tmp/sx_ui_file_test.sxp"), "file written")
+
+	main._on_file_menu(0)  # New
+	check(view.doc.body_ids().size() == 0, "new document is empty")
+	check(main.current_path == "", "new clears path")
+
+	main._file_action = main.FileAction.OPEN
+	main._on_file_selected("/tmp/sx_ui_file_test.sxp")
+	check(view.doc.body_ids().size() == count0, "open restored all bodies")
+	check(main.current_path == "/tmp/sx_ui_file_test.sxp", "open sets current path")
+
+	# STEP export via the menu path.
+	main._file_action = main.FileAction.EXPORT_STEP
+	main._on_file_selected("/tmp/sx_ui_file_test.step")
+	check(FileAccess.file_exists("/tmp/sx_ui_file_test.step"), "step exported")
+	DirAccess.remove_absolute("/tmp/sx_ui_file_test.sxp")
+	DirAccess.remove_absolute("/tmp/sx_ui_file_test.step")
 
 
 func test_edge_selection(main) -> void:
