@@ -36,10 +36,12 @@ Key files: `game/scripts/document_view.gd` (view-model), `viewport_interaction.g
 
 Test state additions: kernel [sketch]+[extrude] 14 cases; Godot sketch binding 23 checks PASS (parametric re-solve verified).
 
-## In flight (background agents)
-- STEP/IGES/STL interop module ([interop])
-- Boolean commands fuse/cut/common ([booleans])
-- Fillet/chamfer commands ([dress])
+## Modeling operations (delivered by parallel agents, merged)
+- [x] Booleans: BooleanCommand fuse/cut/common with keep_tool option, snapshot undo/redo ([booleans], 5 cases)
+- [x] Fillet + chamfer: FilletCommand/ChamferCommand on edge id lists ([dress], 4 cases). Note: chamfer d=2 on 10mm edge removes 0.5·d²·L → volume ≈980
+- [x] Interop: STEP/IGES/STL import+export in `sx/interop.hpp` ([interop], 4 cases). Quirks: StlAPI ASCIIMode() true=ASCII; IGES imports often shells not solids
+
+Kernel suite now 51 cases / 5492 assertions.
 
 ## Later phases
 Not started. See implementation plan.
