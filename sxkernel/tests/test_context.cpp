@@ -38,4 +38,33 @@ TEST_CASE("context export of empty document", "[context]") {
     Document doc;
     std::string md = export_context_markdown(doc);
     REQUIRE(md.find("_empty_") != std::string::npos);
+    REQUIRE(md.find("## Variables") == std::string::npos);
+    REQUIRE(md.find("## Datums") == std::string::npos);
+    REQUIRE(md.find("## Instances") == std::string::npos);
+}
+
+TEST_CASE("context export covers variables, datums, and instances", "[context]") {
+    Document doc;
+    doc.graph().variables().set("w", "20");
+    doc.graph().variables().set("h", "w/2");
+
+    auto plane_id = doc.add_datum_plane({0, 0, 5}, {0, 0, 1});
+    doc.cards().set_alias(plane_id, "mid plane");
+    auto axis_id = doc.add_datum_axis({0, 0, 0}, {1, 0, 0});
+
+    auto body_id = doc.add_body(shape::make_box(10, 10, 10), "Box");
+    auto inst_id = doc.add_instance(body_id, {30, 0, 0}, {0, 0, 0, 1}, "Box (inst)");
+
+    std::string md = export_context_markdown(doc);
+    REQUIRE(md.find("## Variables") != std::string::npos);
+    REQUIRE(md.find("`w` = `20`") != std::string::npos);
+    REQUIRE(md.find("`h` = `w/2`") != std::string::npos);
+    REQUIRE(md.find("→ 10") != std::string::npos);  // h evaluated
+    REQUIRE(md.find("## Datums") != std::string::npos);
+    REQUIRE(md.find(plane_id.str()) != std::string::npos);
+    REQUIRE(md.find("mid plane") != std::string::npos);
+    REQUIRE(md.find(axis_id.str()) != std::string::npos);
+    REQUIRE(md.find("## Instances") != std::string::npos);
+    REQUIRE(md.find(inst_id.str()) != std::string::npos);
+    REQUIRE(md.find("Box (inst)") != std::string::npos);
 }
