@@ -1,0 +1,235 @@
+#include <catch.hpp>
+#include <cmath>
+
+#include <cstdio>
+
+#include "sx/document.hpp"
+#include "sx/features.hpp"
+#include "sx/shape_utils.hpp"
+#include "sx/sketch_json.hpp"
+#include "sx/sxp.hpp"
+
+using namespace sx;
+using nlohmann::json;
+
+static std::shared_ptr<Sketch> rect_sketch(double w, double h) {
+    auto sk = std::make_shared<Sketch>("Rect");
+    sk->add_line(0, 0, w, 0);
+    sk->add_line(w, 0, w, h);
+    sk->add_line(w, h, 0, h);
+    sk->add_line(0, h, 0, 0);
+    return sk;
+}
+
+TEST_CASE("sketch json round trip", "[features][sketchjson]") {
+    auto sk = std::make_shared<Sketch>("S");
+    auto l = sk->add_line(0, 0, 10, 5);
+    auto c = sk->add_circle(3, 3, 2);
+    sk->set_construction(c, true);
+    sk->add_constraint(ConstraintType::Horizontal, {{l, PointRole::Self}});
+    sk->add_constraint(ConstraintType::Distance, {{l, PointRole::Start}, {l, PointRole::End}}, 12.0);
+
+    auto restored = sketch_from_json(sketch_to_json(*sk));
+    REQUIRE(restored->id() == sk->id());
+    REQUIRE(restored->entities().size() == 2);
+    REQUIRE(restored->constraints().size() == 2);
+    REQUIRE(restored->entity(l) != nullptr);
+    REQUIRE(restored->entity(c)->construction);
+    REQUIRE(restored->constraints()[1].value == Approx(12.0));
+    auto pos = restored->point_pos({l, PointRole::End});
+    REQUIRE((*pos)[0] == Approx(10.0));
+    REQUIRE((*pos)[1] == Approx(5.0));
+}
+
+TEST_CASE("feature graph: primitive + parametric edit + regenerate", "[features]") {
+    Document doc;
+    FeatureGraph graph;
+
+    Feature box;
+    box.type = FeatureType::Primitive;
+    box.params = {{"kind", "box"}, {"a", 10.0}, {"b", 10.0}, {"c", 10.0}};
+    auto fid = graph.add(std::move(box));
+
+    std::string err;
+    REQUIRE(graph.regenerate(doc, &err));
+    EntityId body_id = graph.feature(fid)->output_body;
+    REQUIRE(doc.body(body_id) != nullptr);
+    REQUIRE(shape::volume(doc.body(body_id)->shape) == Approx(1000.0));
+
+    // Parametric edit: change a dimension, regenerate; body id is stable.
+    json p = graph.feature(fid)->params;
+    p["c"] = 25.0;
+    REQUIRE(graph.set_params(fid, p));
+    REQUIRE(graph.regenerate(doc, &err));
+    REQUIRE(doc.body(body_id) != nullptr);
+    REQUIRE(shape::volume(doc.body(body_id)->shape) == Approx(2500.0));
+    REQUIRE(doc.body_ids().size() == 1);  // no duplicate bodies
+}
+
+TEST_CASE("feature graph: sketch -> extrude -> fillet chain", "[features]") {
+    Document doc;
+    FeatureGraph graph;
+
+    Feature skf;
+    skf.type = FeatureType::Sketch;
+    skf.sketch = rect_sketch(40, 30);
+    auto sketch_fid = graph.add(std::move(skf));
+
+    Feature ext;
+    ext.type = FeatureType::Extrude;
+    ext.params = {{"sketch", sketch_fid.str()}, {"distance", 20.0}, {"op", "new"}};
+    auto ext_fid = graph.add(std::move(ext));
+
+    Feature fil;
+    fil.type = FeatureType::Fillet;
+    fil.params = {{"target", ext_fid.str()}, {"radius", 2.0}, {"edges", json::array({1})}};
+    auto fil_fid = graph.add(std::move(fil));
+
+    std::string err;
+    REQUIRE(graph.regenerate(doc, &err));
+    EntityId body_id = graph.feature(ext_fid)->output_body;
+    const Body* b = doc.body(body_id);
+    REQUIRE(b != nullptr);
+    double vol = shape::volume(b->shape);
+    REQUIRE(vol < 24000.0);
+    REQUIRE(vol > 23900.0);  // one 2mm fillet on a 24000 solid
+    REQUIRE(shape::count(b->shape).faces == 7);
+
+    // Suppress the fillet: sharp box returns.
+    REQUIRE(graph.set_suppressed(fil_fid, true));
+    REQUIRE(graph.regenerate(doc, &err));
+    REQUIRE(shape::volume(doc.body(body_id)->shape) == Approx(24000.0).epsilon(1e-9));
+
+    // Edit the sketch dimension via the embedded sketch (parametric rebuild).
+    graph.feature(fil_fid)->suppressed = false;
+    Feature* skf_ptr = graph.feature(sketch_fid);
+    // Widen the rectangle: move the two right-side x params from 40 to 50.
+    auto lines = skf_ptr->sketch->entities();
+    // rebuild sketch simpler: replace with a new one, same feature
+    skf_ptr->sketch = rect_sketch(50, 30);
+    REQUIRE(graph.regenerate(doc, &err));
+    double vol2 = shape::volume(doc.body(body_id)->shape);
+    REQUIRE(vol2 > 29900.0);
+    REQUIRE(vol2 < 30000.0);  // 50*30*20 minus fillet
+}
+
+TEST_CASE("feature graph: extrude cut into target", "[features]") {
+    Document doc;
+    FeatureGraph graph;
+
+    Feature base;
+    base.type = FeatureType::Primitive;
+    base.params = {{"kind", "box"}, {"a", 40.0}, {"b", 40.0}, {"c", 10.0}};
+    auto base_fid = graph.add(std::move(base));
+
+    // Hole sketch: circle r=5 at (20,20) on the ground plane.
+    Feature skf;
+    skf.type = FeatureType::Sketch;
+    skf.sketch = std::make_shared<Sketch>("Hole");
+    skf.sketch->add_circle(20, 20, 5);
+    auto sketch_fid = graph.add(std::move(skf));
+
+    Feature cut;
+    cut.type = FeatureType::Extrude;
+    cut.params = {{"sketch", sketch_fid.str()}, {"distance", 10.0},
+                  {"op", "cut"}, {"target", base_fid.str()}};
+    graph.add(std::move(cut));
+
+    std::string err;
+    REQUIRE(graph.regenerate(doc, &err));
+    EntityId body_id = graph.feature(base_fid)->output_body;
+    double expected = 40.0 * 40.0 * 10.0 - M_PI * 25.0 * 10.0;
+    REQUIRE(shape::volume(doc.body(body_id)->shape) == Approx(expected).epsilon(1e-4));
+    REQUIRE(doc.body_ids().size() == 1);
+}
+
+TEST_CASE("feature graph: dependency protection and json round trip", "[features]") {
+    FeatureGraph graph;
+    Feature skf;
+    skf.type = FeatureType::Sketch;
+    skf.sketch = rect_sketch(10, 10);
+    auto sketch_fid = graph.add(std::move(skf));
+
+    Feature ext;
+    ext.type = FeatureType::Extrude;
+    ext.params = {{"sketch", sketch_fid.str()}, {"distance", 5.0}, {"op", "new"}};
+    auto ext_fid = graph.add(std::move(ext));
+
+    REQUIRE(graph.has_dependents(sketch_fid));
+    REQUIRE(!graph.remove(sketch_fid));  // protected
+    REQUIRE(graph.remove(ext_fid));      // leaf is removable
+    REQUIRE(!graph.has_dependents(sketch_fid));
+
+    // Round trip through JSON.
+    Feature ext2;
+    ext2.type = FeatureType::Extrude;
+    ext2.params = {{"sketch", sketch_fid.str()}, {"distance", 7.0}, {"op", "new"}};
+    auto ext2_fid = graph.add(std::move(ext2));
+
+    FeatureGraph restored = FeatureGraph::from_json(graph.to_json());
+    REQUIRE(restored.timeline().size() == 2);
+    REQUIRE(restored.feature(sketch_fid) != nullptr);
+    REQUIRE(restored.feature(ext2_fid) != nullptr);
+    REQUIRE(restored.feature(ext2_fid)->output_body ==
+            graph.feature(ext2_fid)->output_body);
+
+    Document doc;
+    std::string err;
+    REQUIRE(restored.regenerate(doc, &err));
+    REQUIRE(shape::volume(doc.body(restored.feature(ext2_fid)->output_body)->shape) ==
+            Approx(700.0).epsilon(1e-9));
+}
+
+TEST_CASE("feature graph persists through .sxp save/load", "[features][sxp]") {
+    const std::string path = "/tmp/sx_features_roundtrip.sxp";
+
+    Document doc;
+    Feature skf;
+    skf.type = FeatureType::Sketch;
+    skf.sketch = rect_sketch(20, 10);
+    auto sketch_fid = doc.graph().add(std::move(skf));
+
+    Feature ext;
+    ext.type = FeatureType::Extrude;
+    ext.params = {{"sketch", sketch_fid.str()}, {"distance", 5.0}, {"op", "new"}};
+    auto ext_fid = doc.graph().add(std::move(ext));
+
+    std::string err;
+    REQUIRE(doc.graph().regenerate(doc, &err));
+    EntityId body_id = doc.graph().feature(ext_fid)->output_body;
+    REQUIRE(save_sxp(doc, path, &err));
+
+    Document loaded;
+    REQUIRE(load_sxp(loaded, path, &err));
+    REQUIRE(loaded.graph().timeline().size() == 2);
+    REQUIRE(loaded.body(body_id) != nullptr);  // body restored from brep
+
+    // Parametric edit after load: change distance and regenerate.
+    json p = loaded.graph().feature(ext_fid)->params;
+    p["distance"] = 12.0;
+    REQUIRE(loaded.graph().set_params(ext_fid, p));
+    REQUIRE(loaded.graph().regenerate(loaded, &err));
+    REQUIRE(shape::volume(loaded.body(body_id)->shape) == Approx(20.0 * 10.0 * 12.0).epsilon(1e-9));
+    std::remove(path.c_str());
+}
+
+TEST_CASE("feature graph: failure reports offending feature", "[features]") {
+    Document doc;
+    FeatureGraph graph;
+
+    Feature skf;
+    skf.type = FeatureType::Sketch;
+    skf.sketch = std::make_shared<Sketch>("Open");
+    skf.sketch->add_line(0, 0, 10, 0);  // open profile
+    auto sketch_fid = graph.add(std::move(skf));
+
+    Feature ext;
+    ext.name = "BadPad";
+    ext.type = FeatureType::Extrude;
+    ext.params = {{"sketch", sketch_fid.str()}, {"distance", 5.0}, {"op", "new"}};
+    graph.add(std::move(ext));
+
+    std::string err;
+    REQUIRE(!graph.regenerate(doc, &err));
+    REQUIRE(err.find("BadPad") != std::string::npos);
+}

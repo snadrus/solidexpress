@@ -117,6 +117,7 @@ public:
 
 private:
     friend class PlaneGCSBackend;
+    friend struct SketchSerde;  // JSON persistence (sketch_json.cpp)
     size_t push_params(std::initializer_list<double> values);
 
     EntityId id_;

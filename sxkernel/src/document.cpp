@@ -4,12 +4,20 @@
 #include <TopTools_IndexedMapOfShape.hxx>
 
 #include "sx/cards.hpp"
+#include "sx/features.hpp"
 #include "sx/shape_utils.hpp"
 
 namespace sx {
 
-Document::Document() : cards_(std::make_unique<CardRegistry>()) {}
+Document::Document()
+    : cards_(std::make_unique<CardRegistry>()),
+      graph_(std::make_unique<FeatureGraph>()) {}
 Document::~Document() = default;
+
+void Document::set_graph(FeatureGraph g) {
+    graph_ = std::make_unique<FeatureGraph>(std::move(g));
+    bump_revision();
+}
 
 static const std::array<std::pair<EntityKind, TopAbs_ShapeEnum>, 3> kSubKinds = {{
     {EntityKind::Face, TopAbs_FACE},
@@ -17,9 +25,10 @@ static const std::array<std::pair<EntityKind, TopAbs_ShapeEnum>, 3> kSubKinds = 
     {EntityKind::Vertex, TopAbs_VERTEX},
 }};
 
-EntityId Document::add_body(const TopoDS_Shape& shape, const std::string& name) {
+EntityId Document::add_body(const TopoDS_Shape& shape, const std::string& name,
+                            const EntityId& keep_id) {
     auto b = std::make_unique<Body>();
-    b->id = EntityId::generate();
+    b->id = keep_id.is_null() ? EntityId::generate() : keep_id;
     b->name = name;
     b->shape = shape;
     register_subshapes(*b, /*fresh_ids=*/true);

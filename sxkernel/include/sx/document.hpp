@@ -21,6 +21,7 @@
 namespace sx {
 
 class CardRegistry;
+class FeatureGraph;
 
 struct SubshapeRef {
     EntityId body;
@@ -44,8 +45,10 @@ public:
 
     // --- bodies ---
     // Registers a body: assigns EntityIds to the body and all faces/edges/vertices,
-    // generates semantic cards. Returns the body id.
-    EntityId add_body(const TopoDS_Shape& shape, const std::string& name);
+    // generates semantic cards. Returns the body id. Pass `keep_id` to reuse a
+    // known id (feature regeneration keeps body ids stable across rebuilds).
+    EntityId add_body(const TopoDS_Shape& shape, const std::string& name,
+                      const EntityId& keep_id = {});
     // Re-registers geometry for an existing body after a modeling operation,
     // reassigning subshape ids (v0: fresh ids; naming service will map them).
     void replace_body_shape(const EntityId& body, const TopoDS_Shape& shape);
@@ -67,6 +70,11 @@ public:
     CardRegistry& cards() { return *cards_; }
     const CardRegistry& cards() const { return *cards_; }
 
+    // Parametric timeline; regenerating it rebuilds graph-owned bodies.
+    FeatureGraph& graph() { return *graph_; }
+    const FeatureGraph& graph() const { return *graph_; }
+    void set_graph(FeatureGraph g);
+
     // Monotonic revision, bumped on every mutation (autosave/dirty tracking).
     uint64_t revision() const { return revision_; }
     void bump_revision() { ++revision_; }
@@ -83,6 +91,7 @@ private:
     std::unordered_map<EntityId, size_t> body_index_;
     std::unordered_map<EntityId, SubshapeRef> subshape_index_;
     std::unique_ptr<CardRegistry> cards_;
+    std::unique_ptr<FeatureGraph> graph_;
     uint64_t revision_ = 0;
 };
 
