@@ -22,6 +22,7 @@ const EDGE_PICK_TOLERANCE := 2.5  # model units (mm)
 
 var _body_nodes := {}  # body_id -> MeshInstance3D
 var _face_ids := {}    # body_id -> PackedStringArray
+var _body_materials := {}  # body_id -> StandardMaterial3D (tinted by body color)
 var _edge_highlight: MeshInstance3D
 var _base_material: StandardMaterial3D
 var _selected_body_material: StandardMaterial3D
@@ -309,6 +310,7 @@ func refresh() -> void:
 			_body_nodes[body_id].queue_free()
 			_body_nodes.erase(body_id)
 			_face_ids.erase(body_id)
+			_body_materials.erase(body_id)
 
 
 func body_node(body_id: String) -> MeshInstance3D:
@@ -335,6 +337,7 @@ func _rebuild_body(body_id: String) -> void:
 	node.transform = Transform3D.IDENTITY
 	node.mesh = doc.get_mesh(body_id)
 	_face_ids[body_id] = doc.get_face_ids(body_id)
+	_body_materials[body_id] = _make_material(doc.get_body_color(body_id))
 	_rebuild_edges(node.get_node("Edges") as MeshInstance3D, body_id)
 
 
@@ -384,8 +387,9 @@ func _apply_selection_materials() -> void:
 		var node: MeshInstance3D = _body_nodes[body_id]
 		var faces: PackedStringArray = _face_ids.get(body_id, PackedStringArray())
 		var body_selected: bool = body_id == selected_body
+		var base: StandardMaterial3D = _body_materials.get(body_id, _base_material)
 		for i in range(node.mesh.get_surface_count() if node.mesh else 0):
-			var mat := _base_material
+			var mat := base
 			if body_selected and selected_face == "":
 				mat = _selected_body_material
 			elif body_selected and i < faces.size() and faces[i] == selected_face:

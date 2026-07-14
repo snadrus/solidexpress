@@ -4,6 +4,7 @@
 
 #include <godot_cpp/classes/array_mesh.hpp>
 #include <godot_cpp/classes/ref_counted.hpp>
+#include <godot_cpp/variant/color.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/packed_string_array.hpp>
 
@@ -95,6 +96,9 @@ public:
     // --- queries ---
     godot::PackedStringArray body_ids() const;
     godot::String body_name(const godot::String& body_id) const;
+    bool rename_body(const godot::String& body_id, const godot::String& name);
+    bool set_body_color(const godot::String& body_id, const godot::Color& color);
+    godot::Color get_body_color(const godot::String& body_id) const;
     double body_volume(const godot::String& body_id) const;
     uint64_t revision() const;
 

@@ -358,6 +358,24 @@ String SxDocument::body_name(const String& body_id) const {
     return b ? to_gd(b->name) : String();
 }
 
+bool SxDocument::rename_body(const String& body_id, const String& name) {
+    return doc_->rename_body(parse_id(body_id), to_std(name));
+}
+
+bool SxDocument::set_body_color(const String& body_id, const Color& color) {
+    sx::Body* b = doc_->body_mut(parse_id(body_id));
+    if (!b) return false;
+    b->color = {color.r, color.g, color.b};
+    doc_->bump_revision();
+    return true;
+}
+
+Color SxDocument::get_body_color(const String& body_id) const {
+    const sx::Body* b = doc_->body(parse_id(body_id));
+    if (!b) return Color(0.7f, 0.7f, 0.75f);
+    return Color(b->color[0], b->color[1], b->color[2]);
+}
+
 double SxDocument::body_volume(const String& body_id) const {
     const sx::Body* b = doc_->body(parse_id(body_id));
     return b ? sx::shape::volume(b->shape) : 0.0;
@@ -703,6 +721,9 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("can_redo"), &SxDocument::can_redo);
     ClassDB::bind_method(D_METHOD("body_ids"), &SxDocument::body_ids);
     ClassDB::bind_method(D_METHOD("body_name", "body_id"), &SxDocument::body_name);
+    ClassDB::bind_method(D_METHOD("rename_body", "body_id", "name"), &SxDocument::rename_body);
+    ClassDB::bind_method(D_METHOD("set_body_color", "body_id", "color"), &SxDocument::set_body_color);
+    ClassDB::bind_method(D_METHOD("get_body_color", "body_id"), &SxDocument::get_body_color);
     ClassDB::bind_method(D_METHOD("body_volume", "body_id"), &SxDocument::body_volume);
     ClassDB::bind_method(D_METHOD("revision"), &SxDocument::revision);
     ClassDB::bind_method(D_METHOD("get_mesh", "body_id"), &SxDocument::get_mesh);

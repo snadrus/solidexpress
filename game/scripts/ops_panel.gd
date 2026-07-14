@@ -13,6 +13,8 @@ var view: DocumentView
 
 var _body_ops: VBoxContainer
 var _face_ops: VBoxContainer
+var _name_edit: LineEdit
+var _color_picker: ColorPickerButton
 var _radius_spin: SpinBox
 var _pattern_count: SpinBox
 var _pattern_spacing: SpinBox
@@ -72,6 +74,32 @@ func _op_button(parent: Container, text: String, handler: Callable) -> Button:
 
 
 func _build_body_ops() -> void:
+	var name_row := HBoxContainer.new()
+	_body_ops.add_child(name_row)
+	var name_lbl := Label.new()
+	name_lbl.text = "Name"
+	name_lbl.custom_minimum_size = Vector2(80, 0)
+	name_lbl.add_theme_font_size_override("font_size", 11)
+	name_row.add_child(name_lbl)
+	_name_edit = LineEdit.new()
+	_name_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_name_edit.text_submitted.connect(_on_name_submitted)
+	name_row.add_child(_name_edit)
+
+	var color_row := HBoxContainer.new()
+	_body_ops.add_child(color_row)
+	var color_lbl := Label.new()
+	color_lbl.text = "Color"
+	color_lbl.custom_minimum_size = Vector2(80, 0)
+	color_lbl.add_theme_font_size_override("font_size", 11)
+	color_row.add_child(color_lbl)
+	_color_picker = ColorPickerButton.new()
+	_color_picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_color_picker.edit_alpha = false
+	_color_picker.color_changed.connect(_on_color_changed)
+	color_row.add_child(_color_picker)
+
+	_body_ops.add_child(HSeparator.new())
 	_radius_spin = _labeled_spin(_body_ops, "Radius", 0.1, 100.0, 0.5, 2.0)
 	var round_row := HBoxContainer.new()
 	_body_ops.add_child(round_row)
@@ -116,6 +144,25 @@ func _on_selection_changed(body: String, face: String) -> void:
 	visible = body != ""
 	_body_ops.visible = body != "" and face == ""
 	_face_ops.visible = face != ""
+	if body != "" and face == "":
+		_name_edit.text = view.doc.body_name(body)
+		_color_picker.color = view.doc.get_body_color(body)
+
+
+func _on_name_submitted(text: String) -> void:
+	if view.selected_body == "":
+		return
+	if view.doc.rename_body(view.selected_body, text):
+		view.refresh()
+		status.emit("Renamed to %s" % text)
+
+
+func _on_color_changed(color: Color) -> void:
+	if view.selected_body == "":
+		return
+	if view.doc.set_body_color(view.selected_body, color):
+		view.refresh()
+		view._apply_selection_materials()
 
 
 # --- body ops ---

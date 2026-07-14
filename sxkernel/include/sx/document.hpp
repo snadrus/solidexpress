@@ -52,6 +52,8 @@ public:
     // Re-registers geometry for an existing body after a modeling operation,
     // reassigning subshape ids (v0: fresh ids; naming service will map them).
     void replace_body_shape(const EntityId& body, const TopoDS_Shape& shape);
+    // Renames a body and refreshes its cards (body + face titles).
+    bool rename_body(const EntityId& body, const std::string& name);
     bool remove_body(const EntityId& body);
 
     const Body* body(const EntityId& id) const;

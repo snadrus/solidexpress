@@ -69,6 +69,15 @@ void Document::replace_body_shape(const EntityId& body_id, const TopoDS_Shape& s
     bump_revision();
 }
 
+bool Document::rename_body(const EntityId& body_id, const std::string& name) {
+    Body* b = body_mut(body_id);
+    if (!b) return false;
+    b->name = name;
+    regenerate_cards_for_body(*b);  // upsert preserves aliases/notes
+    bump_revision();
+    return true;
+}
+
 bool Document::remove_body(const EntityId& body_id) {
     auto it = body_index_.find(body_id);
     if (it == body_index_.end()) return false;

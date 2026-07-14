@@ -39,6 +39,7 @@ func _init() -> void:
 	test_edge_selection(main)
 	test_file_actions(main)
 	test_camera_views(main)
+	test_body_props(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -236,6 +237,44 @@ func test_camera_views(main) -> void:
 		check(world_pivot.distance_to(aabb.get_center()) < cam.distance,
 			"body within framed view")
 		break
+
+
+func test_body_props(main) -> void:
+	print("- body rename and display color")
+	var view: DocumentView = main.view
+	var ops: OpsPanel = main.ops_panel
+	view.new_document()
+	var id: String = view.insert_primitive("box", Vector3(-800, -800, 0))
+	view.select_entity(id, "")
+	check(ops._name_edit.text == view.doc.body_name(id), "name edit prefilled")
+
+	ops._on_name_submitted("Bracket")
+	check(view.doc.body_name(id) == "Bracket", "rename updates body_name")
+
+	var tint := Color(0.3, 0.55, 0.2)
+	ops._on_color_changed(tint)
+	var got: Color = view.doc.get_body_color(id)
+	check(absf(got.r - tint.r) < 1e-4 and absf(got.g - tint.g) < 1e-4
+			and absf(got.b - tint.b) < 1e-4, "get_body_color round-trips")
+	view.clear_selection()
+	var node := view.body_node(id)
+	var mat: StandardMaterial3D = node.get_surface_override_material(0)
+	check(mat != null and absf(mat.albedo_color.r - tint.r) < 1e-4
+			and absf(mat.albedo_color.g - tint.g) < 1e-4
+			and absf(mat.albedo_color.b - tint.b) < 1e-4,
+			"body mesh albedo matches color")
+
+	var path := "/tmp/sx_ui_bodyprops.sxp"
+	check(view.save(path), "save with name+color")
+	view.new_document()
+	check(view.load_from(path), "reload bodyprops file")
+	var ids: PackedStringArray = view.doc.body_ids()
+	check(ids.size() == 1, "one body after reload")
+	check(view.doc.body_name(ids[0]) == "Bracket", "name survived save/load")
+	var loaded: Color = view.doc.get_body_color(ids[0])
+	check(absf(loaded.r - tint.r) < 1e-4 and absf(loaded.g - tint.g) < 1e-4
+			and absf(loaded.b - tint.b) < 1e-4, "color survived save/load")
+	DirAccess.remove_absolute(path)
 
 
 func test_file_actions(main) -> void:
