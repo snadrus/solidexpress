@@ -2,7 +2,8 @@ class_name OrbitCamera
 extends Camera3D
 ## Turntable orbit camera: middle-drag orbits, shift+middle-drag pans,
 ## wheel zooms toward the pivot. F frames the scene contents;
-## 1/2/3/7 jump to front/right/top/isometric standard views.
+## 1/2/3/7 jump to front/right/top/isometric standard views;
+## 5 toggles orthographic/perspective projection.
 
 var pivot := Vector3.ZERO
 var distance := 400.0
@@ -67,7 +68,20 @@ func handle_input(event: InputEvent) -> bool:
 			KEY_7:  # isometric
 				set_view(deg_to_rad(-35.0), deg_to_rad(30.0))
 				return true
+			KEY_5:
+				toggle_projection()
+				return true
 	return false
+
+
+## Switch between perspective and orthographic, keeping apparent size:
+## the ortho frustum height matches what the perspective fov sees at the pivot.
+func toggle_projection() -> void:
+	if projection == PROJECTION_PERSPECTIVE:
+		projection = PROJECTION_ORTHOGONAL
+	else:
+		projection = PROJECTION_PERSPECTIVE
+	_update_transform()
 
 
 func set_view(new_yaw: float, new_pitch: float) -> void:
@@ -103,6 +117,10 @@ func frame_contents() -> void:
 
 
 func _update_transform() -> void:
+	if projection == PROJECTION_ORTHOGONAL:
+		# Keep apparent size consistent with perspective: frustum height at the
+		# pivot for the current fov. Wheel zoom then works in ortho too.
+		size = 2.0 * distance * tan(deg_to_rad(fov) / 2.0)
 	var offset := Vector3(
 		cos(pitch) * sin(yaw),
 		sin(pitch),

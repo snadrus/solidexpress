@@ -1,4 +1,5 @@
-# Headless tests for the File/Insert menus (AI context export, datum insertion).
+# Headless tests for the File/Insert menus (AI context export, datum insertion)
+# and camera projection toggle.
 # Run: tools/godot/godot --headless --path game --script tests/run_menu_tests.gd
 extends SceneTree
 
@@ -25,6 +26,7 @@ func _init() -> void:
 
 	test_insert_datums(main)
 	test_export_context(main)
+	test_projection_toggle(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -58,3 +60,19 @@ func test_export_context(main) -> void:
 	check(text.contains("## Datums"), "includes datums section")
 	check(text.contains("## Bodies"), "includes bodies section")
 	DirAccess.remove_absolute(path)
+
+
+func test_projection_toggle(main) -> void:
+	print("- camera projection toggle")
+	var cam: OrbitCamera = main.camera
+	check(cam.projection == Camera3D.PROJECTION_PERSPECTIVE, "starts perspective")
+	cam.toggle_projection()
+	check(cam.projection == Camera3D.PROJECTION_ORTHOGONAL, "toggles to orthographic")
+	var expected := 2.0 * cam.distance * tan(deg_to_rad(cam.fov) / 2.0)
+	check(absf(cam.size - expected) < 0.01, "ortho size matches perspective frustum at pivot")
+	var size_before: float = cam.size
+	cam.distance *= 0.5
+	cam._update_transform()
+	check(cam.size < size_before, "wheel zoom shrinks ortho frustum")
+	cam.toggle_projection()
+	check(cam.projection == Camera3D.PROJECTION_PERSPECTIVE, "toggles back to perspective")
