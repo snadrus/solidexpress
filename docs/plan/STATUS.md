@@ -32,7 +32,7 @@ Key files: `game/scripts/document_view.gd` (view-model), `viewport_interaction.g
 - [x] 2.4 Extrude (incl. symmetric) + Revolve commands, undoable, snapshot pattern
 - [x] 2.5 SxSketch GDExtension binding (entities, constraints, solve, entity_info snapshots) + `SxDocument.extrude_sketch/revolve_sketch`
 - [x] 2.6 Sketch mode UI v1: sketch on ground plane or selected planar face; line-chain/rect/circle tools with live preview; toolbar with extrude distance; Esc cancel (`game/scripts/sketch_mode.gd`) — constraint toolbar + dimension input still TODO
-- [ ] 2.7 Sketch persistence in .sxp + semantic cards for sketch entities
+- [x] 2.7 Sketch persistence: sketches embed in features.json inside .sxp (sketch_json.cpp); sketch entity cards still TODO
 
 Test state additions: kernel [sketch]+[extrude] 14 cases; Godot sketch binding 23 checks PASS (parametric re-solve verified).
 
@@ -42,6 +42,17 @@ Test state additions: kernel [sketch]+[extrude] 14 cases; Godot sketch binding 2
 - [x] Interop: STEP/IGES/STL import+export in `sx/interop.hpp` ([interop], 4 cases). Quirks: StlAPI ASCIIMode() true=ASCII; IGES imports often shells not solids
 
 Kernel suite now 51 cases / 5492 assertions.
+
+## Phase 3 — Parametric timeline
+- [x] 3.1 FeatureGraph: data-driven features (primitive/sketch/extrude/revolve/boolean/fillet/chamfer) with JSON params, stable output-body ids across regeneration, suppression, dependency protection, failure reporting naming the offending feature; persisted as features.json in .sxp; parametric edit-after-reload verified ([features], 7 cases)
+- [ ] 3.2 Topological naming service (positional re-match is the current fallback)
+- [ ] 3.3 Timeline UI (feature list panel, suppress/edit/rollback) + SxDocument graph bindings
+- [ ] 3.4 Route interactive commands (palette insert, sketch-extrude, fillet UI) through the graph instead of direct commands
+
+## In flight (background agents, round 2)
+- Transform/pattern commands: mirror, linear/circular pattern, rotate ([transform])
+- Shell/offset commands ([hollow])
+- Measurement module ([measure])
 
 ## Later phases
 Not started. See implementation plan.
