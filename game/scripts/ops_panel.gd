@@ -25,6 +25,7 @@ var _offset_spin: SpinBox
 var _thickness_spin: SpinBox
 var _draft_angle_spin: SpinBox
 var _hole_type: OptionButton
+var _material_option: OptionButton
 var _hole_diameter: SpinBox
 var _hole_depth: SpinBox
 var _boolean_op := "fuse"
@@ -117,6 +118,22 @@ func _build_body_ops() -> void:
 	_color_picker.color_changed.connect(_on_color_changed)
 	color_row.add_child(_color_picker)
 
+	var mat_row := HBoxContainer.new()
+	_body_ops.add_child(mat_row)
+	var mat_lbl := Label.new()
+	mat_lbl.text = "Material"
+	mat_lbl.custom_minimum_size = Vector2(80, 0)
+	mat_lbl.add_theme_font_size_override("font_size", 11)
+	mat_row.add_child(mat_lbl)
+	_material_option = OptionButton.new()
+	_material_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_material_option.fit_to_longest_item = false
+	for m in view.doc.material_list():
+		_material_option.add_item("%s (%.2f)" % [m["name"], m["density_g_cm3"]])
+		_material_option.set_item_metadata(_material_option.item_count - 1, m["name"])
+	_material_option.item_selected.connect(_on_material_selected)
+	mat_row.add_child(_material_option)
+
 	_body_ops.add_child(HSeparator.new())
 	_radius_spin = _labeled_spin(_body_ops, "Radius", 0.1, 100.0, 0.5, 2.0)
 	var round_row := HBoxContainer.new()
@@ -157,6 +174,13 @@ func _build_body_ops() -> void:
 		b.pressed.connect(_arm_boolean.bind(op))
 		bool_row.add_child(b)
 	_op_button(_body_ops, "Measure to...", _arm_measure)
+	_op_button(_body_ops, "Mass properties", func() -> void:
+		var mp: Dictionary = view.doc.measure_mass(view.selected_body)
+		if mp.is_empty():
+			status.emit("No body selected")
+		else:
+			status.emit("%s: %.1f g · %.0f mm^3 · CoM %s" % [mp.get("material", "?"),
+				mp.get("mass_g", 0.0), mp.get("volume", 0.0), str(mp.get("center_of_mass"))]))
 
 
 func _build_face_ops() -> void:
@@ -196,7 +220,26 @@ func _on_selection_changed(body: String, face: String) -> void:
 	if body != "" and face == "":
 		_name_edit.text = view.doc.body_name(body)
 		_color_picker.color = view.doc.get_body_color(body)
+		_sync_material_option(body)
 	_clamp_height()
+
+
+func _sync_material_option(body: String) -> void:
+	var current: String = view.doc.body_material(body)
+	for i in range(_material_option.item_count):
+		if str(_material_option.get_item_metadata(i)) == current:
+			_material_option.select(i)
+			return
+	_material_option.select(0)
+
+
+func _on_material_selected(index: int) -> void:
+	if view.selected_body == "":
+		return
+	var mat := str(_material_option.get_item_metadata(index))
+	if view.doc.set_body_material(view.selected_body, mat):
+		var mp: Dictionary = view.doc.measure_mass(view.selected_body)
+		status.emit("%s: %.1f g" % [mat, mp.get("mass_g", 0.0)])
 
 
 func _clamp_height() -> void:

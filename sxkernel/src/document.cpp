@@ -9,6 +9,7 @@
 
 #include "sx/cards.hpp"
 #include "sx/features.hpp"
+#include "sx/materials.hpp"
 #include "sx/naming.hpp"
 #include "sx/shape_utils.hpp"
 
@@ -106,6 +107,14 @@ void Document::replace_body_shape(const EntityId& body_id, const TopoDS_Shape& s
     register_subshapes(*b, /*fresh_ids=*/false);
     regenerate_cards_for_body(*b);
     bump_revision();
+}
+
+bool Document::set_body_material(const EntityId& body_id, const std::string& material) {
+    Body* b = body_mut(body_id);
+    if (!b || !materials::find(material)) return false;
+    b->material = material;
+    bump_revision();
+    return true;
 }
 
 bool Document::rename_body(const EntityId& body_id, const std::string& name) {

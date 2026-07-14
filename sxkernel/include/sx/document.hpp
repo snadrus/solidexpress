@@ -42,6 +42,8 @@ struct Body {
     // Stable ids for subshapes, keyed by kind then map index (1-based, OCCT convention).
     std::map<EntityKind, std::vector<EntityId>> subshape_ids;
     std::array<float, 3> color{0.7f, 0.7f, 0.75f};
+    // Name from materials::standard(); drives density for mass readouts.
+    std::string material{"Unspecified"};
 };
 
 class Document {
@@ -60,6 +62,8 @@ public:
     void replace_body_shape(const EntityId& body, const TopoDS_Shape& shape);
     // Renames a body and refreshes its cards (body + face titles).
     bool rename_body(const EntityId& body, const std::string& name);
+    // Material must be a name from materials::standard().
+    bool set_body_material(const EntityId& body, const std::string& material);
     bool remove_body(const EntityId& body);
 
     const Body* body(const EntityId& id) const;

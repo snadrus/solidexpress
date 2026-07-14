@@ -44,6 +44,7 @@ bool save_sxp(const Document& doc, const std::string& path, std::string* err) {
         jb["name"] = b->name;
         jb["brep"] = "breps/" + b->id.str() + ".brep";
         jb["color"] = {b->color[0], b->color[1], b->color[2]};
+        jb["material"] = b->material;
         for (const auto& [kind, ids] : b->subshape_ids) {
             json arr = json::array();
             for (const auto& id : ids) arr.push_back(id.str());
@@ -170,6 +171,7 @@ bool load_sxp(Document& doc, const std::string& path, std::string* err) {
             if (jb.contains("color")) {
                 for (int i = 0; i < 3; ++i) b.color[i] = jb["color"][i].get<float>();
             }
+            b.material = jb.value("material", "Unspecified");
             std::string brep = read_entry(zip, jb["brep"].get<std::string>(), &found);
             if (!found) throw std::runtime_error("missing brep for " + b.name);
             b.shape = shape::from_brep_string(brep);

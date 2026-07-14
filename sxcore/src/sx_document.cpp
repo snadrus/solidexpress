@@ -19,6 +19,7 @@
 #include <type_traits>
 #include <variant>
 #include "sx/drawings.hpp"
+#include "sx/materials.hpp"
 #include "sx/mates.hpp"
 #include "sx/measure.hpp"
 #include "sx/features.hpp"
@@ -359,6 +360,19 @@ Dictionary SxDocument::measure_mass(const String& body_id) const {
     out["surface_area"] = r->surface_area;
     out["center_of_mass"] =
         Vector3(r->center_of_mass[0], r->center_of_mass[1], r->center_of_mass[2]);
+    // Mass in grams from the body's material density (volume is mm^3).
+    const sx::Body* b = doc_->body(parse_id(body_id));
+    double density = 1.0;
+    String mat_name = "Unspecified";
+    if (b) {
+        if (auto m = sx::materials::find(b->material)) {
+            density = m->density_g_cm3;
+            mat_name = to_gd(m->name);
+        }
+    }
+    out["material"] = mat_name;
+    out["density_g_cm3"] = density;
+    out["mass_g"] = r->volume / 1000.0 * density;
     return out;
 }
 
@@ -416,6 +430,26 @@ Color SxDocument::get_body_color(const String& body_id) const {
     const sx::Body* b = doc_->body(parse_id(body_id));
     if (!b) return Color(0.7f, 0.7f, 0.75f);
     return Color(b->color[0], b->color[1], b->color[2]);
+}
+
+bool SxDocument::set_body_material(const String& body_id, const String& material) {
+    return doc_->set_body_material(parse_id(body_id), to_std(material));
+}
+
+String SxDocument::body_material(const String& body_id) const {
+    const sx::Body* b = doc_->body(parse_id(body_id));
+    return b ? to_gd(b->material) : String();
+}
+
+Array SxDocument::material_list() const {
+    Array out;
+    for (const auto& m : sx::materials::standard()) {
+        Dictionary d;
+        d["name"] = to_gd(m.name);
+        d["density_g_cm3"] = m.density_g_cm3;
+        out.push_back(d);
+    }
+    return out;
 }
 
 double SxDocument::body_volume(const String& body_id) const {
@@ -1092,6 +1126,10 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("rename_body", "body_id", "name"), &SxDocument::rename_body);
     ClassDB::bind_method(D_METHOD("set_body_color", "body_id", "color"), &SxDocument::set_body_color);
     ClassDB::bind_method(D_METHOD("get_body_color", "body_id"), &SxDocument::get_body_color);
+    ClassDB::bind_method(D_METHOD("set_body_material", "body_id", "material"),
+                         &SxDocument::set_body_material);
+    ClassDB::bind_method(D_METHOD("body_material", "body_id"), &SxDocument::body_material);
+    ClassDB::bind_method(D_METHOD("material_list"), &SxDocument::material_list);
     ClassDB::bind_method(D_METHOD("body_volume", "body_id"), &SxDocument::body_volume);
     ClassDB::bind_method(D_METHOD("revision"), &SxDocument::revision);
     ClassDB::bind_method(D_METHOD("get_mesh", "body_id"), &SxDocument::get_mesh);

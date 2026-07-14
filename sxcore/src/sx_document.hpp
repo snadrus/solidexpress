@@ -106,6 +106,9 @@ public:
     bool rename_body(const godot::String& body_id, const godot::String& name);
     bool set_body_color(const godot::String& body_id, const godot::Color& color);
     godot::Color get_body_color(const godot::String& body_id) const;
+    bool set_body_material(const godot::String& body_id, const godot::String& material);
+    godot::String body_material(const godot::String& body_id) const;
+    godot::Array material_list() const;
     double body_volume(const godot::String& body_id) const;
     uint64_t revision() const;
 
