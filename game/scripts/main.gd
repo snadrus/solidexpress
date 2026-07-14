@@ -20,9 +20,16 @@ var finish_op: OptionButton
 var alias_edit: LineEdit
 var notes_edit: TextEdit
 var file_dialog: FileDialog
+var confirm_dialog: ConfirmationDialog
 var current_path := ""
 enum FileAction { NONE, OPEN, SAVE_AS, IMPORT_STEP, EXPORT_STEP, EXPORT_STL, EXPORT_CONTEXT }
 var _file_action: FileAction = FileAction.NONE
+var _pending_discard: Callable = Callable()
+var _file_popup: PopupMenu
+var _recent_menu: PopupMenu
+var _recent: Array = []  # paths, most recent first (max 8)
+const _RECENT_CLEAR_ID := 100
+const _RECENT_CFG := "user://recent.cfg"
 
 
 func _finish_op_name() -> String:
@@ -32,6 +39,7 @@ var _last_saved_revision := 0
 
 
 func _ready() -> void:
+	get_tree().set_auto_accept_quit(false)
 	_build_world()
 	_build_ui()
 	_build_autosave()
@@ -109,18 +117,26 @@ func _build_ui() -> void:
 	var menu_row := HBoxContainer.new()
 	menu_bar.add_child(menu_row)
 	menu_row.add_child(file_btn)
-	var popup := file_btn.get_popup()
-	popup.add_item("New", 0)
-	popup.add_item("Open...", 1)
-	popup.add_item("Save", 2)
-	popup.add_item("Save As...", 3)
-	popup.add_separator()
-	popup.add_item("Import STEP...", 4)
-	popup.add_item("Export STEP...", 5)
-	popup.add_item("Export STL...", 6)
-	popup.add_separator()
-	popup.add_item("Export AI Context...", 7)
-	popup.id_pressed.connect(_on_file_menu)
+	_file_popup = file_btn.get_popup()
+	_file_popup.add_item("New", 0)
+	_file_popup.add_item("Open...", 1)
+	_file_popup.add_item("Save", 2)
+	_file_popup.add_item("Save As...", 3)
+	_file_popup.add_separator()
+	_file_popup.add_item("Import STEP...", 4)
+	_file_popup.add_item("Export STEP...", 5)
+	_file_popup.add_item("Export STL...", 6)
+	_file_popup.add_separator()
+	_file_popup.add_item("Export AI Context...", 7)
+	_file_popup.add_separator()
+	_recent_menu = PopupMenu.new()
+	_recent_menu.name = "RecentMenu"
+	_file_popup.add_child(_recent_menu)
+	_file_popup.add_submenu_node_item("Recent", _recent_menu)
+	_recent_menu.id_pressed.connect(_on_recent_menu)
+	_file_popup.id_pressed.connect(_on_file_menu)
+	_load_recent()
+	_rebuild_recent_menu()
 
 	# Insert menu: reference geometry.
 	var insert_btn := MenuButton.new()
@@ -144,6 +160,11 @@ func _build_ui() -> void:
 	file_dialog.min_size = Vector2i(700, 460)
 	file_dialog.file_selected.connect(_on_file_selected)
 	ui.add_child(file_dialog)
+
+	confirm_dialog = ConfirmationDialog.new()
+	confirm_dialog.dialog_text = "Discard unsaved changes?"
+	confirm_dialog.confirmed.connect(_on_discard_confirmed)
+	ui.add_child(confirm_dialog)
 
 	# Left: primitive palette.
 	var palette := PanelContainer.new()
@@ -449,11 +470,9 @@ func _on_status(text: String) -> void:
 func _on_file_menu(id: int) -> void:
 	match id:
 		0:  # New
-			view.new_document()
-			current_path = ""
-			_on_status("New document")
+			_confirm_discard(_do_new)
 		1:
-			_show_file_dialog(FileAction.OPEN, FileDialog.FILE_MODE_OPEN_FILE, "*.sxp ; SolidExpress")
+			_confirm_discard(_do_open_dialog)
 		2:
 			_save_current()
 		3:
@@ -466,6 +485,108 @@ func _on_file_menu(id: int) -> void:
 			_show_file_dialog(FileAction.EXPORT_STL, FileDialog.FILE_MODE_SAVE_FILE, "*.stl ; STL")
 		7:
 			_show_file_dialog(FileAction.EXPORT_CONTEXT, FileDialog.FILE_MODE_SAVE_FILE, "*.md ; Markdown")
+
+
+func _do_new() -> void:
+	view.new_document()
+	current_path = ""
+	_last_saved_revision = view.doc.revision()
+	_on_status("New document")
+
+
+func _do_open_dialog() -> void:
+	_show_file_dialog(FileAction.OPEN, FileDialog.FILE_MODE_OPEN_FILE, "*.sxp ; SolidExpress")
+
+
+func _document_is_dirty() -> bool:
+	if view.doc.revision() == _last_saved_revision:
+		return false
+	return view.doc.body_ids().size() > 0 or view.doc.graph_features().size() > 0
+
+
+func _confirm_discard(action: Callable) -> void:
+	if not _document_is_dirty():
+		action.call()
+		return
+	_pending_discard = action
+	confirm_dialog.popup_centered()
+
+
+func _on_discard_confirmed() -> void:
+	var action := _pending_discard
+	_pending_discard = Callable()
+	if action.is_valid():
+		action.call()
+
+
+func _load_recent() -> void:
+	_recent.clear()
+	var cfg := ConfigFile.new()
+	if cfg.load(_RECENT_CFG) != OK:
+		return
+	var files: Variant = cfg.get_value("recent", "files", [])
+	if files is Array:
+		for p in files:
+			if typeof(p) == TYPE_STRING and str(p) != "":
+				_recent.append(str(p))
+		if _recent.size() > 8:
+			_recent.resize(8)
+
+
+func _save_recent() -> void:
+	var cfg := ConfigFile.new()
+	cfg.set_value("recent", "files", _recent)
+	cfg.save(_RECENT_CFG)
+
+
+func _push_recent(path: String) -> void:
+	if path == "":
+		return
+	_recent.erase(path)
+	_recent.push_front(path)
+	while _recent.size() > 8:
+		_recent.pop_back()
+	_save_recent()
+	_rebuild_recent_menu()
+
+
+func _rebuild_recent_menu() -> void:
+	if _recent_menu == null:
+		return
+	_recent_menu.clear()
+	for i in range(_recent.size()):
+		_recent_menu.add_item(str(_recent[i]), i)
+	if _recent.size() > 0:
+		_recent_menu.add_separator()
+	_recent_menu.add_item("Clear Recent", _RECENT_CLEAR_ID)
+
+
+func _on_recent_menu(id: int) -> void:
+	if id == _RECENT_CLEAR_ID:
+		_recent.clear()
+		_save_recent()
+		_rebuild_recent_menu()
+		return
+	if id < 0 or id >= _recent.size():
+		return
+	var path: String = str(_recent[id])
+	if not FileAccess.file_exists(path):
+		_recent.remove_at(id)
+		_save_recent()
+		_rebuild_recent_menu()
+		_on_status("Missing file removed from recent: " + path)
+		return
+	_confirm_discard(func() -> void: _open_document(path))
+
+
+func _open_document(path: String) -> void:
+	if view.load_from(path):
+		current_path = path
+		_last_saved_revision = view.doc.revision()
+		_push_recent(path)
+		_on_status("Opened " + path)
+	else:
+		_on_status("Open failed: " + path)
 
 
 func _on_insert_menu(id: int) -> void:
@@ -498,6 +619,7 @@ func _save_current() -> void:
 		return
 	if view.save(current_path):
 		_last_saved_revision = view.doc.revision()
+		_push_recent(current_path)
 		_on_status("Saved " + current_path)
 	else:
 		_on_status("Save FAILED: " + current_path)
@@ -508,11 +630,7 @@ func _on_file_selected(path: String) -> void:
 	_file_action = FileAction.NONE
 	match action:
 		FileAction.OPEN:
-			if view.load_from(path):
-				current_path = path
-				_on_status("Opened " + path)
-			else:
-				_on_status("Open failed: " + path)
+			_open_document(path)
 		FileAction.SAVE_AS:
 			if not path.ends_with(".sxp"):
 				path += ".sxp"
@@ -538,10 +656,15 @@ func _on_file_selected(path: String) -> void:
 				_on_status("Context export failed: " + path)
 
 
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		_confirm_discard(func() -> void: get_tree().quit())
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and event.ctrl_pressed:
 		match event.keycode:
 			KEY_S:
 				_save_current()
 			KEY_O:
-				_show_file_dialog(FileAction.OPEN, FileDialog.FILE_MODE_OPEN_FILE, "*.sxp ; SolidExpress")
+				_confirm_discard(_do_open_dialog)
