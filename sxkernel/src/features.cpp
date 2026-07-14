@@ -132,6 +132,67 @@ bool FeatureGraph::set_params(const EntityId& id, json params) {
     return true;
 }
 
+namespace {
+
+// Collect feature ids referenced by params keys sketch/target/tool/sketches.
+void collect_deps(const Feature& f, std::vector<std::string>& out) {
+    for (const char* key : {"sketch", "target", "tool"}) {
+        if (f.params.contains(key) && f.params[key].is_string())
+            out.push_back(f.params[key].get<std::string>());
+    }
+    if (f.params.contains("sketches") && f.params["sketches"].is_array()) {
+        for (const auto& s : f.params["sketches"]) {
+            if (s.is_string()) out.push_back(s.get<std::string>());
+        }
+    }
+}
+
+// True when every referenced dependency appears earlier in `order`.
+bool deps_ordered(const std::vector<Feature>& order) {
+    std::map<std::string, int> index;
+    for (int i = 0; i < static_cast<int>(order.size()); ++i) index[order[i].id.str()] = i;
+    for (int i = 0; i < static_cast<int>(order.size()); ++i) {
+        std::vector<std::string> deps;
+        collect_deps(order[i], deps);
+        for (const auto& d : deps) {
+            auto it = index.find(d);
+            if (it == index.end()) continue;  // dangling ref: not a move concern
+            if (it->second >= i) return false;
+        }
+    }
+    return true;
+}
+
+}  // namespace
+
+bool FeatureGraph::move(const EntityId& id, int new_index) {
+    if (new_index < 0 || new_index >= static_cast<int>(timeline_.size())) return false;
+    int old_index = -1;
+    for (int i = 0; i < static_cast<int>(timeline_.size()); ++i) {
+        if (timeline_[i].id == id) {
+            old_index = i;
+            break;
+        }
+    }
+    if (old_index < 0) return false;
+    if (old_index == new_index) return true;
+
+    std::vector<Feature> trial = timeline_;
+    Feature moved = std::move(trial[static_cast<size_t>(old_index)]);
+    trial.erase(trial.begin() + old_index);
+    trial.insert(trial.begin() + new_index, std::move(moved));
+    if (!deps_ordered(trial)) return false;
+    timeline_ = std::move(trial);
+    return true;
+}
+
+bool FeatureGraph::rename(const EntityId& id, const std::string& name) {
+    Feature* f = feature(id);
+    if (!f) return false;
+    f->name = name;
+    return true;
+}
+
 Feature* FeatureGraph::feature(const EntityId& id) {
     for (auto& f : timeline_)
         if (f.id == id) return &f;

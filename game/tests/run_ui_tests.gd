@@ -45,6 +45,7 @@ func _init() -> void:
 	test_datums(main)
 	test_hole(main)
 	test_variables(main)
+	test_graph_move_rename(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -764,3 +765,35 @@ func test_variables(main) -> void:
 	check(found_h, "h present after panel edit")
 	check(vp.delete_variable("h"), "panel delete_variable")
 	check(not vp._rows.has("h"), "panel row cleared after delete")
+
+
+func test_graph_move_rename(main) -> void:
+	print("- graph move / rename + undo")
+	var view: DocumentView = main.view
+	view.new_document()
+	var a: String = view.doc.graph_add_primitive("box", 10.0, 10.0, 10.0, Vector3.ZERO)
+	var b: String = view.doc.graph_add_primitive("cylinder", 5.0, 20.0, 0.0, Vector3(50, 0, 0))
+	check(a != "" and b != "", "two primitives added")
+	var feats: Array = view.doc.graph_features()
+	check(feats.size() == 2, "two features in timeline")
+	check(feats[0]["id"] == a and feats[1]["id"] == b, "initial order a then b")
+	var name_a: String = feats[0]["name"]
+	var name_b: String = feats[1]["name"]
+
+	check(view.doc.graph_move(b, 0), "graph_move index 1 -> 0")
+	view.graph_changed()
+	feats = view.doc.graph_features()
+	check(feats[0]["id"] == b and feats[1]["id"] == a, "order flipped after move")
+
+	check(view.doc.graph_rename(b, "CylinderA"), "graph_rename")
+	view.graph_changed()
+	feats = view.doc.graph_features()
+	check(feats[0]["name"] == "CylinderA", "rename visible in graph_features")
+
+	check(view.undo(), "undo rename")
+	feats = view.doc.graph_features()
+	check(feats[0]["id"] == b and feats[0]["name"] == name_b, "undo restored name")
+	check(view.undo(), "undo move")
+	feats = view.doc.graph_features()
+	check(feats[0]["id"] == a and feats[1]["id"] == b, "undo restored order")
+	check(feats[0]["name"] == name_a and feats[1]["name"] == name_b, "names intact after undo move")

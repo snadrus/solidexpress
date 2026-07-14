@@ -762,6 +762,18 @@ bool SxDocument::graph_remove(const String& fid) {
     });
 }
 
+bool SxDocument::graph_move(const String& fid, int new_index) {
+    return apply_graph_edit("move feature", [&] {
+        return doc_->graph().move(parse_id(fid), new_index);
+    });
+}
+
+bool SxDocument::graph_rename(const String& fid, const String& name) {
+    return apply_graph_edit("rename feature", [&] {
+        return doc_->graph().rename(parse_id(fid), to_std(name));
+    });
+}
+
 Dictionary SxDocument::graph_regenerate() {
     Dictionary out;
     std::string err;
@@ -960,6 +972,8 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("graph_set_params", "fid", "params_json"), &SxDocument::graph_set_params);
     ClassDB::bind_method(D_METHOD("graph_set_suppressed", "fid", "suppressed"), &SxDocument::graph_set_suppressed);
     ClassDB::bind_method(D_METHOD("graph_remove", "fid"), &SxDocument::graph_remove);
+    ClassDB::bind_method(D_METHOD("graph_move", "fid", "new_index"), &SxDocument::graph_move);
+    ClassDB::bind_method(D_METHOD("graph_rename", "fid", "name"), &SxDocument::graph_rename);
     ClassDB::bind_method(D_METHOD("graph_regenerate"), &SxDocument::graph_regenerate);
     ClassDB::bind_method(D_METHOD("set_variable", "name", "expr"), &SxDocument::set_variable);
     ClassDB::bind_method(D_METHOD("remove_variable", "name"), &SxDocument::remove_variable);

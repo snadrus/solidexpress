@@ -1,9 +1,10 @@
 class_name TimelinePanel
 extends PanelContainer
 ## Feature timeline (parametric history). One row per feature: suppress
-## checkbox, name, delete button. Selecting a row highlights its body and
-## opens a universal JSON param editor (v0 — structured data by design, so
-## the same editor works for every feature type and for AI round-trips).
+## checkbox, name (inline rename), up/down reorder, delete. Selecting a row
+## highlights its body and opens a universal JSON param editor (v0 — structured
+## data by design, so the same editor works for every feature type and for AI
+## round-trips).
 
 signal status(text: String)
 
@@ -15,6 +16,7 @@ var _selected_fid := ""
 var _editor_box: VBoxContainer
 var _params_edit: TextEdit
 var _refreshing := false
+var _renaming_fid := ""
 
 
 func _ready() -> void:
@@ -57,12 +59,14 @@ func refresh() -> void:
 	if _refreshing:
 		return
 	_refreshing = true
+	_renaming_fid = ""
 	for child in _list.get_children():
 		child.queue_free()
 	_rows.clear()
 	var feats: Array = view.doc.graph_features()
-	for f in feats:
-		_list.add_child(_make_row(f))
+	var n := feats.size()
+	for i in n:
+		_list.add_child(_make_row(feats[i], i, n))
 	if _selected_fid != "" and not _has_feature(feats, _selected_fid):
 		_selected_fid = ""
 		_editor_box.visible = false
@@ -76,7 +80,7 @@ func _has_feature(feats: Array, fid: String) -> bool:
 	return false
 
 
-func _make_row(f: Dictionary) -> Control:
+func _make_row(f: Dictionary, index: int, count: int) -> Control:
 	var fid: String = f["id"]
 	var row := HBoxContainer.new()
 	_rows[fid] = row
@@ -95,7 +99,32 @@ func _make_row(f: Dictionary) -> Control:
 	if f["suppressed"]:
 		name_btn.modulate = Color(1, 1, 1, 0.45)
 	name_btn.pressed.connect(_select_feature.bind(fid))
+	name_btn.gui_input.connect(func(ev: InputEvent) -> void:
+		if ev is InputEventMouseButton and ev.pressed and ev.double_click \
+				and ev.button_index == MOUSE_BUTTON_LEFT:
+			_begin_rename(fid, row, name_btn)
+	)
 	row.add_child(name_btn)
+
+	var edit_btn := Button.new()
+	edit_btn.text = "e"
+	edit_btn.tooltip_text = "Rename feature"
+	edit_btn.pressed.connect(func() -> void: _begin_rename(fid, row, name_btn))
+	row.add_child(edit_btn)
+
+	var up := Button.new()
+	up.text = "^"
+	up.tooltip_text = "Move up"
+	up.disabled = index <= 0
+	up.pressed.connect(func() -> void: _move_feature(fid, index - 1))
+	row.add_child(up)
+
+	var down := Button.new()
+	down.text = "v"
+	down.tooltip_text = "Move down"
+	down.disabled = index >= count - 1
+	down.pressed.connect(func() -> void: _move_feature(fid, index + 1))
+	row.add_child(down)
 
 	var del := Button.new()
 	del.text = "x"
@@ -103,6 +132,51 @@ func _make_row(f: Dictionary) -> Control:
 	del.pressed.connect(_delete_feature.bind(fid))
 	row.add_child(del)
 	return row
+
+
+func _begin_rename(fid: String, row: HBoxContainer, name_btn: Button) -> void:
+	if _renaming_fid != "":
+		return
+	_renaming_fid = fid
+	var edit := LineEdit.new()
+	edit.text = name_btn.text
+	edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var idx := name_btn.get_index()
+	name_btn.visible = false
+	row.add_child(edit)
+	row.move_child(edit, idx)
+	edit.grab_focus()
+	edit.select_all()
+	var finish := func(commit: bool) -> void:
+		if _renaming_fid != fid:
+			return
+		var new_name := edit.text.strip_edges()
+		_renaming_fid = ""
+		if edit.get_parent() == row:
+			row.remove_child(edit)
+			edit.queue_free()
+		name_btn.visible = true
+		if commit and new_name != "" and new_name != name_btn.text:
+			if view.doc.graph_rename(fid, new_name):
+				view.graph_changed()
+				status.emit("Feature renamed")
+			else:
+				status.emit("Rename failed")
+	edit.text_submitted.connect(func(_t: String) -> void: finish.call(true))
+	edit.focus_exited.connect(func() -> void: finish.call(true))
+	edit.gui_input.connect(func(ev: InputEvent) -> void:
+		if ev is InputEventKey and ev.pressed and ev.keycode == KEY_ESCAPE:
+			finish.call(false)
+			edit.accept_event()
+	)
+
+
+func _move_feature(fid: String, new_index: int) -> void:
+	if view.doc.graph_move(fid, new_index):
+		view.graph_changed()
+		status.emit("Feature moved")
+	else:
+		status.emit("Cannot move: would break feature dependencies")
 
 
 func _select_feature(fid: String) -> void:

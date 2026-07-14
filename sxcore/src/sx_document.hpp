@@ -167,6 +167,8 @@ public:
     bool graph_set_params(const godot::String& fid, const godot::String& params_json);
     bool graph_set_suppressed(const godot::String& fid, bool suppressed);
     bool graph_remove(const godot::String& fid);
+    bool graph_move(const godot::String& fid, int new_index);
+    bool graph_rename(const godot::String& fid, const godot::String& name);
     // Returns {ok: bool, error: String}.
     godot::Dictionary graph_regenerate();
 

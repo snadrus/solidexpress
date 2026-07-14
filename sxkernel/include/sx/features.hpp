@@ -77,6 +77,11 @@ public:
     bool set_suppressed(const EntityId& id, bool suppressed);
     // Update params and regenerate later; returns false if feature missing.
     bool set_params(const EntityId& id, nlohmann::json params);
+    // Reorder: feature ends at `new_index`. Fails (no mutation) if the move
+    // would place it before a dependency or after a dependent, or on bad input.
+    bool move(const EntityId& id, int new_index);
+    // Sets Feature::name. Returns false if feature missing.
+    bool rename(const EntityId& id, const std::string& name);
 
     Feature* feature(const EntityId& id);
     const Feature* feature(const EntityId& id) const;
