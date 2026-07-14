@@ -294,6 +294,46 @@ func constrain(type: String, value: float = 0.0) -> String:
 	return res["status"]
 
 
+## Fillet the corner shared by two selected lines. Requires exactly two selected
+## line entities. Returns the new arc id, or "" on failure (emits status).
+func fillet_selected(radius: float) -> String:
+	if not active or selected.size() != 2:
+		status.emit("Fillet needs exactly 2 selected lines")
+		return ""
+	for id in selected:
+		if sketch.entity_info(id).get("type", "") != "line":
+			status.emit("Fillet needs exactly 2 selected lines")
+			return ""
+	var arc_id: String = sketch.fillet_corner(selected[0], selected[1], radius)
+	if arc_id == "":
+		status.emit("Fillet failed")
+		return ""
+	sketch.solve()
+	_redraw()
+	_redraw_selected()
+	return arc_id
+
+
+## Offset all selected entities by signed distance. Returns new entity ids.
+func offset_selected(distance: float) -> Array:
+	if not active or selected.is_empty():
+		status.emit("Offset needs a selection")
+		return []
+	var ids := PackedStringArray()
+	for id in selected:
+		ids.append(id)
+	var new_ids: PackedStringArray = sketch.offset_entities(ids, distance)
+	if new_ids.is_empty():
+		status.emit("Offset failed")
+		return []
+	_redraw()
+	_redraw_selected()
+	var out: Array = []
+	for id in new_ids:
+		out.append(id)
+	return out
+
+
 func _endpoint_pos(id: String, role: String) -> Vector2:
 	var info: Dictionary = sketch.entity_info(id)
 	match info.get("type", ""):

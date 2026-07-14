@@ -28,6 +28,8 @@ func _init() -> void:
 	test_polygon_sides_clamp(main)
 	test_polygon_extrude(main)
 	test_tool_switch_mid_arc(main)
+	test_fillet_selected(main)
+	test_offset_selected_circle(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -150,4 +152,47 @@ func test_tool_switch_mid_arc(main) -> void:
 	sm.set_tool(SketchMode.Tool.ARC)
 	check(sm.sketch.entity_ids().size() == 0, "no entity after switching back to arc")
 	check(sm._tool_points.is_empty(), "tool points cleared on switch")
+	sm.cancel()
+
+
+func test_fillet_selected(main) -> void:
+	print("- fillet_selected on perpendicular L")
+	var sm: SketchMode = main.sketch_mode
+	main.view.clear_selection()
+	main._start_sketch()
+	sm.set_tool(SketchMode.Tool.SELECT)
+
+	var la: String = sm.sketch.add_line(0, 0, 10, 0)
+	var lb: String = sm.sketch.add_line(10, 0, 10, 10)
+	var n_before: int = sm.sketch.entity_ids().size()
+	sm._set_selected([la, lb])
+
+	var arc_id: String = sm.fillet_selected(2.0)
+	check(arc_id != "", "fillet_selected returned non-empty arc id")
+	check(sm.sketch.entity_ids().size() == n_before + 1, "fillet grew entity count by 1")
+	var info: Dictionary = sm.sketch.entity_info(arc_id)
+	check(info.get("type", "") == "arc", "fillet entity is an arc")
+	check(absf(info["radius"] - 2.0) < 1e-4, "fillet arc radius is 2")
+	sm.cancel()
+
+
+func test_offset_selected_circle(main) -> void:
+	print("- offset_selected on a circle")
+	var sm: SketchMode = main.sketch_mode
+	main.view.clear_selection()
+	main._start_sketch()
+	sm.set_tool(SketchMode.Tool.SELECT)
+
+	var cid: String = sm.sketch.add_circle(0, 0, 10)
+	var n_before: int = sm.sketch.entity_ids().size()
+	sm._set_selected([cid])
+
+	var dist := 3.0
+	var new_ids: Array = sm.offset_selected(dist)
+	check(new_ids.size() == 1, "offset_selected returned 1 new id")
+	check(sm.sketch.entity_ids().size() == n_before + 1, "offset grew entity count by 1")
+	var info: Dictionary = sm.sketch.entity_info(new_ids[0])
+	check(info.get("type", "") == "circle", "offset entity is a circle")
+	check(absf(info["radius"] - (10.0 + dist)) < 1e-4,
+		"offset circle radius differs by distance (%.6f)" % info["radius"])
 	sm.cancel()

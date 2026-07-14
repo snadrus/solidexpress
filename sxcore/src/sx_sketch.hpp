@@ -34,6 +34,12 @@ public:
     void set_construction(const godot::String& id, bool construction);
     godot::PackedStringArray entity_ids() const;
 
+    // --- geometry tools ---
+    godot::String fillet_corner(const godot::String& line_a_id,
+                                const godot::String& line_b_id, double radius);
+    godot::PackedStringArray offset_entities(const godot::PackedStringArray& ids,
+                                             double distance);
+
     // Geometry snapshot for rendering:
     // {type: "line", start: Vector2, end: Vector2, construction: bool} etc.
     godot::Dictionary entity_info(const godot::String& id) const;

@@ -3,6 +3,8 @@
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/variant/vector2.hpp>
 
+#include "sx/sketch_tools.hpp"
+
 using namespace godot;
 
 namespace sx_godot {
@@ -75,6 +77,23 @@ void SxSketch::set_construction(const String& id, bool construction) {
 PackedStringArray SxSketch::entity_ids() const {
     PackedStringArray out;
     for (const auto& e : sketch_->entities()) out.push_back(to_gd(e.id.str()));
+    return out;
+}
+
+String SxSketch::fillet_corner(const String& line_a_id, const String& line_b_id,
+                               double radius) {
+    return to_gd(sx::sketch_tools::fillet_corner(*sketch_, to_std(line_a_id),
+                                                 to_std(line_b_id), radius));
+}
+
+PackedStringArray SxSketch::offset_entities(const PackedStringArray& ids,
+                                            double distance) {
+    std::vector<std::string> entity_ids;
+    entity_ids.reserve(ids.size());
+    for (int i = 0; i < ids.size(); ++i) entity_ids.push_back(to_std(ids[i]));
+    auto result = sx::sketch_tools::offset_entities(*sketch_, entity_ids, distance);
+    PackedStringArray out;
+    for (const auto& id : result) out.push_back(to_gd(id));
     return out;
 }
 
@@ -167,6 +186,10 @@ void SxSketch::_bind_methods() {
     ClassDB::bind_method(D_METHOD("remove_entity", "id"), &SxSketch::remove_entity);
     ClassDB::bind_method(D_METHOD("set_construction", "id", "construction"), &SxSketch::set_construction);
     ClassDB::bind_method(D_METHOD("entity_ids"), &SxSketch::entity_ids);
+    ClassDB::bind_method(D_METHOD("fillet_corner", "line_a_id", "line_b_id", "radius"),
+                         &SxSketch::fillet_corner);
+    ClassDB::bind_method(D_METHOD("offset_entities", "ids", "distance"),
+                         &SxSketch::offset_entities);
     ClassDB::bind_method(D_METHOD("entity_info", "id"), &SxSketch::entity_info);
     ClassDB::bind_method(D_METHOD("add_constraint", "type", "refs", "value"), &SxSketch::add_constraint);
     ClassDB::bind_method(D_METHOD("remove_constraint", "id"), &SxSketch::remove_constraint);
