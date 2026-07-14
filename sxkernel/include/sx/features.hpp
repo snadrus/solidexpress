@@ -47,6 +47,11 @@ enum class FeatureType {
     HelixSweep, // params: {profile_radius (default 1), axis_point: [x,y,z],
                 //          axis_dir: [x,y,z], radius, pitch, turns,
                 //          left_handed: bool}
+    Thread,     // params: {target: <fid>, axis_point: [x,y,z],
+                //          axis_dir: [x,y,z], major_radius, pitch, turns,
+                //          depth (default pitch*0.6),
+                //          profile_angle_deg (default 60)}
+                // Cuts a triangular thread form (external) from target body.
     ImportStep, // params: {path: string, index: int (default 0),
                 //          scale: double (default 1.0, uniform via gp_Trsf)}
                 // BASE feature: file is re-read on regenerate (document dep).

@@ -64,6 +64,7 @@ const char* to_string(FeatureType t) {
         case FeatureType::Sweep: return "sweep";
         case FeatureType::Loft: return "loft";
         case FeatureType::HelixSweep: return "helix_sweep";
+        case FeatureType::Thread: return "thread";
         case FeatureType::ImportStep: return "import_step";
     }
     return "unknown";
@@ -86,6 +87,7 @@ FeatureType feature_type_from_string(const std::string& s) {
     if (s == "sweep") return FeatureType::Sweep;
     if (s == "loft") return FeatureType::Loft;
     if (s == "helix_sweep") return FeatureType::HelixSweep;
+    if (s == "thread") return FeatureType::Thread;
     if (s == "import_step") return FeatureType::ImportStep;
     throw std::invalid_argument("unknown feature type: " + s);
 }
@@ -412,6 +414,59 @@ TopoDS_Shape helix_sweep_solid(const gp_Ax2& axis, double helix_r, double pitch,
     shell.Build();
     if (!shell.IsDone()) throw std::runtime_error("MakePipeShell failed");
     if (!shell.MakeSolid()) throw std::runtime_error("MakePipeShell could not make solid");
+    return shell.Shape();
+}
+
+// Triangular thread cutter: isosceles profile in the radial–axial plane
+// (apex inward), swept along a helix at major_radius + 0.1·depth clearance.
+TopoDS_Shape thread_cutter_solid(const gp_Ax2& axis, double major_radius, double pitch,
+                                 double turns, double depth, double profile_angle_deg) {
+    if (major_radius <= 0.0) throw std::runtime_error("major_radius must be positive");
+    if (pitch <= 0.0) throw std::runtime_error("pitch must be positive");
+    if (turns <= 0.0) throw std::runtime_error("turns must be positive");
+    if (depth <= 0.0) throw std::runtime_error("depth must be positive");
+    if (depth >= major_radius) throw std::runtime_error("depth must be less than major_radius");
+    if (profile_angle_deg <= 0.0 || profile_angle_deg >= 180.0)
+        throw std::runtime_error("profile_angle_deg must be in (0, 180)");
+
+    const double clearance = 0.1 * depth;
+    const double helix_r = major_radius + clearance;
+    const double height = depth + clearance;
+    const double half_apex = profile_angle_deg * M_PI / 360.0;  // α/2 in radians
+    const double half_base = height * std::tan(half_apex);
+
+    const gp_Pnt origin = axis.Location();
+    const gp_Vec radial(axis.XDirection());
+    const gp_Vec axial(axis.Direction());
+
+    const gp_Pnt apex = origin.Translated(radial * (major_radius - depth));
+    const gp_Pnt base_center = origin.Translated(radial * helix_r);
+    const gp_Pnt base1 = base_center.Translated(axial * half_base);
+    const gp_Pnt base2 = base_center.Translated(axial * (-half_base));
+
+    BRepBuilderAPI_MakeWire profile_mk;
+    {
+        BRepBuilderAPI_MakeEdge e1(apex, base1);
+        BRepBuilderAPI_MakeEdge e2(base1, base2);
+        BRepBuilderAPI_MakeEdge e3(base2, apex);
+        if (!e1.IsDone() || !e2.IsDone() || !e3.IsDone())
+            throw std::runtime_error("thread profile edges failed");
+        profile_mk.Add(e1.Edge());
+        profile_mk.Add(e2.Edge());
+        profile_mk.Add(e3.Edge());
+    }
+    if (!profile_mk.IsDone()) throw std::runtime_error("thread profile wire failed");
+    TopoDS_Wire profile = profile_mk.Wire();
+
+    TopoDS_Wire spine = curves::helix(axis, helix_r, pitch, turns, /*left_handed=*/false);
+
+    BRepOffsetAPI_MakePipeShell shell(spine);
+    shell.SetMode();  // Frenet
+    shell.Add(profile, /*withContact=*/Standard_False,
+              /*withCorrection=*/Standard_True);
+    shell.Build();
+    if (!shell.IsDone()) throw std::runtime_error("thread MakePipeShell failed");
+    if (!shell.MakeSolid()) throw std::runtime_error("thread MakePipeShell could not make solid");
     return shell.Shape();
 }
 }  // namespace
@@ -765,6 +820,41 @@ bool FeatureGraph::apply(Document& doc, Feature& f,
                 if (shape::count(result).solids < 1)
                     return fail("helix sweep result is not a solid");
                 put_body(doc, f.output_body, result, f.name);
+                return true;
+            }
+
+            case FeatureType::Thread: {
+                if (!params.contains("axis_point") || !params.contains("axis_dir"))
+                    return fail("missing axis_point/axis_dir");
+                EntityId target = find_feature_body("target");
+                const Body* tb = doc.body(target);
+                if (!tb) return fail("missing target body");
+                const double major_radius = num_param(params, "major_radius", 0.0, env);
+                const double pitch = num_param(params, "pitch", 0.0, env);
+                const double turns = num_param(params, "turns", 0.0, env);
+                const double depth = num_param(params, "depth", pitch * 0.6, env);
+                const double angle_deg = num_param(params, "profile_angle_deg", 60.0, env);
+                gp_Ax2 axis(pnt_from(params.at("axis_point")),
+                           dir_from(params.at("axis_dir")));
+                TopoDS_Shape cutter;
+                try {
+                    cutter = thread_cutter_solid(axis, major_radius, pitch, turns, depth,
+                                                 angle_deg);
+                } catch (const Standard_Failure& e) {
+                    return fail(std::string("thread cutter failed: ") + e.GetMessageString());
+                } catch (const std::runtime_error& e) {
+                    return fail(e.what());
+                }
+                if (cutter.IsNull() || !shape::is_valid(cutter))
+                    return fail("thread cutter invalid");
+                BRepAlgoAPI_Cut cut(tb->shape, cutter);
+                if (!cut.IsDone()) return fail("thread cut failed");
+                TopoDS_Shape result = cut.Shape();
+                if (result.IsNull() || !shape::is_valid(result))
+                    return fail("thread result invalid");
+                if (shape::count(result).solids < 1 || shape::volume(result) <= 0.0)
+                    return fail("thread destroyed the solid");
+                doc.replace_body_shape(target, result);
                 return true;
             }
 
