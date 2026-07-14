@@ -26,6 +26,7 @@ func _init() -> void:
 
 	test_plane_mate(main)
 	test_bad_mate(main)
+	test_drawing_export(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -83,3 +84,17 @@ func test_bad_mate(main) -> void:
 		"body id rejected as instance_b")
 	check(doc.add_mate("nonsense", "", "", "", "", 0.0, false, "bad") == "",
 		"unknown type rejected")
+
+
+func test_drawing_export(main) -> void:
+	print("- three-view drawing SVG export")
+	var view: DocumentView = main.view
+	view.new_document()
+	view.doc.add_box(40, 30, 20, Vector3.ZERO)
+	var path := OS.get_user_data_dir() + "/drawing_test.svg"
+	check(view.doc.export_drawing_svg(path, 1.0), "export succeeds")
+	var svg := FileAccess.get_file_as_string(path)
+	check(svg.contains("<svg"), "svg header present")
+	check(svg.contains("FRONT") and svg.contains("TOP") and svg.contains("RIGHT"),
+		"three labeled views")
+	DirAccess.remove_absolute(path)

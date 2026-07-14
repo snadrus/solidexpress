@@ -18,6 +18,7 @@
 #include <gp_Vec.hxx>
 #include <type_traits>
 #include <variant>
+#include "sx/drawings.hpp"
 #include "sx/mates.hpp"
 #include "sx/measure.hpp"
 #include "sx/features.hpp"
@@ -1045,6 +1046,10 @@ bool SxDocument::remove_mate(const String& id) {
 
 bool SxDocument::solve_mates() { return sx::solve_mates(*doc_); }
 
+bool SxDocument::export_drawing_svg(const String& path, double scale) {
+    return sx::drawings::export_three_view_svg(*doc_, to_std(path), scale);
+}
+
 void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("add_box", "dx", "dy", "dz", "origin"), &SxDocument::add_box);
     ClassDB::bind_method(D_METHOD("add_cylinder", "radius", "height", "origin"), &SxDocument::add_cylinder);
@@ -1146,6 +1151,8 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("mate_list"), &SxDocument::mate_list);
     ClassDB::bind_method(D_METHOD("remove_mate", "id"), &SxDocument::remove_mate);
     ClassDB::bind_method(D_METHOD("solve_mates"), &SxDocument::solve_mates);
+    ClassDB::bind_method(D_METHOD("export_drawing_svg", "path", "scale"),
+                         &SxDocument::export_drawing_svg);
 }
 
 }  // namespace sx_godot

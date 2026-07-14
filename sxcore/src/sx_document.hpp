@@ -220,6 +220,10 @@ public:
     // Applies all mates in order; true when every mate solved.
     bool solve_mates();
 
+    // Three-view (front/top/right) HLR drawing sheet as SVG. False when the
+    // document has no bodies or the file cannot be written.
+    bool export_drawing_svg(const godot::String& path, double scale);
+
 protected:
     static void _bind_methods();
 
