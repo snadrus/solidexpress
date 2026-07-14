@@ -27,6 +27,7 @@ func _init() -> void:
 	test_additive_faces(main)
 	test_additive_edges_and_fillet(main)
 	test_single_select_resets(main)
+	test_ctrl_click_event_path(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -129,3 +130,29 @@ func test_single_select_resets(main) -> void:
 	view.clear_selection()
 	check(view.selection_size() == 0 and view.selected_bodies.is_empty(), "clear empties sets")
 	check(b != "", "b silences unused warning")
+
+
+## Ctrl+click through the real input path (viewport _gui_input) toggles
+## additive selection and never arms a body drag.
+func test_ctrl_click_event_path(main) -> void:
+	print("- ctrl+click via viewport input")
+	var view: DocumentView = main.view
+	var vi: ViewportInteraction = main.interaction
+	view.new_document()
+	var a: String = view.insert_primitive("box", Vector3.ZERO)
+	var b: String = view.insert_primitive("box", Vector3(100, 0, 0))
+	view.clear_selection()
+	view.select_entity(a, "")
+
+	# Screen position of body B's center, then a synthetic ctrl+LMB click.
+	var center_b: Vector3 = main.model_space.to_global(Vector3(100, 0, 25))
+	var screen_b: Vector2 = main.camera.unproject_position(center_b)
+	for pressed in [true, false]:
+		var mb := InputEventMouseButton.new()
+		mb.button_index = MOUSE_BUTTON_LEFT
+		mb.pressed = pressed
+		mb.ctrl_pressed = true
+		mb.position = screen_b
+		vi._gui_input(mb)
+	check(view.selection_size() == 2, "ctrl+click added B (size %d)" % view.selection_size())
+	check(view.selected_bodies.has(a) and view.selected_bodies.has(b), "both bodies selected")

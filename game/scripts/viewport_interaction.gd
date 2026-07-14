@@ -21,6 +21,8 @@ var _drag_accum := Vector3.ZERO         # applied translation so far
 var _drag_pp_applied := 0.0
 var _press_pos := Vector2.ZERO
 var _pressed := false
+## Ctrl held on the last LMB press: release becomes an additive-select toggle.
+var _ctrl_click := false
 
 ## Armed click-to-place kind, or "" when idle.
 var _place_kind := ""
@@ -207,6 +209,7 @@ func _gui_input(event: InputEvent) -> void:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_LEFT:
 			if mb.pressed:
+				_ctrl_click = mb.ctrl_pressed
 				_on_press(mb.position)
 			else:
 				_on_release(mb.position)
@@ -251,6 +254,9 @@ func _on_press(pos: Vector2) -> void:
 	_drag_mode = DragMode.NONE
 	grab_focus()
 
+	# Ctrl+click is additive selection only — never arms a drag.
+	if _ctrl_click:
+		return
 	# If pressing on the current selection, arm a drag; commit on movement.
 	var ray := _model_ray(pos)
 	var hit: Dictionary = view.pick_info(ray[0], ray[1])
@@ -331,10 +337,14 @@ func _on_release(pos: Vector2) -> void:
 	_drag_mode = DragMode.NONE
 	if was_click:
 		var ray := _model_ray(pos)
-		if view.select_ray(ray[0], ray[1]):
-			status.emit("Selected " + (view.selected_face if view.selected_face != "" else view.selected_body).left(8))
+		if view.select_ray(ray[0], ray[1], _ctrl_click):
+			if view.selection_size() > 1:
+				status.emit("%d selected" % view.selection_size())
+			else:
+				status.emit("Selected " + (view.selected_face if view.selected_face != "" else view.selected_body).left(8))
 		else:
 			status.emit("")
+	_ctrl_click = false
 
 
 func _gui_key(event: InputEventKey) -> bool:

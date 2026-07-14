@@ -13,6 +13,7 @@ var autosave_timer: Timer
 var sketch_mode: SketchMode
 var sketch_toolbar: PanelContainer
 var timeline: TimelinePanel
+var help_overlay: HelpOverlay
 var variables_panel: VariablesPanel
 var ops_panel: OpsPanel
 var dim_value: SpinBox
@@ -22,7 +23,7 @@ var notes_edit: TextEdit
 var file_dialog: FileDialog
 var confirm_dialog: ConfirmationDialog
 var current_path := ""
-enum FileAction { NONE, OPEN, SAVE_AS, IMPORT_STEP, EXPORT_STEP, EXPORT_STL, EXPORT_CONTEXT }
+enum FileAction { NONE, OPEN, SAVE_AS, IMPORT_STEP, EXPORT_STEP, EXPORT_STL, EXPORT_CONTEXT, EXPORT_DRAWING }
 var _file_action: FileAction = FileAction.NONE
 var _pending_discard: Callable = Callable()
 var _file_popup: PopupMenu
@@ -43,6 +44,9 @@ func _ready() -> void:
 	_build_world()
 	_build_ui()
 	_build_autosave()
+	# Keyboard cheat sheet on F1, above everything else.
+	help_overlay = HelpOverlay.new()
+	add_child(help_overlay)
 
 
 func _build_world() -> void:
@@ -128,6 +132,7 @@ func _build_ui() -> void:
 	_file_popup.add_item("Export STL...", 6)
 	_file_popup.add_separator()
 	_file_popup.add_item("Export AI Context...", 7)
+	_file_popup.add_item("Export Drawing (SVG)...", 8)
 	_file_popup.add_separator()
 	_recent_menu = PopupMenu.new()
 	_recent_menu.name = "RecentMenu"
@@ -191,7 +196,7 @@ func _build_ui() -> void:
 	vbox.add_child(sketch_btn)
 	vbox.add_child(HSeparator.new())
 	var hint := Label.new()
-	hint.text = "drag into scene\nor click to insert"
+	hint.text = "drag into scene, or\nclick then place"
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.add_theme_font_size_override("font_size", 11)
 	hint.modulate = Color(1, 1, 1, 0.6)
@@ -485,6 +490,8 @@ func _on_file_menu(id: int) -> void:
 			_show_file_dialog(FileAction.EXPORT_STL, FileDialog.FILE_MODE_SAVE_FILE, "*.stl ; STL")
 		7:
 			_show_file_dialog(FileAction.EXPORT_CONTEXT, FileDialog.FILE_MODE_SAVE_FILE, "*.md ; Markdown")
+		8:
+			_show_file_dialog(FileAction.EXPORT_DRAWING, FileDialog.FILE_MODE_SAVE_FILE, "*.svg ; SVG drawing")
 
 
 func _do_new() -> void:
@@ -654,6 +661,13 @@ func _on_file_selected(path: String) -> void:
 				_on_status("Exported AI context: " + path)
 			else:
 				_on_status("Context export failed: " + path)
+		FileAction.EXPORT_DRAWING:
+			if not path.ends_with(".svg"):
+				path += ".svg"
+			if view.doc.export_drawing_svg(path, 1.0):
+				_on_status("Exported drawing: " + path)
+			else:
+				_on_status("Drawing export failed (empty document?)")
 
 
 func _notification(what: int) -> void:
@@ -668,3 +682,6 @@ func _unhandled_input(event: InputEvent) -> void:
 				_save_current()
 			KEY_O:
 				_confirm_discard(_do_open_dialog)
+	elif event is InputEventKey and event.pressed and event.keycode == KEY_F1:
+		help_overlay.toggle()
+		get_viewport().set_input_as_handled()
