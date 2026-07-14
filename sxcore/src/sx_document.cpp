@@ -14,6 +14,8 @@
 #include <gp_Dir.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Pnt.hxx>
+#include <gp_Quaternion.hxx>
+#include <gp_Vec.hxx>
 #include <type_traits>
 #include <variant>
 #include "sx/measure.hpp"
@@ -917,6 +919,86 @@ bool SxDocument::remove_datum(const String& id) {
     return doc_->remove_datum(eid);
 }
 
+// Axis-angle (degrees) → unit quaternion (x, y, z, w). Degenerate axis → identity.
+static std::array<double, 4> axis_angle_to_quat(const Vector3& axis, double angle_deg) {
+    gp_Vec ax(axis.x, axis.y, axis.z);
+    if (ax.SquareMagnitude() < 1e-24) return {0, 0, 0, 1};
+    ax.Normalize();
+    gp_Quaternion q;
+    q.SetVectorAndAngle(ax, angle_deg * M_PI / 180.0);
+    return {q.X(), q.Y(), q.Z(), q.W()};
+}
+
+static void quat_to_axis_angle(const std::array<double, 4>& quat, Vector3& axis_out,
+                               double& angle_deg_out) {
+    gp_Quaternion q(quat[0], quat[1], quat[2], quat[3]);
+    if (q.Norm() < 1e-12) {
+        axis_out = Vector3(0, 0, 1);
+        angle_deg_out = 0.0;
+        return;
+    }
+    q.Normalize();
+    gp_Vec ax;
+    Standard_Real angle = 0.0;
+    q.GetVectorAndAngle(ax, angle);
+    if (ax.SquareMagnitude() < 1e-24) {
+        axis_out = Vector3(0, 0, 1);
+        angle_deg_out = 0.0;
+        return;
+    }
+    axis_out = Vector3(static_cast<float>(ax.X()), static_cast<float>(ax.Y()),
+                       static_cast<float>(ax.Z()));
+    angle_deg_out = angle * 180.0 / M_PI;
+}
+
+String SxDocument::add_instance(const String& source_body, const Vector3& translation,
+                                const Vector3& rotation_axis, double rotation_angle_deg,
+                                const String& name) {
+    auto src = parse_id(source_body);
+    if (src.is_null()) return {};
+    auto quat = axis_angle_to_quat(rotation_axis, rotation_angle_deg);
+    auto id = doc_->add_instance(src, {translation.x, translation.y, translation.z}, quat,
+                                 to_std(name));
+    return id.is_null() ? String() : to_gd(id.str());
+}
+
+Array SxDocument::instance_list() const {
+    Array out;
+    for (const auto& inst : doc_->instances()) {
+        Dictionary d;
+        d["id"] = to_gd(inst.id.str());
+        d["source_body"] = to_gd(inst.source_body.str());
+        d["name"] = to_gd(inst.name);
+        d["translation"] =
+            Vector3(static_cast<float>(inst.translation[0]),
+                    static_cast<float>(inst.translation[1]),
+                    static_cast<float>(inst.translation[2]));
+        Vector3 axis;
+        double angle_deg = 0.0;
+        quat_to_axis_angle(inst.rotation_quat, axis, angle_deg);
+        d["rotation_axis"] = axis;
+        d["rotation_angle_deg"] = angle_deg;
+        out.push_back(d);
+    }
+    return out;
+}
+
+bool SxDocument::remove_instance(const String& id) {
+    auto eid = parse_id(id);
+    if (eid.is_null()) return false;
+    return doc_->remove_instance(eid);
+}
+
+bool SxDocument::set_instance_transform(const String& id, const Vector3& translation,
+                                        const Vector3& rotation_axis,
+                                        double rotation_angle_deg) {
+    auto eid = parse_id(id);
+    if (eid.is_null()) return false;
+    auto quat = axis_angle_to_quat(rotation_axis, rotation_angle_deg);
+    return doc_->set_instance_transform(eid, {translation.x, translation.y, translation.z},
+                                        quat);
+}
+
 void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("add_box", "dx", "dy", "dz", "origin"), &SxDocument::add_box);
     ClassDB::bind_method(D_METHOD("add_cylinder", "radius", "height", "origin"), &SxDocument::add_cylinder);
@@ -1004,6 +1086,14 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("add_datum_point", "p"), &SxDocument::add_datum_point);
     ClassDB::bind_method(D_METHOD("datum_list"), &SxDocument::datum_list);
     ClassDB::bind_method(D_METHOD("remove_datum", "id"), &SxDocument::remove_datum);
+    ClassDB::bind_method(D_METHOD("add_instance", "source_body", "translation", "rotation_axis",
+                                  "rotation_angle_deg", "name"),
+                         &SxDocument::add_instance);
+    ClassDB::bind_method(D_METHOD("instance_list"), &SxDocument::instance_list);
+    ClassDB::bind_method(D_METHOD("remove_instance", "id"), &SxDocument::remove_instance);
+    ClassDB::bind_method(D_METHOD("set_instance_transform", "id", "translation", "rotation_axis",
+                                  "rotation_angle_deg"),
+                         &SxDocument::set_instance_transform);
 }
 
 }  // namespace sx_godot

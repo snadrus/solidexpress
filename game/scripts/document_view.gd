@@ -34,8 +34,10 @@ const DATUM_POINT_RADIUS := 1.5
 
 var _body_nodes := {}  # body_id -> MeshInstance3D
 var _datum_nodes := {}  # datum_id -> Node3D
+var _instance_nodes := {}  # instance_id -> MeshInstance3D
 var _face_ids := {}    # body_id -> PackedStringArray
 var _body_materials := {}  # body_id -> StandardMaterial3D (tinted by body color)
+var _instance_materials := {}  # instance_id -> StandardMaterial3D (lightened source tint)
 var _edge_highlight: MeshInstance3D
 var _base_material: StandardMaterial3D
 var _selected_body_material: StandardMaterial3D
@@ -428,6 +430,7 @@ func refresh() -> void:
 			_face_ids.erase(body_id)
 			_body_materials.erase(body_id)
 	_refresh_datums()
+	_refresh_instances()
 
 
 func body_node(body_id: String) -> MeshInstance3D:
@@ -436,6 +439,10 @@ func body_node(body_id: String) -> MeshInstance3D:
 
 func datum_node(datum_id: String) -> Node3D:
 	return _datum_nodes.get(datum_id)
+
+
+func instance_node(instance_id: String) -> MeshInstance3D:
+	return _instance_nodes.get(instance_id)
 
 
 func _refresh_datums() -> void:
@@ -522,6 +529,50 @@ func _make_datum_axis_mesh(d: Dictionary) -> ImmediateMesh:
 	im.surface_add_vertex(b)
 	im.surface_end()
 	return im
+
+
+# Instances reuse the source body's ArrayMesh with a node-local transform.
+# Display modes / section shader are skipped in v1 (except WIREFRAME mesh hide).
+func _refresh_instances() -> void:
+	var live := {}
+	for inst in doc.instance_list():
+		var id: String = inst["id"]
+		live[id] = true
+		_rebuild_instance(inst)
+	for id in _instance_nodes.keys().duplicate():
+		if not live.has(id):
+			_instance_nodes[id].queue_free()
+			_instance_nodes.erase(id)
+			_instance_materials.erase(id)
+
+
+func _rebuild_instance(inst: Dictionary) -> void:
+	var id: String = inst["id"]
+	var source: String = inst["source_body"]
+	var node: MeshInstance3D = _instance_nodes.get(id)
+	if node == null:
+		node = MeshInstance3D.new()
+		node.name = "Instance_" + id.left(8)
+		add_child(node)
+		_instance_nodes[id] = node
+	# Prefer sharing the already-tessellated body mesh; fall back to get_mesh.
+	var src_node: MeshInstance3D = _body_nodes.get(source)
+	if src_node != null and src_node.mesh != null:
+		node.mesh = src_node.mesh
+	else:
+		node.mesh = doc.get_mesh(source)
+	var translation: Vector3 = inst["translation"]
+	var axis: Vector3 = inst["rotation_axis"]
+	var angle_deg: float = inst["rotation_angle_deg"]
+	var basis := Basis.IDENTITY
+	if axis.length_squared() > 1e-12 and absf(angle_deg) > 1e-9:
+		basis = Basis(axis.normalized(), deg_to_rad(angle_deg))
+	node.transform = Transform3D(basis, translation)
+	var tint: Color = doc.get_body_color(source).lightened(0.28)
+	_instance_materials[id] = _make_material(tint)
+	node.material_override = _instance_materials[id]
+	# WIREFRAME: hide solid mesh (no instance edge overlay in v1).
+	node.visible = display_mode != DisplayMode.WIREFRAME
 
 
 func _after_mutation() -> void:
@@ -627,3 +678,9 @@ func _apply_selection_materials() -> void:
 				else:
 					mat = base
 			node.set_surface_override_material(i, mat)
+	# Instances: v1 skips section/display shading; only honor WIREFRAME hide.
+	for iid in _instance_nodes:
+		var inode: MeshInstance3D = _instance_nodes[iid]
+		inode.visible = display_mode != DisplayMode.WIREFRAME
+		if _instance_materials.has(iid):
+			inode.material_override = _instance_materials[iid]

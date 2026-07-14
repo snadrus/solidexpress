@@ -47,6 +47,7 @@ func _init() -> void:
 	test_variables(main)
 	test_graph_move_rename(main)
 	test_graph_import_step(main)
+	test_instances(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -826,3 +827,49 @@ func test_graph_import_step(main) -> void:
 	check(view.doc.graph_features().is_empty(), "timeline empty after undo")
 	check(view.doc.body_ids().size() == bodies0, "body gone after undo")
 	DirAccess.remove_absolute(step_path)
+
+
+func test_instances(main) -> void:
+	print("- instances: place, transform, remove, cascade")
+	var view: DocumentView = main.view
+	view.new_document()
+	var body: String = view.doc.add_box(20, 20, 20, Vector3.ZERO)
+	check(body.length() == 36, "box body for instance source")
+	view.refresh()
+
+	var iid: String = view.doc.add_instance(
+		body, Vector3(30, 0, 0), Vector3(0, 0, 1), 0.0, "Box (inst)")
+	check(iid.length() == 36, "add_instance returns uuid")
+	view.refresh()
+
+	var listed: Array = view.doc.instance_list()
+	check(listed.size() == 1, "instance_list has 1")
+	check(listed[0]["id"] == iid, "listed id matches")
+	check(listed[0]["source_body"] == body, "listed source_body matches")
+	check(listed[0]["translation"].distance_to(Vector3(30, 0, 0)) < 1e-4,
+		"listed translation is offset")
+	var inode: MeshInstance3D = view.instance_node(iid)
+	check(inode != null and inode.mesh != null, "instance visual node exists")
+	check(inode.position.distance_to(Vector3(30, 0, 0)) < 1e-4,
+		"instance node at translation")
+
+	check(view.doc.set_instance_transform(iid, Vector3(50, 10, 0), Vector3(0, 0, 1), 0.0),
+		"set_instance_transform")
+	view.refresh()
+	inode = view.instance_node(iid)
+	check(inode != null and inode.position.distance_to(Vector3(50, 10, 0)) < 1e-4,
+		"instance node moved after set_instance_transform")
+
+	check(view.doc.remove_instance(iid), "remove_instance")
+	view.refresh()
+	check(view.doc.instance_list().is_empty(), "instance_list empty after remove")
+	check(view.instance_node(iid) == null, "instance visual cleared")
+
+	# Cascade: deleting the source body removes its instances.
+	iid = view.doc.add_instance(body, Vector3(30, 0, 0), Vector3(0, 0, 1), 0.0, "Box (inst)")
+	view.refresh()
+	check(view.doc.instance_list().size() == 1, "instance re-added for cascade")
+	check(view.doc.delete_body(body), "delete source body")
+	view.refresh()
+	check(view.doc.instance_list().is_empty(), "instance cleared by source cascade")
+	check(view.instance_node(iid) == null, "cascade cleared instance visual")

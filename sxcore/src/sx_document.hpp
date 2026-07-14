@@ -195,6 +195,18 @@ public:
     godot::Array datum_list() const;
     bool remove_datum(const godot::String& id);
 
+    // --- instances (assembly placements; direct doc mutation, not undoable v1) ---
+    // rotation_axis + rotation_angle_deg are converted to a unit quaternion for
+    // the kernel. Bump revision happens in the kernel.
+    godot::String add_instance(const godot::String& source_body, const godot::Vector3& translation,
+                               const godot::Vector3& rotation_axis, double rotation_angle_deg,
+                               const godot::String& name);
+    // Array of {id, source_body, name, translation, rotation_axis, rotation_angle_deg}.
+    godot::Array instance_list() const;
+    bool remove_instance(const godot::String& id);
+    bool set_instance_transform(const godot::String& id, const godot::Vector3& translation,
+                                const godot::Vector3& rotation_axis, double rotation_angle_deg);
+
 protected:
     static void _bind_methods();
 

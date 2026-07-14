@@ -18,6 +18,9 @@ var _color_picker: ColorPickerButton
 var _radius_spin: SpinBox
 var _pattern_count: SpinBox
 var _pattern_spacing: SpinBox
+var _inst_ox: SpinBox
+var _inst_oy: SpinBox
+var _inst_oz: SpinBox
 var _offset_spin: SpinBox
 var _thickness_spin: SpinBox
 var _draft_angle_spin: SpinBox
@@ -118,6 +121,17 @@ func _build_body_ops() -> void:
 	_op_button(pat_row, "Linear", _linear_pattern)
 	_op_button(pat_row, "Circular", _circular_pattern)
 	_op_button(pat_row, "Mirror", _mirror)
+
+	# Instance placement (direct doc mutation — not undoable in v1).
+	_body_ops.add_child(HSeparator.new())
+	var inst_lbl := Label.new()
+	inst_lbl.text = "Instance"
+	inst_lbl.add_theme_font_size_override("font_size", 11)
+	_body_ops.add_child(inst_lbl)
+	_inst_ox = _labeled_spin(_body_ops, "Offset X", -10000.0, 10000.0, 1.0, 30.0)
+	_inst_oy = _labeled_spin(_body_ops, "Offset Y", -10000.0, 10000.0, 1.0, 0.0)
+	_inst_oz = _labeled_spin(_body_ops, "Offset Z", -10000.0, 10000.0, 1.0, 0.0)
+	_op_button(_body_ops, "Place", _place_instance)
 
 	_body_ops.add_child(HSeparator.new())
 	_offset_spin = _labeled_spin(_body_ops, "Offset", -50.0, 50.0, 0.5, 2.0)
@@ -265,6 +279,22 @@ func _circular_pattern() -> void:
 		body, Vector3.ZERO, Vector3(0, 0, 1), int(_pattern_count.value), TAU)
 	view.graph_changed()
 	status.emit("%d copies created" % made.size() if made.size() > 0 else "Pattern failed")
+
+
+# Direct document mutation — not undoable in v1.
+func _place_instance() -> void:
+	var body := view.selected_body
+	if body == "":
+		return
+	var offset := Vector3(_inst_ox.value, _inst_oy.value, _inst_oz.value)
+	var iname: String = view.doc.body_name(body) + " (inst)"
+	var iid: String = view.doc.add_instance(body, offset, Vector3(0, 0, 1), 0.0, iname)
+	if iid != "":
+		view.refresh()
+		view._apply_selection_materials()
+		status.emit("Placed instance at (%.0f, %.0f, %.0f)" % [offset.x, offset.y, offset.z])
+	else:
+		status.emit("Instance failed")
 
 
 func _offset() -> void:
