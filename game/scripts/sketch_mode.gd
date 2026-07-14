@@ -44,10 +44,15 @@ var _line_material: StandardMaterial3D
 var _preview_material: StandardMaterial3D
 
 
+const COLOR_ENTITY := Color(0.95, 0.95, 1.0)
+const COLOR_CONSTRUCTION := Color(0.45, 0.45, 0.48)  # dimmer/desaturated
+
+
 func _ready() -> void:
 	_line_material = StandardMaterial3D.new()
 	_line_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_line_material.albedo_color = Color(0.95, 0.95, 1.0)
+	_line_material.albedo_color = Color.WHITE
+	_line_material.vertex_color_use_as_albedo = true
 	_preview_material = StandardMaterial3D.new()
 	_preview_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_preview_material.albedo_color = Color(0.5, 0.8, 1.0, 0.8)
@@ -334,6 +339,23 @@ func offset_selected(distance: float) -> Array:
 	return out
 
 
+## Flip construction flag on all selected entities and redraw (construction
+## entities use a dimmer gray so the style persists across redraws).
+func toggle_construction_selected() -> void:
+	if not active or selected.is_empty():
+		status.emit("Select entities to toggle construction")
+		return
+	var any_on := false
+	for id in selected:
+		var on := not sketch.is_construction(id)
+		sketch.set_construction(id, on)
+		if on:
+			any_on = true
+	_redraw()
+	_redraw_selected()
+	status.emit("Construction " + ("on" if any_on else "off"))
+
+
 func _endpoint_pos(id: String, role: String) -> Vector2:
 	var info: Dictionary = sketch.entity_info(id)
 	match info.get("type", ""):
@@ -479,6 +501,10 @@ func _clear_meshes() -> void:
 	selected = []
 
 
+func _entity_draw_color(info: Dictionary) -> Color:
+	return COLOR_CONSTRUCTION if info.get("construction", false) else COLOR_ENTITY
+
+
 func _redraw() -> void:
 	if sketch == null:
 		return
@@ -486,11 +512,13 @@ func _redraw() -> void:
 	var has := false
 	for id in sketch.entity_ids():
 		var info: Dictionary = sketch.entity_info(id)
+		var col := _entity_draw_color(info)
 		match info.get("type", ""):
 			"line":
 				if not has:
 					im.surface_begin(Mesh.PRIMITIVE_LINES)
 					has = true
+				im.surface_set_color(col)
 				im.surface_add_vertex(_to3(info["start"]))
 				im.surface_add_vertex(_to3(info["end"]))
 			"circle":
@@ -503,6 +531,7 @@ func _redraw() -> void:
 				for i in range(steps):
 					var a0 := TAU * i / steps
 					var a1 := TAU * (i + 1) / steps
+					im.surface_set_color(col)
 					im.surface_add_vertex(_to3(c + Vector2(cos(a0), sin(a0)) * r))
 					im.surface_add_vertex(_to3(c + Vector2(cos(a1), sin(a1)) * r))
 			"arc":
@@ -519,6 +548,7 @@ func _redraw() -> void:
 				for i in range(steps2):
 					var a0 := s + (e - s) * i / steps2
 					var a1 := s + (e - s) * (i + 1) / steps2
+					im.surface_set_color(col)
 					im.surface_add_vertex(_to3(c2 + Vector2(cos(a0), sin(a0)) * r2))
 					im.surface_add_vertex(_to3(c2 + Vector2(cos(a1), sin(a1)) * r2))
 	if has:

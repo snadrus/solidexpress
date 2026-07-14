@@ -111,6 +111,7 @@ func _sketch_input(event: InputEvent) -> void:
 			KEY_L: sketch_mode.set_tool(SketchMode.Tool.LINE)
 			KEY_R: sketch_mode.set_tool(SketchMode.Tool.RECT)
 			KEY_C: sketch_mode.set_tool(SketchMode.Tool.CIRCLE)
+			KEY_X: sketch_mode.toggle_construction_selected()
 			KEY_ESCAPE: sketch_mode.cancel()
 		accept_event()
 
@@ -233,7 +234,45 @@ func _gui_key(event: InputEventKey) -> bool:
 				var mode: int = view.cycle_display_mode()
 				status.emit("Display: " + ["Shaded", "Shaded + Edges", "Wireframe"][mode])
 				return true
+		KEY_K:
+			if not event.ctrl_pressed:
+				toggle_section()
+				return true
 	return false
+
+
+## Midpoint of all bodies' combined AABB (model space), or ZERO if empty.
+func _bodies_aabb_center() -> Vector3:
+	var first := true
+	var united_min := Vector3.ZERO
+	var united_max := Vector3.ZERO
+	for id in view.doc.body_ids():
+		var bb: Dictionary = view.doc.measure_bbox(id)
+		if bb.is_empty():
+			continue
+		var mn: Vector3 = bb["min"]
+		var mx: Vector3 = bb["max"]
+		if first:
+			united_min = mn
+			united_max = mx
+			first = false
+		else:
+			united_min = united_min.min(mn)
+			united_max = united_max.max(mx)
+	if first:
+		return Vector3.ZERO
+	return (united_min + united_max) * 0.5
+
+
+## Toggle section-view clipping through the combined body AABB center (+X).
+func toggle_section() -> void:
+	if view.section_enabled:
+		view.clear_section_plane()
+		status.emit("Section view off")
+	else:
+		var center := _bodies_aabb_center()
+		view.set_section_plane(center, Vector3(1, 0, 0))
+		status.emit("Section view on")
 
 
 func _input(event: InputEvent) -> void:

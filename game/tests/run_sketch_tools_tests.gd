@@ -30,6 +30,9 @@ func _init() -> void:
 	test_tool_switch_mid_arc(main)
 	test_fillet_selected(main)
 	test_offset_selected_circle(main)
+	test_construction_binding()
+	test_toggle_construction_selected(main)
+	test_toggle_section(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -196,3 +199,55 @@ func test_offset_selected_circle(main) -> void:
 	check(absf(info["radius"] - (10.0 + dist)) < 1e-4,
 		"offset circle radius differs by distance (%.6f)" % info["radius"])
 	sm.cancel()
+
+
+func test_construction_binding() -> void:
+	print("- SxSketch set_construction / is_construction round-trip")
+	var sk := SxSketch.new()
+	var lid: String = sk.add_line(0, 0, 10, 0)
+	var cid: String = sk.add_circle(0, 0, 5)
+	check(not sk.is_construction(lid), "line not construction by default")
+	check(not sk.is_construction(cid), "circle not construction by default")
+	sk.set_construction(lid, true)
+	check(sk.is_construction(lid), "line is_construction after set true")
+	check(not sk.is_construction(cid), "circle unchanged when sibling toggled")
+	check(sk.entity_info(lid).get("construction", false) == true,
+		"entity_info.construction reflects flag")
+	sk.set_construction(lid, false)
+	check(not sk.is_construction(lid), "line is_construction after set false")
+
+
+func test_toggle_construction_selected(main) -> void:
+	print("- toggle_construction_selected flips selected entities")
+	var sm: SketchMode = main.sketch_mode
+	main.view.clear_selection()
+	main._start_sketch()
+	sm.set_tool(SketchMode.Tool.SELECT)
+	var a: String = sm.sketch.add_line(0, 0, 5, 0)
+	var b: String = sm.sketch.add_line(0, 5, 5, 5)
+	sm._set_selected([a, b])
+	check(not sm.sketch.is_construction(a), "a not construction before toggle")
+	check(not sm.sketch.is_construction(b), "b not construction before toggle")
+	sm.toggle_construction_selected()
+	check(sm.sketch.is_construction(a), "a construction after first toggle")
+	check(sm.sketch.is_construction(b), "b construction after first toggle")
+	sm.toggle_construction_selected()
+	check(not sm.sketch.is_construction(a), "a cleared after second toggle")
+	check(not sm.sketch.is_construction(b), "b cleared after second toggle")
+	sm.cancel()
+
+
+func test_toggle_section(main) -> void:
+	print("- toggle_section flips section_enabled")
+	var view: DocumentView = main.view
+	var vi: ViewportInteraction = main.interaction
+	view.clear_selection()
+	if view.section_enabled:
+		view.clear_section_plane()
+	var body: String = view.insert_primitive("box", Vector3(50, 50, 0))
+	check(body != "", "box inserted for section test")
+	check(not view.section_enabled, "section off before toggle")
+	vi.toggle_section()
+	check(view.section_enabled, "section_enabled true after first toggle")
+	vi.toggle_section()
+	check(not view.section_enabled, "section_enabled false after second toggle")

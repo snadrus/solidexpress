@@ -74,6 +74,10 @@ void SxSketch::set_construction(const String& id, bool construction) {
     sketch_->set_construction(parse_id(id), construction);
 }
 
+bool SxSketch::is_construction(const String& id) const {
+    return sketch_->is_construction(parse_id(id));
+}
+
 PackedStringArray SxSketch::entity_ids() const {
     PackedStringArray out;
     for (const auto& e : sketch_->entities()) out.push_back(to_gd(e.id.str()));
@@ -185,6 +189,7 @@ void SxSketch::_bind_methods() {
     ClassDB::bind_method(D_METHOD("add_arc", "cx", "cy", "r", "start_angle", "end_angle"), &SxSketch::add_arc);
     ClassDB::bind_method(D_METHOD("remove_entity", "id"), &SxSketch::remove_entity);
     ClassDB::bind_method(D_METHOD("set_construction", "id", "construction"), &SxSketch::set_construction);
+    ClassDB::bind_method(D_METHOD("is_construction", "id"), &SxSketch::is_construction);
     ClassDB::bind_method(D_METHOD("entity_ids"), &SxSketch::entity_ids);
     ClassDB::bind_method(D_METHOD("fillet_corner", "line_a_id", "line_b_id", "radius"),
                          &SxSketch::fillet_corner);
