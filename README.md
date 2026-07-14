@@ -1,0 +1,122 @@
+# SolidExpress
+
+Parametric solid modeler built on **OCCT** geometry, a **Godot 4.7** UI via GDExtension, and **PlaneGCS** for 2D sketch constraints.
+
+The product is AI-first: every selectable entity has a generated markdown **semantic card** (machine sections regenerate; free-text Aliases/Notes are preserved), and the whole document can be exported as markdown context (`File > Export AI Context…` / `SxDocument.export_context()`).
+
+## Prerequisites
+
+**Ubuntu packages:**
+
+```bash
+sudo apt-get install -y ninja-build zip \
+  libocct-foundation-dev libocct-modeling-data-dev \
+  libocct-modeling-algorithms-dev libocct-data-exchange-dev \
+  libocct-ocaf-dev libocct-visualization-dev \
+  libeigen3-dev libboost-dev
+```
+
+**Godot 4.7-stable** (Linux x86_64 binary): download from
+[godotengine/godot-builds](https://github.com/godotengine/godot-builds/releases),
+place the executable at `tools/godot/godot` (that path is gitignored), and make it executable:
+
+```bash
+chmod +x tools/godot/godot
+```
+
+CMake 3.22+, a C++20 compiler, and Ninja are required for the superbuild.
+
+## Build, run, test
+
+```bash
+make build   # cmake -G Ninja + build (sxkernel, libplanegcs.so, game/bin/libsxcore.so)
+make run     # import then launch the Godot project
+make test    # Catch2 kernel suite + headless Godot suites
+```
+
+`make run` and Godot test targets invoke `make import` automatically. Import runs Godot headless once to bake the `.godot` cache so scripts and the editor resolve correctly.
+
+Useful details:
+
+- Default CMake build type is `RelWithDebInfo`.
+- Kernel tests: `build/sxkernel/sxkernel_tests` (also via `make test-kernel`).
+- Godot tests (`make test-godot`): `run_tests.gd`, `run_ui_tests.gd`, `run_sketch_tests.gd`, `run_sketch_tools_tests.gd`, `run_display_tests.gd`, `run_menu_tests.gd`.
+
+## Architecture
+
+| Tree | Role |
+|------|------|
+| `sxkernel/` | Static C++20 modeling kernel: `Document`, bodies, undo/redo command stack, `FeatureGraph` parametric timeline, topological naming, sketch entities + PlaneGCS `SolverBackend` seam, tessellation/picking, STEP/IGES/STL interop, `.sxp` zip I/O. No Godot dependency; Catch2 unit tests. |
+| `sxcore/` | GDExtension shared library binding the kernel into Godot; output is `game/bin/libsxcore.so`. |
+| `game/` | Godot 4.7 project: orbit camera, viewport interaction (select / move / push-pull / sketch), timeline / ops / card / variables panels, headless tests under `game/tests/`. |
+| `thirdparty/` | Vendored dependencies (godot-cpp, PlaneGCS + shim, miniz, nlohmann/json, Catch2, extension API dump). |
+| `docs/` | Competitive survey (`docs/survey/`) and implementation plan / live status (`docs/plan/`). |
+
+PlaneGCS is built as a **shared** library (`libplanegcs.so`) to satisfy LGPL dynamic-link policy; the kernel links it through the solver seam.
+
+## Keyboard and mouse
+
+Bindings verified in `game/scripts/orbit_camera.gd`, `viewport_interaction.gd`, and `main.gd`.
+
+### Navigation
+
+| Input | Action |
+|-------|--------|
+| Middle-drag | Orbit about pivot |
+| Shift + middle-drag | Pan |
+| Mouse wheel | Zoom toward / away from pivot |
+| `F` | Zoom to fit (frame all bodies) |
+| `1` / `2` / `3` / `7` | Front / right / top / isometric |
+| `5` | Toggle orthographic / perspective |
+
+### Modeling
+
+| Input | Action |
+|-------|--------|
+| Click | Select body; click again on the same body to refine to a nearby edge or the hit face |
+| Drag selected body | Move on the ground plane (live preview; commits on release) |
+| Drag selected face | Push/pull along face normal (planar faces) |
+| `Del` / Backspace | Delete selected body |
+| `Ctrl+Z` | Undo |
+| `Ctrl+Y` or `Ctrl+Shift+Z` | Redo |
+| `Ctrl+S` | Save |
+| `Ctrl+O` | Open |
+| `W` | Cycle display mode (shaded → shaded+edges → wireframe) |
+| `K` | Toggle section-view clipping plane |
+| `G` | Toggle world gizmos (origin triad + XY grid) |
+
+### Sketch mode
+
+Active while a sketch session is open (`sketch_mode.active`).
+
+| Input | Action |
+|-------|--------|
+| `S` | Select tool |
+| `L` | Line |
+| `R` | Rectangle |
+| `C` | Circle |
+| `T` | Trim |
+| `X` | Toggle construction geometry on selection |
+| Right-click | End line chain |
+| `Esc` | Cancel current tool / gesture |
+
+## `.sxp` document format
+
+Native documents use the `.sxp` extension: a zip archive written with miniz.
+
+| Entry | Contents |
+|-------|----------|
+| `manifest.json` | Format id/version, body UUIDs, names, colors, BREP paths, subshape id lists |
+| `breps/<uuid>.brep` | Per-body OCCT BREP blob |
+| `features.json` | FeatureGraph timeline (feature params, embedded sketches, variables/equations) |
+| `datums.json` | Datum planes, axes, and points |
+| `instances.json` | Component instance placements (source body + transform) |
+| `cards/<uuid>.md` | Per-entity semantic cards |
+
+Older archives without `datums.json` or `instances.json` still load; those sections are optional for backward compatibility.
+
+## License policy
+
+**Never GPL or AGPL.** LGPL is allowed only with **dynamic linking**. Record every dependency in [`THIRD_PARTY.md`](THIRD_PARTY.md) before first use.
+
+**Open CASCADE Technology (OCCT)** is licensed under **LGPL-2.1 with the OCCT exception**. SolidExpress links OCCT dynamically from system packages; that license notice must remain prominent in documentation and About surfaces. PlaneGCS (LGPL-2.1-or-later) follows the same dynamic-link rule.
