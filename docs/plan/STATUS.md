@@ -88,9 +88,11 @@ Godot suites: integration 97 checks, UI 114 checks, sketch 23 checks.
 
 - [x] Display modes: shaded / shaded+edges / wireframe (W key cycles)
 
+- [x] Draft/taper kernel command ([draft], BRepOffsetAPI_DraftAngle with undo)
+
 ## In flight (background agents)
-- Draft/taper kernel command ([draft])
 - Sketch fillet + offset tools ([sketchtools])
+- Draft bindings + ops-panel UI
 
 ## Later phases
 Not started. See implementation plan.
