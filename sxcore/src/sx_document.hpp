@@ -42,6 +42,17 @@ public:
     bool delete_body(const godot::String& body_id);
     bool translate_body(const godot::String& body_id, const godot::Vector3& delta);
     bool push_pull(const godot::String& face_id, double distance);
+    // op: "fuse" | "cut" | "common". Tool body is consumed unless keep_tool.
+    bool boolean_op(const godot::String& target_body, const godot::String& tool_body,
+                    const godot::String& op, bool keep_tool);
+    bool fillet_edges(const godot::PackedStringArray& edge_ids, double radius);
+    bool chamfer_edges(const godot::PackedStringArray& edge_ids, double distance);
+
+    // --- interop ---
+    bool export_step(const godot::String& path);
+    bool export_stl(const godot::String& path, bool binary);
+    // Returns uuids of imported bodies (empty on failure).
+    godot::PackedStringArray import_step(const godot::String& path);
 
     // --- undo/redo ---
     bool undo();
@@ -59,6 +70,7 @@ public:
     // matches get_face_ids(body_id).
     godot::Ref<godot::ArrayMesh> get_mesh(const godot::String& body_id) const;
     godot::PackedStringArray get_face_ids(const godot::String& body_id) const;
+    godot::PackedStringArray get_edge_ids(const godot::String& body_id) const;
     // Edge wireframe as a Dictionary {edge_uuid: PackedVector3Array}.
     godot::Dictionary get_edge_lines(const godot::String& body_id) const;
 

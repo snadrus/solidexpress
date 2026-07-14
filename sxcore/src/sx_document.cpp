@@ -2,7 +2,10 @@
 
 #include <godot_cpp/core/class_db.hpp>
 
+#include "sx/commands_boolean.hpp"
+#include "sx/commands_dress.hpp"
 #include "sx/commands_sketch.hpp"
+#include "sx/interop.hpp"
 #include "sx_sketch.hpp"
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
@@ -134,6 +137,77 @@ bool SxDocument::push_pull(const String& face_id, double distance) {
     return true;
 }
 
+bool SxDocument::boolean_op(const String& target_body, const String& tool_body,
+                            const String& op, bool keep_tool) {
+    auto target = parse_id(target_body);
+    auto tool = parse_id(tool_body);
+    std::string op_name = to_std(op);
+    sx::BooleanOp bop;
+    if (op_name == "fuse") bop = sx::BooleanOp::Fuse;
+    else if (op_name == "cut") bop = sx::BooleanOp::Cut;
+    else if (op_name == "common") bop = sx::BooleanOp::Common;
+    else return false;
+    try {
+        stack_.push(*doc_, std::make_unique<sx::BooleanCommand>(target, tool, bop, keep_tool));
+    } catch (const std::exception& e) {
+        sx::log::error(std::string("boolean_op failed: ") + e.what());
+        return false;
+    }
+    return true;
+}
+
+static std::vector<sx::EntityId> parse_ids(const PackedStringArray& arr) {
+    std::vector<sx::EntityId> out;
+    for (int i = 0; i < arr.size(); ++i) {
+        auto id = parse_id(arr[i]);
+        if (!id.is_null()) out.push_back(id);
+    }
+    return out;
+}
+
+bool SxDocument::fillet_edges(const PackedStringArray& edge_ids, double radius) {
+    try {
+        stack_.push(*doc_, std::make_unique<sx::FilletCommand>(parse_ids(edge_ids), radius));
+    } catch (const std::exception& e) {
+        sx::log::error(std::string("fillet failed: ") + e.what());
+        return false;
+    }
+    return true;
+}
+
+bool SxDocument::chamfer_edges(const PackedStringArray& edge_ids, double distance) {
+    try {
+        stack_.push(*doc_, std::make_unique<sx::ChamferCommand>(parse_ids(edge_ids), distance));
+    } catch (const std::exception& e) {
+        sx::log::error(std::string("chamfer failed: ") + e.what());
+        return false;
+    }
+    return true;
+}
+
+bool SxDocument::export_step(const String& path) {
+    std::string err;
+    bool ok = sx::interop::export_step(*doc_, to_std(path), &err);
+    if (!ok) sx::log::error("export_step: " + err);
+    return ok;
+}
+
+bool SxDocument::export_stl(const String& path, bool binary) {
+    std::string err;
+    bool ok = sx::interop::export_stl(*doc_, to_std(path), binary, &err);
+    if (!ok) sx::log::error("export_stl: " + err);
+    return ok;
+}
+
+PackedStringArray SxDocument::import_step(const String& path) {
+    PackedStringArray out;
+    std::string err;
+    auto ids = sx::interop::import_step(*doc_, to_std(path), &err);
+    if (ids.empty() && !err.empty()) sx::log::error("import_step: " + err);
+    for (const auto& id : ids) out.push_back(to_gd(id.str()));
+    return out;
+}
+
 bool SxDocument::undo() { return stack_.undo(*doc_); }
 bool SxDocument::redo() { return stack_.redo(*doc_); }
 bool SxDocument::can_undo() const { return stack_.can_undo(); }
@@ -204,6 +278,15 @@ PackedStringArray SxDocument::get_face_ids(const String& body_id) const {
     if (!b) return out;
     for (const auto& fid : b->subshape_ids.at(sx::EntityKind::Face))
         out.push_back(to_gd(fid.str()));
+    return out;
+}
+
+PackedStringArray SxDocument::get_edge_ids(const String& body_id) const {
+    PackedStringArray out;
+    const sx::Body* b = doc_->body(parse_id(body_id));
+    if (!b) return out;
+    for (const auto& eid : b->subshape_ids.at(sx::EntityKind::Edge))
+        out.push_back(to_gd(eid.str()));
     return out;
 }
 
@@ -281,6 +364,13 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("delete_body", "body_id"), &SxDocument::delete_body);
     ClassDB::bind_method(D_METHOD("translate_body", "body_id", "delta"), &SxDocument::translate_body);
     ClassDB::bind_method(D_METHOD("push_pull", "face_id", "distance"), &SxDocument::push_pull);
+    ClassDB::bind_method(D_METHOD("boolean_op", "target_body", "tool_body", "op", "keep_tool"), &SxDocument::boolean_op);
+    ClassDB::bind_method(D_METHOD("fillet_edges", "edge_ids", "radius"), &SxDocument::fillet_edges);
+    ClassDB::bind_method(D_METHOD("chamfer_edges", "edge_ids", "distance"), &SxDocument::chamfer_edges);
+    ClassDB::bind_method(D_METHOD("export_step", "path"), &SxDocument::export_step);
+    ClassDB::bind_method(D_METHOD("export_stl", "path", "binary"), &SxDocument::export_stl);
+    ClassDB::bind_method(D_METHOD("import_step", "path"), &SxDocument::import_step);
+    ClassDB::bind_method(D_METHOD("get_edge_ids", "body_id"), &SxDocument::get_edge_ids);
     ClassDB::bind_method(D_METHOD("undo"), &SxDocument::undo);
     ClassDB::bind_method(D_METHOD("redo"), &SxDocument::redo);
     ClassDB::bind_method(D_METHOD("can_undo"), &SxDocument::can_undo);

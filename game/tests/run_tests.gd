@@ -24,8 +24,50 @@ func _init() -> void:
 	test_push_pull()
 	test_cards()
 	test_save_load()
+	test_modeling_ops()
+	test_interop()
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
+
+
+func test_modeling_ops() -> void:
+	print("- booleans, fillet, chamfer")
+	var doc := SxDocument.new()
+	var a: String = doc.add_box(10, 10, 10, Vector3.ZERO)
+	var b: String = doc.add_box(10, 10, 10, Vector3(5, 0, 0))
+	check(doc.boolean_op(a, b, "fuse", false), "fuse succeeds")
+	check(doc.body_ids().size() == 1, "tool consumed by fuse")
+	check(absf(doc.body_volume(a) - 1500.0) < 1e-4, "fused volume 1500")
+	check(doc.undo(), "boolean undo")
+	check(doc.body_ids().size() == 2, "both bodies restored")
+
+	var c: String = doc.add_box(20, 20, 20, Vector3(100, 0, 0))
+	var edges: PackedStringArray = doc.get_edge_ids(c)
+	check(edges.size() == 12, "box has 12 edge ids")
+	var vol0: float = doc.body_volume(c)
+	check(doc.fillet_edges(PackedStringArray([edges[0]]), 3.0), "fillet one edge")
+	check(doc.body_volume(c) < vol0, "fillet removed material")
+	check(doc.undo(), "fillet undo")
+	check(absf(doc.body_volume(c) - vol0) < 1e-6, "volume restored")
+	check(doc.chamfer_edges(PackedStringArray([doc.get_edge_ids(c)[0]]), 2.0), "chamfer one edge")
+	check(doc.body_volume(c) < vol0, "chamfer removed material")
+
+
+func test_interop() -> void:
+	print("- STEP export/import")
+	var path := "/tmp/sx_godot_interop.step"
+	var doc := SxDocument.new()
+	doc.add_box(10, 20, 30, Vector3.ZERO)
+	check(doc.export_step(path), "export_step succeeds")
+
+	var doc2 := SxDocument.new()
+	var imported: PackedStringArray = doc2.import_step(path)
+	check(imported.size() == 1, "one body imported")
+	if imported.size() == 1:
+		check(absf(doc2.body_volume(imported[0]) - 6000.0) < 1.0, "imported volume matches")
+	check(doc.export_stl("/tmp/sx_godot_interop.stl", true), "export_stl succeeds")
+	DirAccess.remove_absolute(path)
+	DirAccess.remove_absolute("/tmp/sx_godot_interop.stl")
 
 
 func test_document_lifecycle() -> void:
