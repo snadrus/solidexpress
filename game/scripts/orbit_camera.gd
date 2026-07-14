@@ -4,6 +4,7 @@ extends Camera3D
 ## wheel zooms toward the cursor. F frames the scene contents;
 ## 1/2/3/7 jump to front/right/top/isometric standard views;
 ## 5 toggles orthographic/perspective projection.
+## Named views persist in user://views.cfg.
 
 var pivot := Vector3.ZERO
 var distance := 400.0
@@ -18,10 +19,16 @@ const MAX_DISTANCE := 20000.0
 const ORBIT_SPEED := 0.008
 const MIN_PITCH := deg_to_rad(-89.0)
 const MAX_PITCH := deg_to_rad(89.0)
+const VIEWS_CFG := "user://views.cfg"
+
+## name -> {yaw, pitch, distance, pivot, projection}
+var _named_views: Dictionary = {}
+var _view_tween: Tween
 
 
 func _ready() -> void:
 	far = 100000.0
+	_load_named_views()
 	_update_transform()
 
 
@@ -116,10 +123,38 @@ func toggle_projection() -> void:
 	_update_transform()
 
 
-func set_view(new_yaw: float, new_pitch: float) -> void:
+func set_view(new_yaw: float, new_pitch: float, animated := false) -> void:
+	if animated:
+		animate_to(new_yaw, new_pitch)
+		return
 	yaw = new_yaw
 	pitch = clampf(new_pitch, MIN_PITCH, MAX_PITCH)
 	_update_transform()
+
+
+## Smoothly tween yaw/pitch to the target (shortest angular path for yaw).
+func animate_to(new_yaw: float, new_pitch: float, duration := 0.25) -> void:
+	new_pitch = clampf(new_pitch, MIN_PITCH, MAX_PITCH)
+	if _view_tween != null and _view_tween.is_valid():
+		_view_tween.kill()
+		_view_tween = null
+	if duration <= 0.0 or not is_inside_tree():
+		yaw = new_yaw
+		pitch = new_pitch
+		_update_transform()
+		return
+	var start_yaw := yaw
+	var start_pitch := pitch
+	var yaw_delta := wrapf(new_yaw - start_yaw, -PI, PI)
+	var target_yaw := start_yaw + yaw_delta
+	_view_tween = create_tween()
+	_view_tween.tween_method(
+		func(t: float) -> void:
+			yaw = lerpf(start_yaw, target_yaw, t)
+			pitch = lerpf(start_pitch, new_pitch, t)
+			_update_transform(),
+		0.0, 1.0, duration
+	)
 
 
 ## Frames all bodies (world-space AABB union); origin fallback when empty.
@@ -146,6 +181,73 @@ func frame_contents() -> void:
 	var radius: float = united.size.length() / 2.0
 	distance = clampf(radius / tan(deg_to_rad(fov) / 2.0) * 1.2, MIN_DISTANCE, MAX_DISTANCE)
 	_update_transform()
+
+
+func save_named_view(view_name: String) -> void:
+	_named_views[view_name] = {
+		"yaw": yaw,
+		"pitch": pitch,
+		"distance": distance,
+		"pivot": pivot,
+		"projection": projection,
+	}
+	_save_named_views()
+
+
+func restore_named_view(view_name: String) -> bool:
+	if not _named_views.has(view_name):
+		return false
+	var v: Dictionary = _named_views[view_name]
+	yaw = float(v["yaw"])
+	pitch = float(v["pitch"])
+	distance = float(v["distance"])
+	pivot = v["pivot"] as Vector3
+	projection = int(v["projection"]) as ProjectionType
+	_update_transform()
+	return true
+
+
+func named_view_list() -> PackedStringArray:
+	var keys := PackedStringArray()
+	for k in _named_views.keys():
+		keys.append(str(k))
+	keys.sort()
+	return keys
+
+
+func remove_named_view(view_name: String) -> bool:
+	if not _named_views.has(view_name):
+		return false
+	_named_views.erase(view_name)
+	_save_named_views()
+	return true
+
+
+func _save_named_views() -> void:
+	var cfg := ConfigFile.new()
+	for view_name in _named_views:
+		var v: Dictionary = _named_views[view_name]
+		cfg.set_value(view_name, "yaw", v["yaw"])
+		cfg.set_value(view_name, "pitch", v["pitch"])
+		cfg.set_value(view_name, "distance", v["distance"])
+		cfg.set_value(view_name, "pivot", v["pivot"])
+		cfg.set_value(view_name, "projection", v["projection"])
+	cfg.save(VIEWS_CFG)
+
+
+func _load_named_views() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(VIEWS_CFG) != OK:
+		return
+	_named_views.clear()
+	for section in cfg.get_sections():
+		_named_views[section] = {
+			"yaw": cfg.get_value(section, "yaw", 0.0),
+			"pitch": cfg.get_value(section, "pitch", 0.0),
+			"distance": cfg.get_value(section, "distance", 400.0),
+			"pivot": cfg.get_value(section, "pivot", Vector3.ZERO),
+			"projection": cfg.get_value(section, "projection", PROJECTION_PERSPECTIVE),
+		}
 
 
 func _update_transform() -> void:

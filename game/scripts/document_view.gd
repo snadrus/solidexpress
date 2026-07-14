@@ -32,6 +32,8 @@ var display_mode := DisplayMode.SHADED_EDGES
 ## True while a section (clipping) plane is active on body meshes.
 ## Edge overlay lines are not clipped in v1.
 var section_enabled := false
+## Body ids currently hidden from view / picking (id -> true).
+var hidden_bodies := {}
 
 const EDGE_PICK_TOLERANCE := 2.5  # model units (mm)
 const DATUM_PLANE_HALF := 20.0  # ~40 unit square
@@ -239,9 +241,9 @@ func graph_changed() -> void:
 ## Ray in model space. Returns true on hit. With `additive` (Ctrl+click) the
 ## hit entity is toggled into the multi-select sets instead of replacing the
 ## selection: a face (or edge) when the hit body is already selected, else
-## the whole body.
+## the whole body. Hidden bodies are skipped (pick-through).
 func select_ray(origin: Vector3, direction: Vector3, additive := false) -> bool:
-	var hit: Dictionary = doc.pick(origin, direction)
+	var hit: Dictionary = _pick_visible(origin, direction)
 	if hit.is_empty():
 		if not additive:
 			clear_selection()
@@ -261,6 +263,21 @@ func select_ray(origin: Vector3, direction: Vector3, additive := false) -> bool:
 			return true
 	select_entity(hit["body"], "")
 	return true
+
+
+## Kernel pick that advances past hidden bodies so the next solid can be hit.
+func _pick_visible(origin: Vector3, direction: Vector3) -> Dictionary:
+	var d := direction.normalized() if direction.length_squared() > 1e-12 else direction
+	var o := origin
+	for _i in range(32):
+		var hit: Dictionary = doc.pick(o, d)
+		if hit.is_empty():
+			return {}
+		if not hidden_bodies.has(hit["body"]):
+			return hit
+		var pt: Vector3 = hit["point"]
+		o = pt + d * 0.05
+	return {}
 
 
 func _toggle_hit(hit: Dictionary) -> void:
@@ -374,7 +391,89 @@ func select_edge(body_id: String, edge_id: String) -> void:
 
 
 func pick_info(origin: Vector3, direction: Vector3) -> Dictionary:
-	return doc.pick(origin, direction)
+	return _pick_visible(origin, direction)
+
+
+## Select every visible body whose center unprojects inside `rect` (screen space).
+## With `additive` false, replaces the selection; with true, unions into
+## `selected_bodies`. Primary selection syncs to the last body in the set.
+func select_in_rect(rect: Rect2, camera: Camera3D, model_space: Node3D, additive := false) -> void:
+	var hits: Array[String] = []
+	for id in _body_nodes:
+		if hidden_bodies.has(id):
+			continue
+		var world: Vector3 = model_space.to_global(body_center(id))
+		if camera.is_position_behind(world):
+			continue
+		var screen: Vector2 = camera.unproject_position(world)
+		if rect.has_point(screen):
+			hits.append(id)
+	if not additive:
+		selected_bodies.assign(hits)
+		selected_faces.clear()
+		selected_edges.clear()
+	else:
+		for id in hits:
+			if not selected_bodies.has(id):
+				selected_bodies.append(id)
+	_sync_primary_from_sets()
+	_apply_selection_materials()
+	_highlight_edge()
+	selection_changed.emit(selected_body, selected_face)
+
+
+# --- visibility (hide / isolate) ---
+
+func set_body_hidden(id: String, hidden: bool) -> void:
+	if id == "":
+		return
+	if hidden:
+		hidden_bodies[id] = true
+		_remove_body_from_selection(id)
+	else:
+		hidden_bodies.erase(id)
+	_apply_selection_materials()
+
+
+## Hide every body not in `ids`. Empty `ids` unhides all (same as unhide_all).
+func isolate(ids: Array) -> void:
+	if ids.is_empty():
+		unhide_all()
+		return
+	for body_id in _body_nodes.keys():
+		if ids.has(body_id):
+			hidden_bodies.erase(body_id)
+		else:
+			hidden_bodies[body_id] = true
+			_remove_body_from_selection(body_id)
+	_apply_selection_materials()
+
+
+func unhide_all() -> void:
+	if hidden_bodies.is_empty():
+		_apply_selection_materials()
+		return
+	hidden_bodies.clear()
+	_apply_selection_materials()
+
+
+func _remove_body_from_selection(body_id: String) -> void:
+	selected_bodies.erase(body_id)
+	var drop_faces: Array[String] = []
+	for f in selected_faces:
+		if _owner_body_of(f) == body_id:
+			drop_faces.append(f)
+	for f in drop_faces:
+		selected_faces.erase(f)
+	var drop_edges: Array[String] = []
+	for e in selected_edges:
+		if _owner_body_of(e) == body_id:
+			drop_edges.append(e)
+	for e in drop_edges:
+		selected_edges.erase(e)
+	_sync_primary_from_sets()
+	_highlight_edge()
+	selection_changed.emit(selected_body, selected_face)
 
 
 func select_entity(body_id: String, face_id: String) -> void:
@@ -502,6 +601,7 @@ func save(path: String) -> bool:
 func load_from(path: String) -> bool:
 	var ok := doc.load(path)
 	clear_selection()
+	hidden_bodies.clear()
 	_after_mutation()
 	return ok
 
@@ -509,6 +609,7 @@ func load_from(path: String) -> bool:
 func new_document() -> void:
 	doc = SxDocument.new()
 	clear_selection()
+	hidden_bodies.clear()
 	_after_mutation()
 
 
@@ -525,6 +626,7 @@ func refresh() -> void:
 			_body_nodes.erase(body_id)
 			_face_ids.erase(body_id)
 			_body_materials.erase(body_id)
+			hidden_bodies.erase(body_id)
 	_refresh_datums()
 	_refresh_instances()
 
@@ -693,6 +795,11 @@ func _rebuild_body(body_id: String) -> void:
 	_face_ids[body_id] = doc.get_face_ids(body_id)
 	_body_materials[body_id] = _make_material(doc.get_body_color(body_id))
 	_rebuild_edges(node.get_node("Edges") as MeshInstance3D, body_id)
+	var shown := not hidden_bodies.has(body_id)
+	node.visible = shown
+	var edges_child: MeshInstance3D = node.get_node_or_null("Edges") as MeshInstance3D
+	if edges_child != null:
+		edges_child.visible = shown and display_mode != DisplayMode.SHADED
 
 
 func _rebuild_edges(edge_node: MeshInstance3D, body_id: String) -> void:
@@ -754,9 +861,11 @@ func _apply_selection_materials() -> void:
 		var whole_body_selected: bool = selected_bodies.has(body_id) \
 			or (body_id == selected_body and selected_face == "" and selected_edge == "")
 		var base: StandardMaterial3D = _body_materials.get(body_id, _base_material)
+		var body_shown := not hidden_bodies.has(body_id)
+		node.visible = body_shown
 		var edges: MeshInstance3D = node.get_node_or_null("Edges") as MeshInstance3D
 		if edges != null:
-			edges.visible = display_mode != DisplayMode.SHADED
+			edges.visible = body_shown and display_mode != DisplayMode.SHADED
 			if display_mode == DisplayMode.WIREFRAME and body_selected:
 				edges.material_override = _selected_edge_material
 			else:

@@ -12,7 +12,7 @@ var model_space: Node3D  # kernel Z-up frame
 var sketch_mode: SketchMode  # optional; when active, input goes to sketching
 var world_gizmos: WorldGizmos
 
-enum DragMode { NONE, MOVE_BODY, PUSH_PULL }
+enum DragMode { NONE, MOVE_BODY, PUSH_PULL, BOX_SELECT }
 var _drag_mode := DragMode.NONE
 var _drag_start_mouse := Vector2.ZERO
 var _drag_start_point := Vector3.ZERO   # model-space hit point at drag start
@@ -21,8 +21,15 @@ var _drag_accum := Vector3.ZERO         # applied translation so far
 var _drag_pp_applied := 0.0
 var _press_pos := Vector2.ZERO
 var _pressed := false
+## True when the LMB press landed on empty space (box-select candidate).
+var _press_empty := false
+## Screen-space rubber-band rect while in BOX_SELECT (drawn via _draw).
+var _box_rect := Rect2()
 ## Ctrl held on the last LMB press: release becomes an additive-select toggle.
 var _ctrl_click := false
+## SELECT-tool drag-to-edit in sketch mode (begin/update/end_drag).
+var _sketch_dragging := false
+var _sketch_drag_moved := false
 
 ## Armed click-to-place kind, or "" when idle.
 var _place_kind := ""
@@ -226,7 +233,26 @@ func _sketch_input(event: InputEvent) -> void:
 			var ray := _model_ray(mb.position)
 			var p2 = sketch_mode.ray_to_sketch(ray[0], ray[1])
 			if p2 != null:
-				sketch_mode.click(p2)
+				# With the SELECT tool, grabbing geometry starts a drag-to-edit;
+				# a plain click (no hit) falls through to selection.
+				if sketch_mode.tool == SketchMode.Tool.SELECT \
+						and not sketch_mode.drag_hit(p2).is_empty():
+					sketch_mode.begin_drag(p2)
+					_sketch_dragging = true
+				else:
+					sketch_mode.click(p2)
+			accept_event()
+		elif not mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT and _sketch_dragging:
+			var ray_up := _model_ray(mb.position)
+			var p2_up = sketch_mode.ray_to_sketch(ray_up[0], ray_up[1])
+			# A press-release without movement is a click-select, not a drag.
+			if not _sketch_drag_moved and p2_up != null:
+				sketch_mode.end_drag()
+				sketch_mode.click(p2_up)
+			else:
+				sketch_mode.end_drag()
+			_sketch_dragging = false
+			_sketch_drag_moved = false
 			accept_event()
 		elif mb.pressed and mb.button_index == MOUSE_BUTTON_RIGHT:
 			sketch_mode.end_chain()
@@ -235,7 +261,11 @@ func _sketch_input(event: InputEvent) -> void:
 		var ray := _model_ray(event.position)
 		var p2 = sketch_mode.ray_to_sketch(ray[0], ray[1])
 		if p2 != null:
-			sketch_mode.hover(p2)
+			if _sketch_dragging:
+				_sketch_drag_moved = true
+				sketch_mode.update_drag(p2)
+			else:
+				sketch_mode.hover(p2)
 	elif event is InputEventKey and event.pressed and not event.ctrl_pressed:
 		match (event as InputEventKey).keycode:
 			KEY_S: sketch_mode.set_tool(SketchMode.Tool.SELECT)
@@ -252,15 +282,19 @@ func _on_press(pos: Vector2) -> void:
 	_pressed = true
 	_press_pos = pos
 	_drag_mode = DragMode.NONE
+	_box_rect = Rect2()
 	grab_focus()
 
-	# Ctrl+click is additive selection only — never arms a drag.
+	var ray := _model_ray(pos)
+	var hit: Dictionary = view.pick_info(ray[0], ray[1])
+	_press_empty = hit.is_empty()
+
+	# Ctrl+click is additive selection only — never arms a move/push drag.
+	# Empty-space Ctrl+drag still becomes an additive box select in _on_drag.
 	if _ctrl_click:
 		return
 	# If pressing on the current selection, arm a drag; commit on movement.
-	var ray := _model_ray(pos)
-	var hit: Dictionary = view.pick_info(ray[0], ray[1])
-	if hit.is_empty() or view.selected_body == "":
+	if _press_empty or view.selected_body == "":
 		return
 	if hit["body"] != view.selected_body:
 		return
@@ -278,7 +312,13 @@ func _on_press(pos: Vector2) -> void:
 func _on_drag(pos: Vector2) -> void:
 	if pos.distance_to(_press_pos) < CLICK_SLOP:
 		return
+	# Empty-space drag past slop starts a rubber-band box select.
+	if _drag_mode == DragMode.NONE and _press_empty and _place_kind == "":
+		_drag_mode = DragMode.BOX_SELECT
 	match _drag_mode:
+		DragMode.BOX_SELECT:
+			_box_rect = Rect2(_press_pos, pos - _press_pos).abs()
+			queue_redraw()
 		DragMode.MOVE_BODY:
 			var gp = ground_point(pos)
 			var gp0 = ground_point(_drag_start_mouse)
@@ -297,6 +337,20 @@ func _on_drag(pos: Vector2) -> void:
 		DragMode.PUSH_PULL:
 			var d := _push_pull_distance(pos)
 			status.emit("Push/pull: %.1f mm (release to apply)" % d)
+
+
+func _draw() -> void:
+	if _drag_mode != DragMode.BOX_SELECT or _box_rect.size == Vector2.ZERO:
+		return
+	draw_rect(_box_rect, Color(0.35, 0.6, 0.95, 0.18), true)
+	draw_rect(_box_rect, Color(0.35, 0.6, 0.95, 0.85), false, 1.0)
+
+
+func _clear_box_band() -> void:
+	_box_rect = Rect2()
+	if _drag_mode == DragMode.BOX_SELECT:
+		_drag_mode = DragMode.NONE
+	queue_redraw()
 
 
 func _push_pull_distance(pos: Vector2) -> float:
@@ -318,11 +372,24 @@ func _on_release(pos: Vector2) -> void:
 	_pressed = false
 	var was_click := pos.distance_to(_press_pos) < CLICK_SLOP
 	match _drag_mode:
+		DragMode.BOX_SELECT:
+			_box_rect = Rect2(_press_pos, pos - _press_pos).abs()
+			view.select_in_rect(_box_rect, camera, model_space, _ctrl_click)
+			if view.selection_size() > 1:
+				status.emit("%d selected" % view.selection_size())
+			elif view.selection_size() == 1:
+				status.emit("Selected " + view.selected_body.left(8))
+			else:
+				status.emit("")
+			_clear_box_band()
+			_ctrl_click = false
+			return
 		DragMode.MOVE_BODY:
 			if not was_click and _drag_accum.length() > 1e-6:
 				view.move_selected(_drag_accum)
 				status.emit("Moved body")
 				_drag_mode = DragMode.NONE
+				_ctrl_click = false
 				return
 		DragMode.PUSH_PULL:
 			if not was_click:
@@ -333,6 +400,7 @@ func _on_release(pos: Vector2) -> void:
 					else:
 						status.emit("Push/pull failed (planar faces only for now)")
 				_drag_mode = DragMode.NONE
+				_ctrl_click = false
 				return
 	_drag_mode = DragMode.NONE
 	if was_click:
@@ -345,6 +413,7 @@ func _on_release(pos: Vector2) -> void:
 		else:
 			status.emit("")
 	_ctrl_click = false
+	_press_empty = false
 
 
 func _gui_key(event: InputEventKey) -> bool:
@@ -355,6 +424,13 @@ func _gui_key(event: InputEventKey) -> bool:
 			# Sketch Esc is handled in _sketch_input; do not steal it.
 			if sketch_mode != null and sketch_mode.active:
 				return false
+			if _drag_mode == DragMode.BOX_SELECT or (_pressed and _press_empty and _box_rect.size != Vector2.ZERO):
+				_pressed = false
+				_clear_box_band()
+				_ctrl_click = false
+				_press_empty = false
+				status.emit("")
+				return true
 			if _place_kind != "":
 				_disarm_place(true)
 				return true
@@ -392,7 +468,35 @@ func _gui_key(event: InputEventKey) -> bool:
 				world_gizmos.set_gizmos_visible(not world_gizmos.gizmos_visible)
 				status.emit("Gizmos " + ("on" if world_gizmos.gizmos_visible else "off"))
 				return true
+		KEY_H:
+			if not event.ctrl_pressed:
+				if event.shift_pressed:
+					view.unhide_all()
+					status.emit("All shown")
+				else:
+					var ids := _selected_body_ids()
+					for id in ids:
+						view.set_body_hidden(id, true)
+					status.emit("%d hidden" % ids.size())
+				return true
+		KEY_I:
+			if not event.ctrl_pressed:
+				var ids := _selected_body_ids()
+				view.isolate(ids)
+				status.emit("All shown" if ids.is_empty() else "Isolated")
+				return true
 	return false
+
+
+## Unique body ids from the current selection (bodies / face+edge owners).
+func _selected_body_ids() -> Array:
+	var ids: Array = []
+	for b in view.selected_bodies:
+		if not ids.has(b):
+			ids.append(b)
+	if view.selected_body != "" and not ids.has(view.selected_body):
+		ids.append(view.selected_body)
+	return ids
 
 
 ## Midpoint of all bodies' combined AABB (model space), or ZERO if empty.

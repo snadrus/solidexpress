@@ -36,6 +36,10 @@ test-godot: build import
 	$(GODOT) --headless --path game --script tests/run_place_tests.gd
 	$(GODOT) --headless --path game --script tests/run_layout_tests.gd
 	$(GODOT) --headless --path game --script tests/run_icon_tests.gd
+	$(GODOT) --headless --path game --script tests/run_visibility_tests.gd
+	$(GODOT) --headless --path game --script tests/run_viewcube_tests.gd
+	$(GODOT) --headless --path game --script tests/run_assembly_tests.gd
+	$(GODOT) --headless --path game --script tests/run_drag_tests.gd
 
 test: test-kernel test-godot
 	@echo "ALL TESTS PASSED"

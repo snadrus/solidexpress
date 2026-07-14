@@ -149,9 +149,14 @@ Round 13 (integrated, committed):
 - [x] 20.4: drawings MVP — HLR projections, hidden dashed lines, three-view SVG export via File menu ([drawings])
 - [x] 20.5: configurations — named variable-table snapshots, activate regenerates, .sxp persisted, variables-panel switcher ([configurations])
 
-In flight (round 14 agents): box select + hide/isolate, ViewCube + named views, assembly panel UI, sketch drag-to-edit.
+Round 14 (integrated, committed):
+- [x] 16.2/16.3: rubber-band box select (window/crossing) + hide/isolate/show-all on H/I keys (run_visibility_tests 25)
+- [x] 18 (complete): sketch drag-to-edit — grab endpoints/whole/center/rim with SELECT tool, live kernel commit via new `SxSketch.set_entity_geometry` binding + re-solve so constraints hold during drags, failed solves revert (run_drag_tests 33)
+- [x] 19: ViewCube-style ViewWidget (click faces/edges/corners to snap view, animated transitions) + named views on OrbitCamera, mounted top-right (run_viewcube_tests 36)
+- [x] 20.1 (complete): AssemblyPanel — instance/mate lists, place/remove, armed two-click mate flow, solve; auto-hides when empty; icon buttons + tooltips (run_assembly_tests 20)
+- [x] UI visual language: icon buttons with tooltips everywhere (47 SVG glyphs, run_icon_tests 13)
 
-Round 13 test state: kernel 199 cases / 6955 assertions; Godot: integration 97, UI 240, sketch 38, sketch-tools 105, display 72, menu 50, workflow 60, select 24, property 17, infer 18, mate 15, camera 21, help 112, place 20, layout 21 — all green.
+Round 14 test state: kernel 199 cases / 6955 assertions; Godot (20 suites): integration 97, UI 240, sketch 38, sketch-tools 105, display 72, menu 50, workflow 60, select 24, property 17, infer 18, mate 15, camera 21, help 112, place 20, layout 21, icon 13, visibility 25, viewcube 36, assembly 20, drag 33 — all green.
 
 ## Later phases
 See implementation plan.

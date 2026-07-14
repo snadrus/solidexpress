@@ -139,6 +139,43 @@ Dictionary SxSketch::entity_info(const String& id) const {
     return out;
 }
 
+bool SxSketch::set_entity_geometry(const String& id, const Dictionary& geo) {
+    const sx::SketchEntity* e = sketch_->entity(parse_id(id));
+    if (!e) return false;
+    auto set = [&](size_t i, double v) { sketch_->param_mut(e->params[i]) = v; };
+    auto set_vec = [&](const char* key, size_t ix, size_t iy) {
+        if (!geo.has(key)) return;
+        Vector2 v = geo[key];
+        set(ix, v.x);
+        set(iy, v.y);
+    };
+    auto set_num = [&](const char* key, size_t i) {
+        if (geo.has(key)) set(i, static_cast<double>(geo[key]));
+    };
+    switch (e->type) {
+        case sx::SketchEntityType::Point:
+            set_vec("position", 0, 1);
+            break;
+        case sx::SketchEntityType::Line:
+            set_vec("start", 0, 1);
+            set_vec("end", 2, 3);
+            break;
+        case sx::SketchEntityType::Circle:
+            set_vec("center", 0, 1);
+            set_num("radius", 2);
+            break;
+        case sx::SketchEntityType::Arc:
+            set_vec("center", 0, 1);
+            set_num("radius", 2);
+            set_num("start_angle", 3);
+            set_num("end_angle", 4);
+            set_vec("start", 5, 6);
+            set_vec("end", 7, 8);
+            break;
+    }
+    return true;
+}
+
 String SxSketch::add_constraint(const String& type, const Array& refs, double value) {
     auto ct = parse_constraint_type(type);
     if (!ct) return {};
@@ -202,6 +239,8 @@ void SxSketch::_bind_methods() {
     ClassDB::bind_method(D_METHOD("trim_entity", "id", "px", "py"),
                          &SxSketch::trim_entity);
     ClassDB::bind_method(D_METHOD("entity_info", "id"), &SxSketch::entity_info);
+    ClassDB::bind_method(D_METHOD("set_entity_geometry", "id", "geo"),
+                         &SxSketch::set_entity_geometry);
     ClassDB::bind_method(D_METHOD("add_constraint", "type", "refs", "value"), &SxSketch::add_constraint);
     ClassDB::bind_method(D_METHOD("remove_constraint", "id"), &SxSketch::remove_constraint);
     ClassDB::bind_method(D_METHOD("set_constraint_value", "id", "value"), &SxSketch::set_constraint_value);

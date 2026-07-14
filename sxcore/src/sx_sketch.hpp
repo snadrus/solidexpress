@@ -45,6 +45,9 @@ public:
     // Geometry snapshot for rendering:
     // {type: "line", start: Vector2, end: Vector2, construction: bool} etc.
     godot::Dictionary entity_info(const godot::String& id) const;
+    // Writes geometry params from a dict shaped like entity_info's output
+    // (any subset of keys). Callers re-solve afterwards.
+    bool set_entity_geometry(const godot::String& id, const godot::Dictionary& geo);
 
     // --- constraints ---
     // refs: Array of Dictionaries {entity: String, role: String}.

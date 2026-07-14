@@ -51,6 +51,10 @@ var _tool_points: Array[Vector2] = []  # committed anchor points of current tool
 var _hover: Vector2 = Vector2.ZERO
 ## Set by snap_point when a snap applied; drawn as a small cross in preview.
 var _snap_marker: Variant = null  # Vector2 | null
+## Active SELECT-tool geometry drag. Empty when idle. Keys when dragging:
+## id, part ("start"|"end"|"whole"|"center"|"radius"), grab_pos, orig_info,
+## preview_info. Commits live via SxSketch.set_entity_geometry + re-solve.
+var _drag: Dictionary = {}
 var _line_material: StandardMaterial3D
 var _preview_material: StandardMaterial3D
 
@@ -172,6 +176,7 @@ func begin(origin: Vector3, normal: Vector3, x_hint: Vector3 = Vector3.ZERO) -> 
 	active = true
 	tool = Tool.LINE
 	_tool_points.clear()
+	_drag.clear()
 	dimensions.clear()
 	_clear_dimension_labels()
 	_redraw()
@@ -182,6 +187,7 @@ func cancel() -> void:
 	active = false
 	_tool_points.clear()
 	_snap_marker = null
+	_drag.clear()
 	_clear_meshes()
 	cancelled.emit()
 
@@ -269,6 +275,8 @@ func ray_to_sketch(origin: Vector3, direction: Vector3) -> Variant:
 
 
 func set_tool(t: Tool) -> void:
+	if not _drag.is_empty():
+		end_drag()
 	tool = t
 	_tool_points.clear()
 	if t != Tool.SELECT:
@@ -412,6 +420,163 @@ func _point_segment_distance(p: Vector2, a: Vector2, b: Vector2) -> float:
 	var ab := b - a
 	var t := 0.0 if ab.length_squared() < 1e-12 else clampf((p - a).dot(ab) / ab.length_squared(), 0.0, 1.0)
 	return p.distance_to(a + ab * t)
+
+
+# --- drag-to-edit (SELECT tool) ---
+
+## Hit-test for drag handles. Returns {} or {id, part} where part is
+## "start"|"end"|"whole"|"center"|"radius". Endpoints/centers win within
+## PICK_TOLERANCE; otherwise the nearest curve within tolerance ("whole" /
+## "radius").
+func drag_hit(pos2: Vector2) -> Dictionary:
+	if sketch == null:
+		return {}
+	var best_id := ""
+	var best_part := ""
+	var best_d := PICK_TOLERANCE
+	# Pass 1: endpoints / centers
+	for id in sketch.entity_ids():
+		var info: Dictionary = sketch.entity_info(id)
+		match info.get("type", ""):
+			"line":
+				for pair in [["start", info["start"]], ["end", info["end"]]]:
+					var d: float = pos2.distance_to(pair[1])
+					if d <= best_d:
+						best_d = d
+						best_id = id
+						best_part = pair[0]
+			"circle", "arc":
+				var d2: float = pos2.distance_to(info["center"])
+				if d2 <= best_d:
+					best_d = d2
+					best_id = id
+					best_part = "center"
+	if best_id != "":
+		return {"id": best_id, "part": best_part}
+	# Pass 2: whole entity / rim
+	best_d = PICK_TOLERANCE
+	for id in sketch.entity_ids():
+		var info2: Dictionary = sketch.entity_info(id)
+		var d3 := _entity_distance(info2, pos2)
+		if d3 <= best_d:
+			best_d = d3
+			best_id = id
+			match info2.get("type", ""):
+				"line":
+					best_part = "whole"
+				"circle", "arc":
+					best_part = "radius"
+				_:
+					best_part = "whole"
+	if best_id == "":
+		return {}
+	return {"id": best_id, "part": best_part}
+
+
+## Start a SELECT-tool drag at pos2. No-op when inactive, wrong tool, or miss.
+func begin_drag(pos2: Vector2) -> void:
+	if not active or tool != Tool.SELECT or sketch == null:
+		return
+	var hit := drag_hit(pos2)
+	if hit.is_empty():
+		return
+	var info: Dictionary = sketch.entity_info(hit["id"])
+	if info.is_empty():
+		return
+	_drag = {
+		"id": hit["id"],
+		"part": hit["part"],
+		"grab_pos": pos2,
+		"orig_info": info.duplicate(true),
+		"preview_info": info.duplicate(true),
+	}
+	_update_preview()
+
+
+## Update an active drag: write the new geometry into the kernel and re-solve
+## so constraints pull the rest of the sketch along live. The dragged shape is
+## also drawn in the preview color as a "grabbed" highlight.
+func update_drag(pos2: Vector2) -> void:
+	if _drag.is_empty():
+		return
+	var target := _drag_preview_at(pos2)
+	_drag["preview_info"] = target
+	sketch.set_entity_geometry(_drag["id"], target)
+	run_solve()
+	_redraw()
+	_rebuild_dimension_labels()
+	_update_preview()
+
+
+## End the active drag. A failed solve reverts to the pre-drag geometry.
+func end_drag() -> void:
+	if _drag.is_empty():
+		return
+	if last_solve_status == "failed":
+		sketch.set_entity_geometry(_drag["id"], _drag["orig_info"])
+		run_solve()
+		status.emit("Drag reverted: constraints could not be satisfied")
+	_drag.clear()
+	_redraw()
+	_rebuild_dimension_labels()
+	_update_preview()
+
+
+func _drag_preview_at(pos2: Vector2) -> Dictionary:
+	var orig: Dictionary = _drag["orig_info"]
+	var part: String = _drag["part"]
+	var grab: Vector2 = _drag["grab_pos"]
+	var delta := pos2 - grab
+	var out: Dictionary = orig.duplicate(true)
+	match part:
+		"start":
+			out["start"] = orig["start"] + delta
+		"end":
+			out["end"] = orig["end"] + delta
+		"whole", "center":
+			if orig.get("type", "") == "line":
+				out["start"] = orig["start"] + delta
+				out["end"] = orig["end"] + delta
+			else:
+				out["center"] = orig["center"] + delta
+				# Arcs carry explicit start/end points; keep them attached.
+				if orig.has("start"):
+					out["start"] = orig["start"] + delta
+				if orig.has("end"):
+					out["end"] = orig["end"] + delta
+		"radius":
+			var c: Vector2 = orig["center"]
+			out["radius"] = maxf(c.distance_to(pos2), 1e-6)
+	return out
+
+
+func _append_entity_lines(im: ImmediateMesh, info: Dictionary) -> void:
+	match info.get("type", ""):
+		"line":
+			im.surface_add_vertex(_to3(info["start"]))
+			im.surface_add_vertex(_to3(info["end"]))
+		"circle":
+			var c: Vector2 = info["center"]
+			var r: float = info["radius"]
+			var steps := 48
+			for i in range(steps):
+				var a0 := TAU * i / steps
+				var a1 := TAU * (i + 1) / steps
+				im.surface_add_vertex(_to3(c + Vector2(cos(a0), sin(a0)) * r))
+				im.surface_add_vertex(_to3(c + Vector2(cos(a1), sin(a1)) * r))
+		"arc":
+			var c2: Vector2 = info["center"]
+			var r2: float = info["radius"]
+			var s: float = info["start_angle"]
+			var e: float = info["end_angle"]
+			if e < s:
+				e += TAU
+			var steps2 := 32
+			for i in range(steps2):
+				var a0 := s + (e - s) * i / steps2
+				var a1 := s + (e - s) * (i + 1) / steps2
+				im.surface_add_vertex(_to3(c2 + Vector2(cos(a0), sin(a0)) * r2))
+				im.surface_add_vertex(_to3(c2 + Vector2(cos(a1), sin(a1)) * r2))
 
 
 ## Length of a line / radius of a circle/arc / distance between two entities.
@@ -1028,9 +1193,12 @@ func _redraw() -> void:
 func _update_preview() -> void:
 	var im := ImmediateMesh.new()
 	var has := false
-	if _tool_points.size() > 0 or _snap_marker != null:
+	var dragging := not _drag.is_empty()
+	if _tool_points.size() > 0 or _snap_marker != null or dragging:
 		im.surface_begin(Mesh.PRIMITIVE_LINES)
 		has = true
+	if dragging:
+		_append_entity_lines(im, _drag["preview_info"])
 	if _tool_points.size() > 0:
 		var last := _tool_points[_tool_points.size() - 1]
 		match tool:

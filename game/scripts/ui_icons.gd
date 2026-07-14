@@ -53,6 +53,8 @@ const GLYPHS := {
 	"draft": "<path d='M6 19V5h6'/><path d='M6 19h12L15 5h-3' stroke-dasharray='2 2'/>",
 	"hole": "<rect x='4' y='10' width='16' height='9'/><path d='M10 10v5h4v-5' stroke-dasharray='2 2'/><path d='M12 3.5V8M10.2 6.2 12 8l1.8-1.8'/>",
 	"area": "<rect x='5' y='5' width='14' height='14'/><path d='M5 19 19 5M5 12l7 7M12 5l7 7' stroke-opacity='0.55'/>",
+	"mate": "<rect x='4' y='5' width='16' height='5'/><rect x='4' y='14' width='16' height='5' stroke-dasharray='2 2'/><path d='M12 10v4'/>",
+	"solve": "<path d='M6 13l4 4L18 7'/><circle cx='12' cy='12' r='9' stroke-opacity='0.45'/>",
 	# --- small row actions ---
 	"add": "<path d='M12 5v14M5 12h14'/>",
 	"delete": "<path d='M6 8h12l-1 12H7zM4.5 8h15M9.5 8V5.5h5V8'/><path d='M10 11.5v5M14 11.5v5'/>",

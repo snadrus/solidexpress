@@ -18,6 +18,8 @@ var timeline: TimelinePanel
 var help_overlay: HelpOverlay
 var variables_panel: VariablesPanel
 var ops_panel: OpsPanel
+var assembly_panel: AssemblyPanel
+var view_widget: ViewWidget
 var dim_value: SpinBox
 var finish_op: OptionButton
 var alias_edit: LineEdit
@@ -278,6 +280,40 @@ func _build_ui() -> void:
 	ops_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	ui.add_child(ops_panel)
 	ops_panel.status.connect(_on_status)
+
+	# Right, second column: assembly browser (auto-hides when no instances).
+	assembly_panel = AssemblyPanel.new()
+	assembly_panel.name = "AssemblyPanel"
+	assembly_panel.view = view
+	assembly_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	assembly_panel.anchor_left = 1.0
+	assembly_panel.anchor_right = 1.0
+	assembly_panel.offset_left = -652
+	assembly_panel.offset_right = -332
+	assembly_panel.offset_top = 480
+	assembly_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	ui.add_child(assembly_panel)
+	assembly_panel.status.connect(_on_status)
+	assembly_panel.instance_selected.connect(func(id: String) -> void:
+		var node := view.instance_node(id)
+		if node != null:
+			camera.pivot = model_space.to_global(node.position)
+			camera._update_transform()
+			_on_status("Instance focused"))
+
+	# Top-right corner: clickable view widget (left of the card panel).
+	view_widget = ViewWidget.new()
+	view_widget.name = "ViewWidget"
+	view_widget.camera = camera
+	view_widget.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	view_widget.anchor_left = 1.0
+	view_widget.anchor_right = 1.0
+	view_widget.offset_left = -436
+	view_widget.offset_right = -344
+	view_widget.offset_top = 52
+	view_widget.offset_bottom = 144
+	view_widget.tooltip_text = "Click a face, edge, or corner to snap the view"
+	ui.add_child(view_widget)
 
 	# Left, below palette: feature timeline + variables.
 	timeline = TimelinePanel.new()
