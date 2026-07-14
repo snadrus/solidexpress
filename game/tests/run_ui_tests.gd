@@ -32,6 +32,7 @@ func _init() -> void:
 	test_undo_wiring(main)
 	test_sketch_mode(main)
 	await test_timeline(main)
+	test_ops_panel(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -166,6 +167,62 @@ func test_timeline(main) -> void:
 	check(absf(view.doc.body_volume(body) - vol1) < 1e-6, "body back after undo")
 	check(view.undo(), "undo param edit")
 	check(absf(view.doc.body_volume(body) - vol0) < 1e-6, "original size after second undo")
+
+
+func test_ops_panel(main) -> void:
+	print("- ops panel")
+	var view: DocumentView = main.view
+	var ops: OpsPanel = main.ops_panel
+	check(ops != null, "ops panel exists")
+
+	view.clear_selection()
+	check(not ops.visible, "hidden with no selection")
+
+	var a: String = view.insert_primitive("box", Vector3(400, 400, 0))
+	check(ops.visible and ops._body_ops.visible, "body ops shown on body selection")
+
+	# Fillet all edges shrinks volume.
+	var vol0: float = view.doc.body_volume(a)
+	ops._radius_spin.value = 2.0
+	ops._fillet_all()
+	check(view.doc.body_volume(a) < vol0, "fillet-all removed material")
+	view.doc.undo()
+
+	# Linear pattern makes count-1 copies.
+	var bodies0: int = view.doc.body_ids().size()
+	view.select_entity(a, "")
+	ops._pattern_count.value = 3
+	ops._pattern_spacing.value = 80.0
+	ops._linear_pattern()
+	check(view.doc.body_ids().size() == bodies0 + 2, "linear pattern added 2 copies")
+	view.doc.undo()
+	view.refresh()
+
+	# Shell: select the top face (body already selected, so one click refines
+	# to the face), open it, wall 2mm.
+	view.select_entity(a, "")
+	view.select_ray(Vector3(400, 400, 500), Vector3(0, 0, -1))
+	check(view.selected_face != "" and ops._face_ops.visible, "face ops shown on face selection")
+	var vol1: float = view.doc.body_volume(a)
+	ops._thickness_spin.value = 2.0
+	ops._shell()
+	check(view.doc.body_volume(a) < vol1 * 0.6, "shell hollowed the body")
+
+	# Measure between two bodies via the armed two-click flow.
+	var b: String = view.insert_primitive("box", Vector3(600, 400, 0))
+	view.select_entity(a, "")
+	ops._arm_measure()
+	view.select_entity(b, "")
+	check(ops._pending == OpsPanel.Pending.NONE, "measure pending resolved")
+
+	# Boolean fuse via armed flow: select a, arm fuse, click b.
+	var bodies1: int = view.doc.body_ids().size()
+	view.select_entity(a, "")
+	ops._arm_boolean("fuse")
+	view.select_entity(b, "")
+	check(view.doc.body_ids().size() == bodies1 - 1, "fuse consumed tool body")
+	view.doc.undo()
+	view.refresh()
 
 
 func test_sketch_mode(main) -> void:

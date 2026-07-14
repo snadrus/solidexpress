@@ -15,6 +15,7 @@ var autosave_timer: Timer
 var sketch_mode: SketchMode
 var sketch_toolbar: PanelContainer
 var timeline: TimelinePanel
+var ops_panel: OpsPanel
 var extrude_distance: SpinBox
 var _last_saved_revision := 0
 
@@ -167,6 +168,19 @@ func _build_ui() -> void:
 	card_panel.custom_minimum_size = Vector2(290, 360)
 	card_panel.add_theme_font_size_override("normal_font_size", 12)
 	card_vbox.add_child(card_panel)
+
+	# Right, below card panel: context operations for the selection.
+	ops_panel = OpsPanel.new()
+	ops_panel.name = "OpsPanel"
+	ops_panel.view = view
+	ops_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	ops_panel.anchor_left = 1.0
+	ops_panel.anchor_right = 1.0
+	ops_panel.offset_left = -320
+	ops_panel.offset_right = -12
+	ops_panel.offset_top = 432
+	ui.add_child(ops_panel)
+	ops_panel.status.connect(_on_status)
 
 	# Left, below palette: feature timeline.
 	timeline = TimelinePanel.new()
