@@ -40,6 +40,7 @@ public:
                                 const godot::String& line_b_id, double radius);
     godot::PackedStringArray offset_entities(const godot::PackedStringArray& ids,
                                              double distance);
+    bool trim_entity(const godot::String& id, double px, double py);
 
     // Geometry snapshot for rendering:
     // {type: "line", start: Vector2, end: Vector2, construction: bool} etc.

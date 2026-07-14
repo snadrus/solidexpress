@@ -101,6 +101,10 @@ PackedStringArray SxSketch::offset_entities(const PackedStringArray& ids,
     return out;
 }
 
+bool SxSketch::trim_entity(const String& id, double px, double py) {
+    return sx::sketch_tools::trim_entity(*sketch_, to_std(id), px, py);
+}
+
 Dictionary SxSketch::entity_info(const String& id) const {
     Dictionary out;
     const sx::SketchEntity* e = sketch_->entity(parse_id(id));
@@ -195,6 +199,8 @@ void SxSketch::_bind_methods() {
                          &SxSketch::fillet_corner);
     ClassDB::bind_method(D_METHOD("offset_entities", "ids", "distance"),
                          &SxSketch::offset_entities);
+    ClassDB::bind_method(D_METHOD("trim_entity", "id", "px", "py"),
+                         &SxSketch::trim_entity);
     ClassDB::bind_method(D_METHOD("entity_info", "id"), &SxSketch::entity_info);
     ClassDB::bind_method(D_METHOD("add_constraint", "type", "refs", "value"), &SxSketch::add_constraint);
     ClassDB::bind_method(D_METHOD("remove_constraint", "id"), &SxSketch::remove_constraint);

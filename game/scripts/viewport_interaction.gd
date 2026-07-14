@@ -125,6 +125,7 @@ func _sketch_input(event: InputEvent) -> void:
 			KEY_L: sketch_mode.set_tool(SketchMode.Tool.LINE)
 			KEY_R: sketch_mode.set_tool(SketchMode.Tool.RECT)
 			KEY_C: sketch_mode.set_tool(SketchMode.Tool.CIRCLE)
+			KEY_T: sketch_mode.set_tool(SketchMode.Tool.TRIM)
 			KEY_X: sketch_mode.toggle_construction_selected()
 			KEY_ESCAPE: sketch_mode.cancel()
 		accept_event()

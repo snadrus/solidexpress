@@ -8,7 +8,7 @@ signal finished(body_id: String)
 signal cancelled
 signal status(text: String)
 
-enum Tool { NONE, LINE, RECT, CIRCLE, ARC, POLYGON, SELECT }
+enum Tool { NONE, LINE, RECT, CIRCLE, ARC, POLYGON, SELECT, TRIM }
 
 signal selection_changed(ids: Array)
 
@@ -358,7 +358,8 @@ func _set_selected(ids: Array[String]) -> void:
 	selection_changed.emit(selected)
 
 
-func _select_at(pos2: Vector2) -> void:
+## Nearest entity id within PICK_TOLERANCE of pos2, or "" if none.
+func _nearest_entity_at(pos2: Vector2) -> String:
 	var best_id := ""
 	var best_d := PICK_TOLERANCE
 	for id in sketch.entity_ids():
@@ -366,6 +367,11 @@ func _select_at(pos2: Vector2) -> void:
 		if d < best_d:
 			best_d = d
 			best_id = id
+	return best_id
+
+
+func _select_at(pos2: Vector2) -> void:
+	var best_id := _nearest_entity_at(pos2)
 	if best_id == "":
 		_set_selected([])
 		return
@@ -537,6 +543,32 @@ func offset_selected(distance: float) -> Array:
 	return out
 
 
+## Trim the entity nearest to pos2 at its intersections. Returns true on success.
+func trim_at(pos2: Vector2) -> bool:
+	if not active or sketch == null:
+		status.emit("Trim failed")
+		return false
+	var id := _nearest_entity_at(pos2)
+	if id == "":
+		status.emit("Trim failed")
+		return false
+	if not sketch.trim_entity(id, pos2.x, pos2.y):
+		status.emit("Trim failed")
+		return false
+	sketch.solve()
+	# Drop selection entries that no longer exist after a replace-style trim.
+	var alive: Array[String] = []
+	for sid in selected:
+		if not sketch.entity_info(sid).is_empty():
+			alive.append(sid)
+	if alive.size() != selected.size():
+		_set_selected(alive)
+	_redraw()
+	_redraw_selected()
+	status.emit("Trimmed")
+	return true
+
+
 ## Flip construction flag on all selected entities and redraw (construction
 ## entities use a dimmer gray so the style persists across redraws).
 func toggle_construction_selected() -> void:
@@ -612,10 +644,14 @@ func _redraw_selected() -> void:
 func click(pos2: Vector2) -> void:
 	if not active:
 		return
-	pos2 = snap_point(pos2)
+	# TRIM needs the raw pick along the curve; snap would pull toward midpoints.
+	if tool != Tool.TRIM:
+		pos2 = snap_point(pos2)
 	match tool:
 		Tool.SELECT:
 			_select_at(pos2)
+		Tool.TRIM:
+			trim_at(pos2)
 		Tool.LINE:
 			_tool_points.append(pos2)
 			if _tool_points.size() >= 2:
@@ -799,9 +835,33 @@ func _format_dimension(v: float) -> String:
 	return s
 
 
+## Drop dimension annotations whose entity ids no longer exist (e.g. after trim).
+func _prune_orphan_dimensions() -> void:
+	if sketch == null:
+		dimensions.clear()
+		return
+	var alive := {}
+	for id in sketch.entity_ids():
+		alive[str(id)] = true
+	var kept: Array = []
+	for dim in dimensions:
+		if typeof(dim) != TYPE_DICTIONARY:
+			continue
+		var ids: Array = dim.get("ids", [])
+		var ok := not ids.is_empty()
+		for eid in ids:
+			if not alive.has(str(eid)):
+				ok = false
+				break
+		if ok:
+			kept.append(dim)
+	dimensions = kept
+
+
 func _redraw() -> void:
 	if sketch == null:
 		return
+	_prune_orphan_dimensions()
 	var im := ImmediateMesh.new()
 	var has := false
 	for id in sketch.entity_ids():

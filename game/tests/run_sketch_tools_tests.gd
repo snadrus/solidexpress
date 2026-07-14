@@ -42,6 +42,10 @@ func _init() -> void:
 	test_dimension_radius_label(main)
 	test_dimensions_visible_toggle(main)
 	test_dimension_labels_cleared_on_exit(main)
+	test_trim_end_segment(main)
+	test_trim_interior_split(main)
+	test_trim_empty_space(main)
+	test_trim_prunes_dimension_label(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -453,3 +457,83 @@ func test_dimension_labels_cleared_on_exit(main) -> void:
 	sm.cancel()
 	check(sm.dimensions.is_empty(), "dimensions cleared on cancel")
 	check(sm._dimension_labels.get_child_count() == 0, "label nodes freed on cancel")
+
+
+func test_trim_end_segment(main) -> void:
+	print("- TRIM end-segment shortens line at cross")
+	var sm: SketchMode = main.sketch_mode
+	main.view.clear_selection()
+	main._start_sketch()
+	var h: String = sm.sketch.add_line(0, 0, 10, 0)
+	sm.sketch.add_line(5, -5, 5, 5)
+	var n_before: int = sm.sketch.entity_ids().size()
+	sm.set_tool(SketchMode.Tool.TRIM)
+	sm.click(Vector2(8, 0))
+	check(sm.sketch.entity_ids().size() == n_before, "end trim: entity count unchanged")
+	check(not sm.sketch.entity_info(h).is_empty(), "end trim: original line id kept")
+	var info: Dictionary = sm.sketch.entity_info(h)
+	check(info["start"].distance_to(Vector2(0, 0)) < 1e-6, "end trim: start unchanged")
+	check(info["end"].distance_to(Vector2(5, 0)) < 1e-6,
+		"end trim: end moved to intersection")
+	sm.cancel()
+
+
+func test_trim_interior_split(main) -> void:
+	print("- TRIM interior between two crossers splits line")
+	var sm: SketchMode = main.sketch_mode
+	main.view.clear_selection()
+	main._start_sketch()
+	var h: String = sm.sketch.add_line(0, 0, 10, 0)
+	sm.sketch.add_line(3, -2, 3, 2)
+	sm.sketch.add_line(7, -2, 7, 2)
+	var n_before: int = sm.sketch.entity_ids().size()
+	sm.set_tool(SketchMode.Tool.TRIM)
+	sm.click(Vector2(5, 0))
+	check(sm.sketch.entity_ids().size() == n_before + 1,
+		"interior trim: entity count +1")
+	check(sm.sketch.entity_info(h).is_empty(), "interior trim: original line removed")
+	sm.cancel()
+
+
+func test_trim_empty_space(main) -> void:
+	print("- TRIM click on empty space fails without change")
+	var sm: SketchMode = main.sketch_mode
+	main.view.clear_selection()
+	main._start_sketch()
+	sm.sketch.add_line(0, 0, 10, 0)
+	sm.sketch.add_line(5, -5, 5, 5)
+	var n_before: int = sm.sketch.entity_ids().size()
+	var ids_before: PackedStringArray = sm.sketch.entity_ids()
+	sm.set_tool(SketchMode.Tool.TRIM)
+	var ok: bool = sm.trim_at(Vector2(100, 100))
+	check(not ok, "empty-space trim returns false")
+	check(sm.sketch.entity_ids().size() == n_before, "empty-space trim: count unchanged")
+	var ids_after: PackedStringArray = sm.sketch.entity_ids()
+	var same := ids_before.size() == ids_after.size()
+	if same:
+		for i in range(ids_before.size()):
+			if ids_before[i] != ids_after[i]:
+				same = false
+				break
+	check(same, "empty-space trim: entity ids unchanged")
+	sm.cancel()
+
+
+func test_trim_prunes_dimension_label(main) -> void:
+	print("- TRIM interior replaces line and prunes its dimension label")
+	var sm: SketchMode = main.sketch_mode
+	main.view.clear_selection()
+	main._start_sketch()
+	var h: String = sm.sketch.add_line(0, 0, 10, 0)
+	sm.sketch.add_line(3, -2, 3, 2)
+	sm.sketch.add_line(7, -2, 7, 2)
+	sm.dimensions.append({"type": "distance", "ids": [h], "value": 10.0})
+	sm._redraw()
+	check(sm.dimensions.size() == 1, "dimension stored before trim")
+	check(_dimension_label_texts(sm).size() == 1, "label present before trim")
+	sm.set_tool(SketchMode.Tool.TRIM)
+	sm.click(Vector2(5, 0))
+	check(sm.sketch.entity_info(h).is_empty(), "replaced line gone after interior trim")
+	check(sm.dimensions.is_empty(), "orphan dimension pruned from array")
+	check(_dimension_label_texts(sm).size() == 0, "dimension label no longer shown")
+	sm.cancel()
