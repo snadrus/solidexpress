@@ -8,7 +8,7 @@ signal finished(body_id: String)
 signal cancelled
 signal status(text: String)
 
-enum Tool { NONE, LINE, RECT, CIRCLE, SELECT }
+enum Tool { NONE, LINE, RECT, CIRCLE, ARC, POLYGON, SELECT }
 
 signal selection_changed(ids: Array)
 
@@ -18,6 +18,10 @@ var sketch: SxSketch
 var view: DocumentView
 var tool: Tool = Tool.NONE
 var active := false
+## Regular N-gon side count for the POLYGON tool (clamped 3..24).
+var polygon_sides := 6:
+	set(v):
+		polygon_sides = clampi(v, 3, 24)
 ## Feature id of the body being sketched on ("" when on the ground plane);
 ## used as the boolean target for cut/fuse finishes.
 var target_fid := ""
@@ -378,6 +382,38 @@ func click(pos2: Vector2) -> void:
 					sketch.add_circle(c.x, c.y, r)
 				_tool_points.clear()
 				_redraw()
+		Tool.ARC:
+			_tool_points.append(pos2)
+			if _tool_points.size() == 3:
+				var c := _tool_points[0]
+				var start_pt := _tool_points[1]
+				var end_pt := _tool_points[2]
+				var r := c.distance_to(start_pt)
+				if r > 1e-6:
+					var start_angle := (start_pt - c).angle()
+					var end_angle := (end_pt - c).angle()
+					sketch.add_arc(c.x, c.y, r, start_angle, end_angle)
+				_tool_points.clear()
+				_redraw()
+		Tool.POLYGON:
+			_tool_points.append(pos2)
+			if _tool_points.size() == 2:
+				var c := _tool_points[0]
+				var vertex := _tool_points[1]
+				var r := c.distance_to(vertex)
+				if r > 1e-6:
+					var n := polygon_sides
+					var start_angle := (vertex - c).angle()
+					var verts: Array[Vector2] = []
+					for i in range(n):
+						var a := start_angle + TAU * float(i) / float(n)
+						verts.append(c + Vector2(cos(a), sin(a)) * r)
+					for i in range(n):
+						var a := verts[i]
+						var b := verts[(i + 1) % n]
+						sketch.add_line(a.x, a.y, b.x, b.y)
+				_tool_points.clear()
+				_redraw()
 	_update_preview()
 
 
@@ -479,6 +515,42 @@ func _update_preview() -> void:
 					var a1 := TAU * (i + 1) / steps
 					im.surface_add_vertex(_to3(c + Vector2(cos(a0), sin(a0)) * r))
 					im.surface_add_vertex(_to3(c + Vector2(cos(a1), sin(a1)) * r))
+			Tool.ARC:
+				var c := _tool_points[0]
+				if _tool_points.size() == 1:
+					im.surface_add_vertex(_to3(c))
+					im.surface_add_vertex(_to3(_hover))
+				else:
+					var start_pt := _tool_points[1]
+					var r := c.distance_to(start_pt)
+					var s := (start_pt - c).angle()
+					var e := (_hover - c).angle()
+					if e < s:
+						e += TAU
+					var steps2 := 32
+					for i in range(steps2):
+						var a0 := s + (e - s) * i / steps2
+						var a1 := s + (e - s) * (i + 1) / steps2
+						im.surface_add_vertex(_to3(c + Vector2(cos(a0), sin(a0)) * r))
+						im.surface_add_vertex(_to3(c + Vector2(cos(a1), sin(a1)) * r))
+			Tool.POLYGON:
+				var c := _tool_points[0]
+				var r := c.distance_to(_hover)
+				var n := polygon_sides
+				var start_angle := (_hover - c).angle()
+				var steps := 48
+				for i in range(steps):
+					var a0 := TAU * i / steps
+					var a1 := TAU * (i + 1) / steps
+					im.surface_add_vertex(_to3(c + Vector2(cos(a0), sin(a0)) * r))
+					im.surface_add_vertex(_to3(c + Vector2(cos(a1), sin(a1)) * r))
+				var verts: Array[Vector2] = []
+				for i in range(n):
+					var a := start_angle + TAU * float(i) / float(n)
+					verts.append(c + Vector2(cos(a), sin(a)) * r)
+				for i in range(n):
+					im.surface_add_vertex(_to3(verts[i]))
+					im.surface_add_vertex(_to3(verts[(i + 1) % n]))
 	if has:
 		im.surface_end()
 		_preview_node.mesh = im
