@@ -33,6 +33,11 @@ func _init() -> void:
 	test_construction_binding()
 	test_toggle_construction_selected(main)
 	test_toggle_section(main)
+	test_snap_endpoint(main)
+	test_snap_midpoint(main)
+	test_snap_circle_center(main)
+	test_snap_axis_horizontal(main)
+	test_snap_disabled(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -251,3 +256,117 @@ func test_toggle_section(main) -> void:
 	check(view.section_enabled, "section_enabled true after first toggle")
 	vi.toggle_section()
 	check(not view.section_enabled, "section_enabled false after second toggle")
+
+
+func test_snap_endpoint(main) -> void:
+	print("- snap to existing line endpoint")
+	var sm: SketchMode = main.sketch_mode
+	main.view.clear_selection()
+	main._start_sketch()
+	sm.set_snap(true)
+	sm.set_tool(SketchMode.Tool.LINE)
+	var a := Vector2(0, 0)
+	var b := Vector2(40, 0)
+	sm.click(a)
+	sm.click(b)
+	sm.end_chain()
+	# Start a second line near the first line's end endpoint.
+	var near_end := b + Vector2(2.0, 1.5)  # within SNAP_RADIUS (5)
+	sm.click(near_end)
+	sm.click(Vector2(40, 30))
+	var ids: PackedStringArray = sm.sketch.entity_ids()
+	check(ids.size() == 2, "endpoint snap: two lines created")
+	var info: Dictionary = sm.sketch.entity_info(ids[1])
+	check(info["start"].distance_to(b) < 1e-6,
+		"second line start snaps to first line endpoint")
+	sm.cancel()
+
+
+func test_snap_midpoint(main) -> void:
+	print("- snap to line midpoint")
+	var sm: SketchMode = main.sketch_mode
+	main.view.clear_selection()
+	main._start_sketch()
+	sm.set_snap(true)
+	sm.set_tool(SketchMode.Tool.LINE)
+	sm.sketch.add_line(0, 0, 20, 0)
+	var mid := Vector2(10, 0)
+	var near_mid := mid + Vector2(1.0, 2.0)
+	var snapped: Vector2 = sm.snap_point(near_mid)
+	check(snapped.distance_to(mid) < 1e-6, "snap_point hits exact midpoint")
+	sm.click(near_mid)
+	sm.click(Vector2(10, 25))
+	var ids: PackedStringArray = sm.sketch.entity_ids()
+	check(ids.size() == 2, "midpoint snap: line from midpoint created")
+	var info: Dictionary = sm.sketch.entity_info(ids[1])
+	check(info["start"].distance_to(mid) < 1e-6, "new line starts at midpoint")
+	sm.cancel()
+
+
+func test_snap_circle_center(main) -> void:
+	print("- snap to circle center")
+	var sm: SketchMode = main.sketch_mode
+	main.view.clear_selection()
+	main._start_sketch()
+	sm.set_snap(true)
+	sm.set_tool(SketchMode.Tool.LINE)
+	var center := Vector2(15, 15)
+	sm.sketch.add_circle(center.x, center.y, 10.0)
+	var near_c := center + Vector2(3.0, -2.0)
+	var snapped: Vector2 = sm.snap_point(near_c)
+	check(snapped.distance_to(center) < 1e-6, "snap_point hits circle center")
+	sm.click(near_c)
+	sm.click(Vector2(40, 15))
+	var ids: PackedStringArray = sm.sketch.entity_ids()
+	check(ids.size() == 2, "center snap: circle + line")
+	var line_info: Dictionary = {}
+	for id in ids:
+		var info: Dictionary = sm.sketch.entity_info(id)
+		if info.get("type", "") == "line":
+			line_info = info
+			break
+	check(not line_info.is_empty(), "found line after center snap click")
+	check(line_info["start"].distance_to(center) < 1e-6, "line starts at circle center")
+	sm.cancel()
+
+
+func test_snap_axis_horizontal(main) -> void:
+	print("- snap axis: almost-horizontal second click")
+	var sm: SketchMode = main.sketch_mode
+	main.view.clear_selection()
+	main._start_sketch()
+	sm.set_snap(true)
+	sm.set_tool(SketchMode.Tool.LINE)
+	var p0 := Vector2(0, 10)
+	sm.click(p0)
+	# y offset within SNAP_RADIUS → should snap to same y (exact horizontal)
+	sm.click(Vector2(50, 10 + 3.0))
+	var ids: PackedStringArray = sm.sketch.entity_ids()
+	check(ids.size() == 1, "axis snap created one line")
+	var info: Dictionary = sm.sketch.entity_info(ids[0])
+	check(absf(info["start"].y - info["end"].y) < 1e-6, "line is exactly horizontal")
+	check(absf(info["end"].y - p0.y) < 1e-6, "end y matches first point y")
+	check(absf(info["end"].x - 50.0) < 1e-6, "end x kept (not snapped away)")
+	sm.cancel()
+
+
+func test_snap_disabled(main) -> void:
+	print("- set_snap(false) passes raw positions")
+	var sm: SketchMode = main.sketch_mode
+	main.view.clear_selection()
+	main._start_sketch()
+	sm.set_tool(SketchMode.Tool.LINE)
+	sm.sketch.add_line(0, 0, 40, 0)
+	sm.set_snap(false)
+	var raw := Vector2(40 + 2.0, 1.5)
+	var out: Vector2 = sm.snap_point(raw)
+	check(out.distance_to(raw) < 1e-9, "snap_point returns raw when disabled")
+	sm.click(raw)
+	sm.click(Vector2(40, 30))
+	var ids: PackedStringArray = sm.sketch.entity_ids()
+	check(ids.size() == 2, "disabled snap: two lines")
+	var info: Dictionary = sm.sketch.entity_info(ids[1])
+	check(info["start"].distance_to(raw) < 1e-6, "new line start stays at raw click")
+	check(info["start"].distance_to(Vector2(40, 0)) > 1e-3, "did not snap to endpoint")
+	sm.set_snap(true)
+	sm.cancel()

@@ -13,11 +13,14 @@ enum Tool { NONE, LINE, RECT, CIRCLE, ARC, POLYGON, SELECT }
 signal selection_changed(ids: Array)
 
 const PICK_TOLERANCE := 5.0  # model units (mm)
+const SNAP_RADIUS := PICK_TOLERANCE
 
 var sketch: SxSketch
 var view: DocumentView
 var tool: Tool = Tool.NONE
 var active := false
+## When true, click/hover positions pass through snap_point().
+var snap_enabled := true
 ## Regular N-gon side count for the POLYGON tool (clamped 3..24).
 var polygon_sides := 6:
 	set(v):
@@ -40,6 +43,8 @@ var _selected_node: MeshInstance3D
 var _selected_material: StandardMaterial3D
 var _tool_points: Array[Vector2] = []  # committed anchor points of current tool
 var _hover: Vector2 = Vector2.ZERO
+## Set by snap_point when a snap applied; drawn as a small cross in preview.
+var _snap_marker: Variant = null  # Vector2 | null
 var _line_material: StandardMaterial3D
 var _preview_material: StandardMaterial3D
 
@@ -153,6 +158,7 @@ func begin(origin: Vector3, normal: Vector3, x_hint: Vector3 = Vector3.ZERO) -> 
 func cancel() -> void:
 	active = false
 	_tool_points.clear()
+	_snap_marker = null
 	_clear_meshes()
 	cancelled.emit()
 
@@ -239,6 +245,92 @@ func set_tool(t: Tool) -> void:
 	if t != Tool.SELECT:
 		_set_selected([])
 	_update_preview()
+
+
+func set_snap(on: bool) -> void:
+	snap_enabled = on
+	if not on:
+		_snap_marker = null
+
+
+## Snap sketch-plane point to nearby geometry / axis. Priority:
+## (a) entity endpoints, (b) line midpoints & circle/arc centers, (c) H/V
+## alignment to the last in-progress tool point. When snap_enabled is false,
+## returns p unchanged.
+func snap_point(p: Vector2) -> Vector2:
+	_snap_marker = null
+	if not snap_enabled or sketch == null:
+		return p
+	# (a) endpoints
+	var best_d := SNAP_RADIUS
+	var best_pt := p
+	var found := false
+	for id in sketch.entity_ids():
+		for ep in _snap_endpoints(id):
+			var d := p.distance_to(ep)
+			if d <= best_d:
+				best_d = d
+				best_pt = ep
+				found = true
+	if found:
+		_snap_marker = best_pt
+		return best_pt
+	# (b) midpoints and centers
+	best_d = SNAP_RADIUS
+	found = false
+	for id in sketch.entity_ids():
+		for mp in _snap_mid_centers(id):
+			var d2 := p.distance_to(mp)
+			if d2 <= best_d:
+				best_d = d2
+				best_pt = mp
+				found = true
+	if found:
+		_snap_marker = best_pt
+		return best_pt
+	# (c) axis alignment from last committed tool point
+	if not _tool_points.is_empty():
+		var last: Vector2 = _tool_points[_tool_points.size() - 1]
+		var out := p
+		var snapped_axis := false
+		if absf(p.x - last.x) <= SNAP_RADIUS:
+			out.x = last.x
+			snapped_axis = true
+		if absf(p.y - last.y) <= SNAP_RADIUS:
+			out.y = last.y
+			snapped_axis = true
+		if snapped_axis:
+			_snap_marker = out
+			return out
+	return p
+
+
+func _snap_endpoints(id: String) -> Array[Vector2]:
+	var info: Dictionary = sketch.entity_info(id)
+	var out: Array[Vector2] = []
+	match info.get("type", ""):
+		"line":
+			out.append(info["start"])
+			out.append(info["end"])
+		"arc":
+			var c: Vector2 = info["center"]
+			var r: float = info["radius"]
+			out.append(c + Vector2.from_angle(info["start_angle"]) * r)
+			out.append(c + Vector2.from_angle(info["end_angle"]) * r)
+		"point":
+			out.append(info["position"])
+	return out
+
+
+func _snap_mid_centers(id: String) -> Array[Vector2]:
+	var info: Dictionary = sketch.entity_info(id)
+	var out: Array[Vector2] = []
+	match info.get("type", ""):
+		"line":
+			out.append((info["start"] + info["end"]) * 0.5)
+		"circle", "arc":
+			out.append(info["center"])
+	return out
 
 
 # --- selection & constraints ---
@@ -475,6 +567,7 @@ func _redraw_selected() -> void:
 func click(pos2: Vector2) -> void:
 	if not active:
 		return
+	pos2 = snap_point(pos2)
 	match tool:
 		Tool.SELECT:
 			_select_at(pos2)
@@ -547,7 +640,7 @@ func end_chain() -> void:
 
 
 func hover(pos2: Vector2) -> void:
-	_hover = pos2
+	_hover = snap_point(pos2)
 	_update_preview()
 
 
@@ -622,10 +715,11 @@ func _redraw() -> void:
 func _update_preview() -> void:
 	var im := ImmediateMesh.new()
 	var has := false
-	if _tool_points.size() > 0:
-		var last := _tool_points[_tool_points.size() - 1]
+	if _tool_points.size() > 0 or _snap_marker != null:
 		im.surface_begin(Mesh.PRIMITIVE_LINES)
 		has = true
+	if _tool_points.size() > 0:
+		var last := _tool_points[_tool_points.size() - 1]
 		match tool:
 			Tool.LINE:
 				im.surface_add_vertex(_to3(last))
@@ -682,6 +776,13 @@ func _update_preview() -> void:
 				for i in range(n):
 					im.surface_add_vertex(_to3(verts[i]))
 					im.surface_add_vertex(_to3(verts[(i + 1) % n]))
+	if _snap_marker != null:
+		var m: Vector2 = _snap_marker
+		const MARK := 1.5
+		im.surface_add_vertex(_to3(m + Vector2(-MARK, 0)))
+		im.surface_add_vertex(_to3(m + Vector2(MARK, 0)))
+		im.surface_add_vertex(_to3(m + Vector2(0, -MARK)))
+		im.surface_add_vertex(_to3(m + Vector2(0, MARK)))
 	if has:
 		im.surface_end()
 		_preview_node.mesh = im
