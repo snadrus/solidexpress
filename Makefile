@@ -26,6 +26,7 @@ test-godot: build import
 	$(GODOT) --headless --path game --script tests/run_sketch_tools_tests.gd
 	$(GODOT) --headless --path game --script tests/run_display_tests.gd
 	$(GODOT) --headless --path game --script tests/run_menu_tests.gd
+	$(GODOT) --headless --path game --script tests/run_workflow_tests.gd
 
 test: test-kernel test-godot
 	@echo "ALL TESTS PASSED"
