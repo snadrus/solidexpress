@@ -168,6 +168,12 @@ Round 14 test state: kernel 199 cases / 6955 assertions; Godot (20 suites): inte
 
 Round 19 test state: kernel 210 cases / 7043 assertions; Godot voice 29 + help 115 — key suites green.
 
+## Usability / how-tos (post voice bridge)
+- [x] Place trust: ghost sits on floor; Esc after palette arm; selection kept after commit+release; middle/wheel orbit via `_input` (works over docks)
+- [x] Stack-on-face: `insert_primitive` uses floor z; place ray hits body top → stack; three boxes → height 150
+- [x] How-tos: `docs/howto/place-and-orbit.md`, `stack-three-blocks.md`, `extrude-s-shape.md` + README links; `run_howto_tests.gd` (13) mirrors goals
+- [x] Place suite extended (34 checks)
+
 ## Later phases
 See friendliness plan (phases 21-27) + AI-first solver upgrade for unmatched voice.
 

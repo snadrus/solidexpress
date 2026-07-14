@@ -54,6 +54,14 @@ Useful details:
 
 PlaneGCS is built as a **shared** library (`libplanegcs.so`) to satisfy LGPL dynamic-link policy; the kernel links it through the solver seam.
 
+## How to…
+
+Short, verified walkthroughs (each ends with the automated test that proves the goal):
+
+- [Place a box and orbit](docs/howto/place-and-orbit.md) — ground placement, selection kept, middle-drag over panels
+- [Stack three blocks](docs/howto/stack-three-blocks.md) — place on top faces (total height 150 mm)
+- [Extrude an S shape](docs/howto/extrude-s-shape.md) — closed S-channel sketch → solid
+
 ## Keyboard and mouse
 
 Bindings verified in `game/scripts/orbit_camera.gd`, `viewport_interaction.gd`, and `main.gd`.
@@ -114,6 +122,14 @@ Native documents use the `.sxp` extension: a zip archive written with miniz.
 | `cards/<uuid>.md` | Per-entity semantic cards |
 
 Older archives without `datums.json` or `instances.json` still load; those sections are optional for backward compatibility.
+
+## How to…
+
+Short, verified walkthroughs (same steps exercised by `game/tests/run_howto_tests.gd`):
+
+- [Place a box and orbit](docs/howto/place-and-orbit.md)
+- [Stack three blocks](docs/howto/stack-three-blocks.md)
+- [Extrude an S-shaped profile](docs/howto/extrude-s-shape.md)
 
 ## License policy
 

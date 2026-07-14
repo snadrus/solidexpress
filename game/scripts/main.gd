@@ -231,7 +231,7 @@ func _build_ui() -> void:
 	vbox.add_child(sketch_btn)
 	vbox.add_child(HSeparator.new())
 	var hint := Label.new()
-	hint.text = "drag into scene, or\nclick then place"
+	hint.text = "drag in, or click then\nclick ground/face"
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.add_theme_font_size_override("font_size", 11)
 	hint.modulate = Color(1, 1, 1, 0.6)

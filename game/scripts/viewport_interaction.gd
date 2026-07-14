@@ -34,9 +34,19 @@ var _sketch_drag_moved := false
 ## Armed click-to-place kind, or "" when idle.
 var _place_kind := ""
 var _place_ghost: MeshInstance3D = null
+## After a place commit, skip the matching LMB release select (avoids clear-on-miss).
+var _ignore_select_release := false
 
 const CLICK_SLOP := 6.0
 const GHOST_NAME := "PlaceGhost"
+## Kernel primitive sizes used for sit-on-plane ghost offsets (half-heights).
+const PLACE_HALF_Z := {
+	"box": 25.0,
+	"cylinder": 25.0,
+	"cone": 25.0,
+	"sphere": 25.0,
+	"torus": 8.0,
+}
 
 
 func _ready() -> void:
@@ -82,11 +92,15 @@ func _can_drop_data(_at: Vector2, data: Variant) -> bool:
 
 
 func _drop_data(at: Vector2, data: Variant) -> void:
-	var gp = ground_point(at)
-	if gp == null:
-		gp = Vector3.ZERO
-	view.insert_primitive(data["sx_primitive"], gp)
-	status.emit("Inserted " + str(data["sx_primitive"]))
+	var target := _place_target(at)
+	view.insert_primitive(data["sx_primitive"], target["point"])
+	_ignore_select_release = true
+	if target.get("stacked", false):
+		status.emit("Stacked " + str(data["sx_primitive"]) + " — Middle-drag to orbit anywhere")
+	else:
+		status.emit("Inserted " + str(data["sx_primitive"]) + " — Middle-drag to orbit anywhere")
+	if target.get("need_frame", false):
+		camera.frame_contents()
 
 
 ## Arm click-to-place for `kind` (palette button click). Does not insert yet.
@@ -100,10 +114,38 @@ func _screen_center() -> Vector2:
 	return get_viewport().get_visible_rect().size * 0.5
 
 
+## Half-height offset so a centered Godot mesh sits with its floor on z=floor.
+func _ghost_sit_offset(kind: String) -> Vector3:
+	var hz: float = float(PLACE_HALF_Z.get(kind, 25.0))
+	return Vector3(0, 0, hz)
+
+
+## Resolve place floor: body hit → sit on that point's height; else ground z=0.
+func _place_target(screen_pos: Vector2) -> Dictionary:
+	var ray := _model_ray(screen_pos)
+	var hit: Dictionary = view.pick_info(ray[0], ray[1])
+	if not hit.is_empty() and hit.has("point"):
+		var pt: Vector3 = hit["point"]
+		# Snap soft stacking to the hit body's top when the click is near it.
+		var body: String = str(hit.get("body", ""))
+		if body != "":
+			var bb: Dictionary = view.doc.measure_bbox(body)
+			if not bb.is_empty():
+				var mx: Vector3 = bb["max"]
+				if pt.z >= float(mx.z) - 2.0:
+					pt = Vector3(pt.x, pt.y, float(mx.z))
+		return {"point": pt, "stacked": true, "need_frame": false}
+	var gp = ground_point(screen_pos)
+	if gp == null:
+		return {"point": Vector3.ZERO, "stacked": false, "need_frame": true}
+	return {"point": gp, "stacked": false, "need_frame": false}
+
+
 func _arm_place(kind: String) -> void:
 	_free_ghost()
 	_place_kind = kind
-	status.emit("Click to place %s (Esc to cancel)" % kind)
+	grab_focus()
+	status.emit("Click ground or a face to place %s (Esc to cancel)" % kind)
 	_place_ghost = _make_ghost(kind)
 	model_space.add_child(_place_ghost)
 	_update_ghost(_screen_center())
@@ -117,7 +159,7 @@ func _make_ghost(kind: String) -> MeshInstance3D:
 	match kind:
 		"box":
 			var bm := BoxMesh.new()
-			bm.size = Vector3(60, 60, 60)
+			bm.size = Vector3(50, 50, 50)
 			mesh = bm
 		"cylinder", "cone":
 			var cm := CylinderMesh.new()
@@ -127,14 +169,19 @@ func _make_ghost(kind: String) -> MeshInstance3D:
 			mesh = cm
 			# Godot cylinder is Y-up; model space is Z-up.
 			mi.rotation_degrees.x = 90.0
-		"sphere", "torus":
+		"sphere":
 			var sm := SphereMesh.new()
 			sm.radius = 25.0
 			sm.height = 50.0
 			mesh = sm
+		"torus":
+			var tm := SphereMesh.new()
+			tm.radius = 8.0
+			tm.height = 16.0
+			mesh = tm
 		_:
 			var fallback := BoxMesh.new()
-			fallback.size = Vector3(60, 60, 60)
+			fallback.size = Vector3(50, 50, 50)
 			mesh = fallback
 	mi.mesh = mesh
 	var mat := StandardMaterial3D.new()
@@ -148,12 +195,10 @@ func _make_ghost(kind: String) -> MeshInstance3D:
 func _update_ghost(screen_pos: Vector2) -> void:
 	if _place_ghost == null:
 		return
-	var gp = ground_point(screen_pos)
-	if gp == null:
-		_place_ghost.visible = false
-	else:
-		_place_ghost.visible = true
-		_place_ghost.position = gp
+	var target := _place_target(screen_pos)
+	var floor_pt: Vector3 = target["point"]
+	_place_ghost.visible = true
+	_place_ghost.position = floor_pt + _ghost_sit_offset(_place_kind)
 
 
 func _free_ghost() -> void:
@@ -171,15 +216,16 @@ func _disarm_place(emit_cancel: bool) -> void:
 
 func _commit_place(screen_pos: Vector2) -> void:
 	var kind := _place_kind
-	var gp = ground_point(screen_pos)
-	var need_frame := gp == null
-	if need_frame:
-		gp = Vector3.ZERO
+	var target := _place_target(screen_pos)
 	_free_ghost()
 	_place_kind = ""
-	view.insert_primitive(kind, gp)
-	status.emit("Inserted " + kind)
-	if need_frame:
+	_ignore_select_release = true
+	view.insert_primitive(kind, target["point"])
+	if target.get("stacked", false):
+		status.emit("Stacked %s on face — Middle-drag to orbit anywhere" % kind)
+	else:
+		status.emit("Inserted %s — Middle-drag to orbit anywhere" % kind)
+	if target.get("need_frame", false):
 		camera.frame_contents()
 
 
@@ -190,6 +236,9 @@ func _place_input(event: InputEvent) -> void:
 	elif event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		if not mb.pressed:
+			# Swallow the release that paired with a place-commit press.
+			if _ignore_select_release and mb.button_index == MOUSE_BUTTON_LEFT:
+				_ignore_select_release = false
 			accept_event()
 			return
 		if mb.button_index == MOUSE_BUTTON_LEFT:
@@ -200,8 +249,22 @@ func _place_input(event: InputEvent) -> void:
 			accept_event()
 
 
+## Middle-drag / wheel: handled in _input so docks never block the camera.
+func _is_camera_nav_event(event: InputEvent) -> bool:
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		return mb.button_index == MOUSE_BUTTON_WHEEL_UP \
+				or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN \
+				or mb.button_index == MOUSE_BUTTON_MIDDLE
+	if event is InputEventMouseMotion:
+		var mm := event as InputEventMouseMotion
+		return (mm.button_mask & MOUSE_BUTTON_MASK_MIDDLE) != 0
+	return false
+
+
 func _gui_input(event: InputEvent) -> void:
-	if camera.handle_input(event):
+	# Camera nav is handled in _input (reaches us even over STOP panels).
+	if _is_camera_nav_event(event):
 		accept_event()
 		return
 	if sketch_mode != null and sketch_mode.active:
@@ -219,6 +282,11 @@ func _gui_input(event: InputEvent) -> void:
 				_ctrl_click = mb.ctrl_pressed
 				_on_press(mb.position)
 			else:
+				if _ignore_select_release:
+					_ignore_select_release = false
+					_pressed = false
+					accept_event()
+					return
 				_on_release(mb.position)
 			accept_event()
 	elif event is InputEventMouseMotion and _pressed:
@@ -534,6 +602,18 @@ func toggle_section() -> void:
 
 
 func _input(event: InputEvent) -> void:
+	# Camera first — runs before Control STOP panels so orbit/zoom work over docks.
+	if camera != null and _is_camera_nav_event(event):
+		if camera.handle_input(event):
+			get_viewport().set_input_as_handled()
+			return
+	# Esc cancels place even when focus stayed on the palette button.
+	if event is InputEventKey and event.pressed and not event.echo:
+		var key := event as InputEventKey
+		if key.keycode == KEY_ESCAPE and _place_kind != "":
+			_disarm_place(true)
+			get_viewport().set_input_as_handled()
+			return
 	if event is InputEventKey and has_focus():
 		if _gui_key(event):
-			accept_event()
+			get_viewport().set_input_as_handled()

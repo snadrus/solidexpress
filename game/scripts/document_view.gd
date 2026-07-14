@@ -186,11 +186,11 @@ func cycle_display_mode() -> int:
 
 # --- creation (palette drop / click-to-place) ---
 
+## Insert a palette primitive sitting on a horizontal floor through `world_point`.
+## `world_point` is model (kernel Z-up) space: x/y = footprint center, z = floor
+## height (0 = ground plane; top of another body = stack).
 func insert_primitive(kind: String, world_point: Vector3) -> String:
-	# world_point is in model (kernel) space; primitives sit on the XY plane.
-	# Inserted through the feature graph so it appears on the timeline and
-	# stays parametrically editable.
-	var p := Vector3(world_point.x, world_point.y, 0.0)
+	var p := world_point
 	var fid := ""
 	match kind:
 		"box":
