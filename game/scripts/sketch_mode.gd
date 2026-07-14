@@ -57,6 +57,16 @@ var _preview_material: StandardMaterial3D
 const DIM_LABEL_OFFSET := 4.0  # sketch-plane units perpendicular to a distance dim
 const COLOR_ENTITY := Color(0.95, 0.95, 1.0)
 const COLOR_CONSTRUCTION := Color(0.45, 0.45, 0.48)  # dimmer/desaturated
+const COLOR_CONSTRAINED := Color(0.35, 0.85, 0.45)  # fully constrained sketch
+## Geometry within this distance of exact H/V or an existing endpoint gets an
+## inferred constraint on creation (SolidWorks-style automatic relations).
+const INFER_TOL := 0.5
+
+## Automatic constraint inference on entity creation (H/V + coincident).
+var infer_enabled := true
+## Diagnostics from the most recent solve: -1 until first solve.
+var last_dofs := -1
+var last_solve_status := ""
 
 
 func _ready() -> void:
@@ -146,6 +156,8 @@ func plane_normal() -> Vector3:
 ## in-plane X direction; pass ZERO for an automatic perpendicular (n × world-Z,
 ## or world-X when the normal is parallel to Z). Extrude follows this normal.
 func begin(origin: Vector3, normal: Vector3, x_hint: Vector3 = Vector3.ZERO) -> void:
+	last_dofs = -1
+	last_solve_status = ""
 	plane_origin = origin
 	var n := normal.normalized()
 	var x := x_hint
@@ -432,15 +444,16 @@ func constrain(type: String, value: float = 0.0) -> String:
 	if not active or selected.is_empty():
 		return ""
 	var added := false
+	var cid := ""  # id of the (last) constraint added, kept for editable dims
 	match type:
 		"horizontal", "vertical":
 			for id in selected:
 				if sketch.entity_info(id).get("type", "") == "line":
-					sketch.add_constraint(type, [{"entity": id, "role": "self"}], 0.0)
+					cid = sketch.add_constraint(type, [{"entity": id, "role": "self"}], 0.0)
 					added = true
 		"parallel", "perpendicular", "equal":
 			if selected.size() == 2:
-				sketch.add_constraint(type, [
+				cid = sketch.add_constraint(type, [
 					{"entity": selected[0], "role": "self"},
 					{"entity": selected[1], "role": "self"}], 0.0)
 				added = true
@@ -448,20 +461,20 @@ func constrain(type: String, value: float = 0.0) -> String:
 			if selected.size() == 2:
 				var pair := _closest_endpoints(selected[0], selected[1])
 				if pair.size() == 2:
-					sketch.add_constraint("coincident", [
+					cid = sketch.add_constraint("coincident", [
 						{"entity": selected[0], "role": pair[0]},
 						{"entity": selected[1], "role": pair[1]}], 0.0)
 					added = true
 		"distance":
 			if selected.size() == 1 and sketch.entity_info(selected[0]).get("type", "") == "line":
-				sketch.add_constraint("distance", [
+				cid = sketch.add_constraint("distance", [
 					{"entity": selected[0], "role": "start"},
 					{"entity": selected[0], "role": "end"}], value)
 				added = true
 			elif selected.size() == 2:
 				var pair2 := _closest_endpoints(selected[0], selected[1])
 				if pair2.size() == 2:
-					sketch.add_constraint("distance", [
+					cid = sketch.add_constraint("distance", [
 						{"entity": selected[0], "role": pair2[0]},
 						{"entity": selected[1], "role": pair2[1]}], value)
 					added = true
@@ -469,20 +482,20 @@ func constrain(type: String, value: float = 0.0) -> String:
 			for id in selected:
 				var k: String = sketch.entity_info(id).get("type", "")
 				if k == "circle" or k == "arc":
-					sketch.add_constraint("radius", [{"entity": id, "role": "self"}], value)
+					cid = sketch.add_constraint("radius", [{"entity": id, "role": "self"}], value)
 					added = true
 	if not added:
 		return ""
 	# Record dimensional constraints (distance/radius, or any with a numeric value).
 	if type == "distance" or type == "radius" or absf(value) > 0.0:
-		_record_dimension(type, selected.duplicate(), value)
-	var res: Dictionary = sketch.solve()
+		_record_dimension(type, selected.duplicate(), value, cid)
+	var res: Dictionary = run_solve()
 	_redraw()
 	_redraw_selected()
 	return res["status"]
 
 
-func _record_dimension(type: String, ids: Array, value: float) -> void:
+func _record_dimension(type: String, ids: Array, value: float, cid: String = "") -> void:
 	var id_list: Array = []
 	for id in ids:
 		id_list.append(str(id))
@@ -498,9 +511,10 @@ func _record_dimension(type: String, ids: Array, value: float) -> void:
 					same = false
 					break
 			if same:
-				dimensions[i] = {"type": type, "ids": id_list, "value": value}
+				dimensions[i] = {"type": type, "ids": id_list, "value": value,
+					"cid": cid if cid != "" else d.get("cid", "")}
 				return
-	dimensions.append({"type": type, "ids": id_list, "value": value})
+	dimensions.append({"type": type, "ids": id_list, "value": value, "cid": cid})
 
 
 ## Fillet the corner shared by two selected lines. Requires exactly two selected
@@ -517,7 +531,7 @@ func fillet_selected(radius: float) -> String:
 	if arc_id == "":
 		status.emit("Fillet failed")
 		return ""
-	sketch.solve()
+	run_solve()
 	_redraw()
 	_redraw_selected()
 	return arc_id
@@ -555,7 +569,7 @@ func trim_at(pos2: Vector2) -> bool:
 	if not sketch.trim_entity(id, pos2.x, pos2.y):
 		status.emit("Trim failed")
 		return false
-	sketch.solve()
+	run_solve()
 	# Drop selection entries that no longer exist after a replace-style trim.
 	var alive: Array[String] = []
 	for sid in selected:
@@ -657,17 +671,19 @@ func click(pos2: Vector2) -> void:
 			if _tool_points.size() >= 2:
 				var a := _tool_points[_tool_points.size() - 2]
 				var b := _tool_points[_tool_points.size() - 1]
-				sketch.add_line(a.x, a.y, b.x, b.y)
+				var lid: String = sketch.add_line(a.x, a.y, b.x, b.y)
+				_infer_line(lid, a, b)
 				_redraw()
 		Tool.RECT:
 			_tool_points.append(pos2)
 			if _tool_points.size() == 2:
 				var a := _tool_points[0]
 				var b := _tool_points[1]
-				sketch.add_line(a.x, a.y, b.x, a.y)
-				sketch.add_line(b.x, a.y, b.x, b.y)
-				sketch.add_line(b.x, b.y, a.x, b.y)
-				sketch.add_line(a.x, b.y, a.x, a.y)
+				var l1: String = sketch.add_line(a.x, a.y, b.x, a.y)
+				var l2: String = sketch.add_line(b.x, a.y, b.x, b.y)
+				var l3: String = sketch.add_line(b.x, b.y, a.x, b.y)
+				var l4: String = sketch.add_line(a.x, b.y, a.x, a.y)
+				_infer_rect(l1, l2, l3, l4)
 				_tool_points.clear()
 				_redraw()
 		Tool.CIRCLE:
@@ -714,6 +730,96 @@ func click(pos2: Vector2) -> void:
 	_update_preview()
 
 
+# --- constraint inference (automatic relations on creation) ---
+
+## Solve and remember diagnostics; all sketch-mode solves go through here so
+## DOF coloring stays current.
+func run_solve() -> Dictionary:
+	var res: Dictionary = sketch.solve()
+	last_dofs = res["dofs"]
+	last_solve_status = res["status"]
+	return res
+
+
+## New line: add horizontal/vertical when near axis-aligned, and coincident
+## constraints where its endpoints land on existing line endpoints.
+func _infer_line(lid: String, a: Vector2, b: Vector2) -> void:
+	if not infer_enabled or lid == "":
+		return
+	var added := false
+	var d := b - a
+	if d.length() > INFER_TOL:
+		if absf(d.y) <= INFER_TOL:
+			sketch.add_constraint("horizontal", [{"entity": lid, "role": "self"}], 0.0)
+			added = true
+		elif absf(d.x) <= INFER_TOL:
+			sketch.add_constraint("vertical", [{"entity": lid, "role": "self"}], 0.0)
+			added = true
+	for role_pos in [["start", a], ["end", b]]:
+		var hit := _endpoint_hit(role_pos[1], lid)
+		if hit.size() == 2:
+			sketch.add_constraint("coincident", [
+				{"entity": lid, "role": role_pos[0]},
+				{"entity": hit[0], "role": hit[1]}], 0.0)
+			added = true
+	if added:
+		run_solve()
+
+
+## Existing line endpoint within INFER_TOL of `p` (excluding `exclude_id`),
+## as [entity_id, role]; [] when none.
+func _endpoint_hit(p: Vector2, exclude_id: String) -> Array:
+	for id in sketch.entity_ids():
+		if id == exclude_id:
+			continue
+		var info: Dictionary = sketch.entity_info(id)
+		if info.get("type", "") != "line":
+			continue
+		if p.distance_to(info["start"]) <= INFER_TOL:
+			return [id, "start"]
+		if p.distance_to(info["end"]) <= INFER_TOL:
+			return [id, "end"]
+	return []
+
+
+## Rectangle: H/V on the four sides plus coincident corners, so the rect
+## stays rectangular under later edits.
+func _infer_rect(l1: String, l2: String, l3: String, l4: String) -> void:
+	if not infer_enabled or "" in [l1, l2, l3, l4]:
+		return
+	for lid in [l1, l3]:
+		sketch.add_constraint("horizontal", [{"entity": lid, "role": "self"}], 0.0)
+	for lid in [l2, l4]:
+		sketch.add_constraint("vertical", [{"entity": lid, "role": "self"}], 0.0)
+	var corners := [[l1, "end", l2, "start"], [l2, "end", l3, "start"],
+		[l3, "end", l4, "start"], [l4, "end", l1, "start"]]
+	for c in corners:
+		sketch.add_constraint("coincident", [
+			{"entity": c[0], "role": c[1]},
+			{"entity": c[2], "role": c[3]}], 0.0)
+	run_solve()
+
+
+## Change the value of a recorded dimensional constraint (by index into
+## `dimensions`) and re-solve. Returns the solve status ("" on bad index).
+func set_dimension_value(index: int, value: float) -> String:
+	if index < 0 or index >= dimensions.size():
+		return ""
+	var dim: Dictionary = dimensions[index]
+	var cid: String = dim.get("cid", "")
+	if cid == "":
+		return ""
+	if not sketch.set_constraint_value(cid, value):
+		return ""
+	dim["value"] = value
+	dimensions[index] = dim
+	var res := run_solve()
+	_redraw()
+	_redraw_selected()
+	_rebuild_dimension_labels()
+	return res["status"]
+
+
 ## Double-click or right-click ends a line chain.
 func end_chain() -> void:
 	_tool_points.clear()
@@ -748,7 +854,13 @@ func _clear_dimension_labels() -> void:
 
 
 func _entity_draw_color(info: Dictionary) -> Color:
-	return COLOR_CONSTRUCTION if info.get("construction", false) else COLOR_ENTITY
+	if info.get("construction", false):
+		return COLOR_CONSTRUCTION
+	# Fully-constrained sketches draw green (per-entity DOF isn't reported by
+	# the solver yet, so the whole sketch flips together).
+	if last_dofs == 0 and last_solve_status != "failed":
+		return COLOR_CONSTRAINED
+	return COLOR_ENTITY
 
 
 func _dimension_display_value(dim: Dictionary) -> float:
