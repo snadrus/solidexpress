@@ -20,6 +20,9 @@ var selected_body := ""
 var selected_face := ""
 var selected_edge := ""
 var display_mode := DisplayMode.SHADED_EDGES
+## True while a section (clipping) plane is active on body meshes.
+## Edge overlay lines are not clipped in v1.
+var section_enabled := false
 
 const EDGE_PICK_TOLERANCE := 2.5  # model units (mm)
 
@@ -33,6 +36,9 @@ var _selected_face_material: StandardMaterial3D
 var _edge_material: StandardMaterial3D
 var _selected_edge_material: StandardMaterial3D
 var _wireframe_hidden_material: StandardMaterial3D
+var _section_shader: Shader
+var _section_point := Vector3.ZERO
+var _section_normal := Vector3.RIGHT
 
 
 func _ready() -> void:
@@ -50,6 +56,7 @@ func _ready() -> void:
 	_wireframe_hidden_material = StandardMaterial3D.new()
 	_wireframe_hidden_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_wireframe_hidden_material.albedo_color = Color(0, 0, 0, 0)
+	_section_shader = _make_section_shader()
 	var hl_mat := StandardMaterial3D.new()
 	hl_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	hl_mat.albedo_color = SELECTED_FACE_COLOR
@@ -67,6 +74,73 @@ func _make_material(color: Color) -> StandardMaterial3D:
 	m.metallic = 0.1
 	m.roughness = 0.55
 	return m
+
+
+func _make_section_shader() -> Shader:
+	var s := Shader.new()
+	s.code = """
+shader_type spatial;
+render_mode cull_back, diffuse_lambert, specular_schlick_ggx;
+
+uniform vec4 albedo_color : source_color = vec4(0.72, 0.74, 0.78, 1.0);
+uniform vec3 section_point = vec3(0.0);
+uniform vec3 section_normal = vec3(1.0, 0.0, 0.0);
+uniform float metallic : hint_range(0.0, 1.0) = 0.1;
+uniform float roughness : hint_range(0.0, 1.0) = 0.55;
+uniform vec4 emission_color : source_color = vec4(0.0, 0.0, 0.0, 1.0);
+uniform float emission_energy : hint_range(0.0, 2.0) = 0.0;
+
+varying vec3 world_position;
+
+void vertex() {
+	world_position = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+}
+
+void fragment() {
+	// Discard the half-space in front of the section plane.
+	if (dot(world_position - section_point, section_normal) > 0.0) {
+		discard;
+	}
+	// Wireframe mode hides solid faces via transparent albedo.
+	if (albedo_color.a < 0.01) {
+		discard;
+	}
+	ALBEDO = albedo_color.rgb;
+	METALLIC = metallic;
+	ROUGHNESS = roughness;
+	EMISSION = emission_color.rgb * emission_energy;
+}
+"""
+	return s
+
+
+func _make_section_material(albedo: Color, emission: Color = Color(0, 0, 0), emission_energy: float = 0.0) -> ShaderMaterial:
+	var m := ShaderMaterial.new()
+	m.shader = _section_shader
+	m.set_shader_parameter("albedo_color", albedo)
+	m.set_shader_parameter("section_point", _section_point)
+	m.set_shader_parameter("section_normal", _section_normal)
+	m.set_shader_parameter("metallic", 0.1)
+	m.set_shader_parameter("roughness", 0.55)
+	m.set_shader_parameter("emission_color", emission)
+	m.set_shader_parameter("emission_energy", emission_energy)
+	return m
+
+
+## Enable section-view clipping. Fragments with
+## `dot(world_pos - point, normal) > 0` are discarded on body meshes.
+## Edge overlay lines are left unclipped in v1.
+func set_section_plane(point: Vector3, normal: Vector3) -> void:
+	_section_point = point
+	_section_normal = normal.normalized() if normal.length_squared() > 1e-12 else Vector3.RIGHT
+	section_enabled = true
+	_apply_selection_materials()
+
+
+## Disable section-view clipping and restore StandardMaterial3D body materials.
+func clear_section_plane() -> void:
+	section_enabled = false
+	_apply_selection_materials()
 
 
 func set_display_mode(mode: int) -> void:
@@ -417,13 +491,27 @@ func _apply_selection_materials() -> void:
 			else:
 				edges.material_override = _edge_material
 		for i in range(node.mesh.get_surface_count() if node.mesh else 0):
-			var mat: StandardMaterial3D
+			var mat: Material
 			if display_mode == DisplayMode.WIREFRAME:
-				mat = _wireframe_hidden_material
+				if section_enabled:
+					mat = _make_section_material(Color(0, 0, 0, 0))
+				else:
+					mat = _wireframe_hidden_material
 			elif body_selected and selected_face == "":
-				mat = _selected_body_material
+				if section_enabled:
+					mat = _make_section_material(SELECTED_BODY_COLOR)
+				else:
+					mat = _selected_body_material
 			elif body_selected and i < faces.size() and faces[i] == selected_face:
-				mat = _selected_face_material
+				if section_enabled:
+					mat = _make_section_material(
+						SELECTED_FACE_COLOR, SELECTED_FACE_COLOR, 0.35
+					)
+				else:
+					mat = _selected_face_material
 			else:
-				mat = base
+				if section_enabled:
+					mat = _make_section_material(base.albedo_color)
+				else:
+					mat = base
 			node.set_surface_override_material(i, mat)

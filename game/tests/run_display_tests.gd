@@ -26,6 +26,7 @@ func _init() -> void:
 	test_mode_visibilities(view)
 	test_cycle_wraps(view)
 	test_wireframe_selection(view)
+	test_section_plane(view)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -101,3 +102,56 @@ func test_wireframe_selection(view: DocumentView) -> void:
 	check(_surface_mat(view, a) == view._selected_body_material, "selected body tinted in SHADED_EDGES")
 	check(_edges_of(view, a).visible, "edges visible again in SHADED_EDGES")
 	check(_edges_of(view, a).material_override == view._edge_material, "edge tint cleared outside wireframe")
+
+
+func test_section_plane(view: DocumentView) -> void:
+	print("- section plane clipping")
+	view.clear_selection()
+	view.set_display_mode(DocumentView.DisplayMode.SHADED_EDGES)
+	var ids: PackedStringArray = view.doc.body_ids()
+	check(ids.size() == 2, "section test starts with two boxes")
+	check(not view.section_enabled, "section disabled before set")
+
+	view.set_section_plane(Vector3.ZERO, Vector3(1, 0, 0))
+	check(view.section_enabled, "section_enabled after set_section_plane")
+	for id in ids:
+		var mat := _surface_mat(view, id)
+		check(mat is ShaderMaterial, "section uses ShaderMaterial on " + id.left(8))
+		if mat is ShaderMaterial:
+			var sm := mat as ShaderMaterial
+			check(
+				sm.get_shader_parameter("section_normal").is_equal_approx(Vector3(1, 0, 0)),
+				"section normal +X for " + id.left(8)
+			)
+
+	view.clear_section_plane()
+	check(not view.section_enabled, "section_enabled false after clear")
+	for id in ids:
+		check(
+			_surface_mat(view, id) is StandardMaterial3D,
+			"clear restores StandardMaterial3D on " + id.left(8)
+		)
+
+	view.set_section_plane(Vector3.ZERO, Vector3(1, 0, 0))
+	check(view.section_enabled, "section re-enabled")
+	var c: String = view.insert_primitive("box", Vector3(200, 0, 0))
+	check(c != "", "third box inserted while section active")
+	check(_surface_mat(view, c) is ShaderMaterial, "new body gets section ShaderMaterial")
+	for id in view.doc.body_ids():
+		check(_surface_mat(view, id) is ShaderMaterial, "all bodies sectioned after rebuild " + id.left(8))
+
+	# Display-mode cycling with section active must not error.
+	view.cycle_display_mode()
+	view.cycle_display_mode()
+	view.cycle_display_mode()
+	check(view.section_enabled, "section still enabled after display-mode cycles")
+	for id in view.doc.body_ids():
+		check(_surface_mat(view, id) is ShaderMaterial, "section material survives cycle on " + id.left(8))
+
+	view.clear_section_plane()
+	check(not view.section_enabled, "final clear disables section")
+	for id in view.doc.body_ids():
+		check(
+			_surface_mat(view, id) is StandardMaterial3D,
+			"final clear restores StandardMaterial3D on " + id.left(8)
+		)
