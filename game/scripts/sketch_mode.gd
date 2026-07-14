@@ -69,11 +69,17 @@ func cancel() -> void:
 	cancelled.emit()
 
 
-## Finish the sketch and extrude by `distance` (model units).
+## Finish the sketch and extrude by `distance` (model units). Routed through
+## the feature graph: adds a sketch feature plus an extrude feature so both
+## appear on the timeline and stay editable.
 func finish_extrude(distance: float) -> void:
 	if not active:
 		return
-	var body_id: String = view.doc.extrude_sketch(sketch, distance, false)
+	var sk_fid: String = view.doc.graph_add_sketch(sketch)
+	var ex_fid: String = view.doc.graph_add_extrude(sk_fid, distance, false, "new", "")
+	if ex_fid == "":
+		view.doc.graph_remove(sk_fid)
+	var body_id: String = view.body_of_feature(ex_fid)
 	active = false
 	_tool_points.clear()
 	_clear_meshes()

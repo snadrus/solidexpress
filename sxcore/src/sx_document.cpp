@@ -4,6 +4,7 @@
 
 #include "sx/commands_boolean.hpp"
 #include "sx/commands_dress.hpp"
+#include "sx/commands_graph.hpp"
 #include "sx/commands_sketch.hpp"
 #include "sx/features.hpp"
 #include "sx/interop.hpp"
@@ -355,48 +356,68 @@ Array SxDocument::graph_features() const {
     return out;
 }
 
-String SxDocument::graph_add_primitive(const String& kind, double a, double b, double c,
-                                       const Vector3& origin) {
-    sx::Feature f;
-    f.type = sx::FeatureType::Primitive;
-    f.params = {{"kind", to_std(kind)}, {"a", a}, {"b", b}, {"c", c},
-                {"origin", {origin.x, origin.y, origin.z}}};
-    auto fid = doc_->graph().add(std::move(f));
+// Applies a graph mutation as an undoable command. `mutate` edits the graph
+// data in place (no regenerate); the command's execute performs the actual
+// regenerate. On regeneration failure the graph is rolled back to `before`
+// and false is returned.
+bool SxDocument::apply_graph_edit(const std::string& label,
+                                  const std::function<bool()>& mutate) {
+    nlohmann::json before = doc_->graph().to_json();
+    if (!mutate()) return false;
+    nlohmann::json after = doc_->graph().to_json();
     std::string err;
     if (!doc_->graph().regenerate(*doc_, &err)) {
-        sx::log::error("graph_add_primitive: " + err);
-        doc_->graph().remove(fid);
+        sx::log::error(label + ": " + err);
+        doc_->set_graph(sx::FeatureGraph::from_json(before));
         doc_->graph().regenerate(*doc_, nullptr);
-        return {};
+        return false;
     }
-    return to_gd(fid.str());
+    stack_.push(*doc_, std::make_unique<sx::GraphSnapshotCommand>(label, std::move(before),
+                                                                  std::move(after)));
+    return true;
+}
+
+String SxDocument::graph_add_primitive(const String& kind, double a, double b, double c,
+                                       const Vector3& origin) {
+    sx::EntityId fid;
+    bool ok = apply_graph_edit("add " + to_std(kind), [&] {
+        sx::Feature f;
+        f.type = sx::FeatureType::Primitive;
+        f.params = {{"kind", to_std(kind)}, {"a", a}, {"b", b}, {"c", c},
+                    {"origin", {origin.x, origin.y, origin.z}}};
+        fid = doc_->graph().add(std::move(f));
+        return true;
+    });
+    return ok ? to_gd(fid.str()) : String();
 }
 
 String SxDocument::graph_add_sketch(const Ref<SxSketch>& sketch) {
     if (sketch.is_null()) return {};
-    sx::Feature f;
-    f.type = sx::FeatureType::Sketch;
-    f.sketch = sketch->sketch();
-    return to_gd(doc_->graph().add(std::move(f)).str());
+    sx::EntityId fid;
+    bool ok = apply_graph_edit("add sketch", [&] {
+        sx::Feature f;
+        f.type = sx::FeatureType::Sketch;
+        f.sketch = sketch->sketch();
+        fid = doc_->graph().add(std::move(f));
+        return true;
+    });
+    return ok ? to_gd(fid.str()) : String();
 }
 
 String SxDocument::graph_add_extrude(const String& sketch_fid, double distance,
                                      bool symmetric, const String& op,
                                      const String& target_fid) {
-    sx::Feature f;
-    f.type = sx::FeatureType::Extrude;
-    f.params = {{"sketch", to_std(sketch_fid)}, {"distance", distance},
-                {"symmetric", symmetric}, {"op", to_std(op)}};
-    if (!target_fid.is_empty()) f.params["target"] = to_std(target_fid);
-    auto fid = doc_->graph().add(std::move(f));
-    std::string err;
-    if (!doc_->graph().regenerate(*doc_, &err)) {
-        sx::log::error("graph_add_extrude: " + err);
-        doc_->graph().remove(fid);
-        doc_->graph().regenerate(*doc_, nullptr);
-        return {};
-    }
-    return to_gd(fid.str());
+    sx::EntityId fid;
+    bool ok = apply_graph_edit("extrude", [&] {
+        sx::Feature f;
+        f.type = sx::FeatureType::Extrude;
+        f.params = {{"sketch", to_std(sketch_fid)}, {"distance", distance},
+                    {"symmetric", symmetric}, {"op", to_std(op)}};
+        if (!target_fid.is_empty()) f.params["target"] = to_std(target_fid);
+        fid = doc_->graph().add(std::move(f));
+        return true;
+    });
+    return ok ? to_gd(fid.str()) : String();
 }
 
 bool SxDocument::graph_set_params(const String& fid, const String& params_json) {
@@ -406,33 +427,21 @@ bool SxDocument::graph_set_params(const String& fid, const String& params_json) 
     } catch (...) {
         return false;
     }
-    if (!doc_->graph().set_params(parse_id(fid), std::move(p))) return false;
-    std::string err;
-    if (!doc_->graph().regenerate(*doc_, &err)) {
-        sx::log::error("graph_set_params regenerate: " + err);
-        return false;
-    }
-    return true;
+    return apply_graph_edit("edit feature", [&] {
+        return doc_->graph().set_params(parse_id(fid), std::move(p));
+    });
 }
 
 bool SxDocument::graph_set_suppressed(const String& fid, bool suppressed) {
-    if (!doc_->graph().set_suppressed(parse_id(fid), suppressed)) return false;
-    std::string err;
-    if (!doc_->graph().regenerate(*doc_, &err)) {
-        sx::log::error("graph_set_suppressed regenerate: " + err);
-        return false;
-    }
-    return true;
+    return apply_graph_edit(suppressed ? "suppress feature" : "unsuppress feature", [&] {
+        return doc_->graph().set_suppressed(parse_id(fid), suppressed);
+    });
 }
 
 bool SxDocument::graph_remove(const String& fid) {
-    if (!doc_->graph().remove(parse_id(fid))) return false;
-    std::string err;
-    if (!doc_->graph().regenerate(*doc_, &err)) {
-        sx::log::error("graph_remove regenerate: " + err);
-        return false;
-    }
-    return true;
+    return apply_graph_edit("delete feature", [&] {
+        return doc_->graph().remove(parse_id(fid));
+    });
 }
 
 Dictionary SxDocument::graph_regenerate() {

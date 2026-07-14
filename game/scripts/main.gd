@@ -14,6 +14,7 @@ var status_label: Label
 var autosave_timer: Timer
 var sketch_mode: SketchMode
 var sketch_toolbar: PanelContainer
+var timeline: TimelinePanel
 var extrude_distance: SpinBox
 var _last_saved_revision := 0
 
@@ -166,6 +167,18 @@ func _build_ui() -> void:
 	card_panel.custom_minimum_size = Vector2(290, 360)
 	card_panel.add_theme_font_size_override("normal_font_size", 12)
 	card_vbox.add_child(card_panel)
+
+	# Left, below palette: feature timeline.
+	timeline = TimelinePanel.new()
+	timeline.name = "Timeline"
+	timeline.view = view
+	timeline.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	timeline.anchor_top = 1.0
+	timeline.offset_left = 12
+	timeline.offset_top = -420
+	timeline.offset_bottom = -42
+	ui.add_child(timeline)
+	timeline.status.connect(_on_status)
 
 	# Bottom: status bar.
 	var status_bar := PanelContainer.new()

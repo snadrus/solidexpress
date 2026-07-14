@@ -3,6 +3,8 @@
 
 #include <cstdio>
 
+#include "sx/command.hpp"
+#include "sx/commands_graph.hpp"
 #include "sx/document.hpp"
 #include "sx/features.hpp"
 #include "sx/shape_utils.hpp"
@@ -232,4 +234,44 @@ TEST_CASE("feature graph: failure reports offending feature", "[features]") {
     std::string err;
     REQUIRE(!graph.regenerate(doc, &err));
     REQUIRE(err.find("BadPad") != std::string::npos);
+}
+
+TEST_CASE("graph snapshot command: undo/redo restores timeline and bodies", "[features][undo]") {
+    Document doc;
+    CommandStack stack;
+
+    // Edit 1: add a box through a snapshot command.
+    json empty = doc.graph().to_json();
+    Feature box;
+    box.type = FeatureType::Primitive;
+    box.params = {{"kind", "box"}, {"a", 10.0}, {"b", 10.0}, {"c", 10.0}};
+    auto fid = doc.graph().add(std::move(box));
+    EntityId body_id = doc.graph().feature(fid)->output_body;
+    json with_box = doc.graph().to_json();
+    stack.push(doc, std::make_unique<GraphSnapshotCommand>("add box", empty, with_box));
+    REQUIRE(doc.body(body_id) != nullptr);
+    REQUIRE(shape::volume(doc.body(body_id)->shape) == Approx(1000.0));
+
+    // Edit 2: resize the box.
+    json p = doc.graph().feature(fid)->params;
+    p["a"] = 20.0;
+    REQUIRE(doc.graph().set_params(fid, p));
+    stack.push(doc, std::make_unique<GraphSnapshotCommand>("resize", with_box,
+                                                           doc.graph().to_json()));
+    REQUIRE(shape::volume(doc.body(body_id)->shape) == Approx(2000.0));
+
+    // Undo resize: original size, stable body id.
+    REQUIRE(stack.undo(doc));
+    REQUIRE(shape::volume(doc.body(body_id)->shape) == Approx(1000.0));
+
+    // Undo add: body gone, timeline empty.
+    REQUIRE(stack.undo(doc));
+    REQUIRE(doc.body(body_id) == nullptr);
+    REQUIRE(doc.graph().timeline().empty());
+
+    // Redo both: back to the resized box under the same id.
+    REQUIRE(stack.redo(doc));
+    REQUIRE(stack.redo(doc));
+    REQUIRE(doc.body(body_id) != nullptr);
+    REQUIRE(shape::volume(doc.body(body_id)->shape) == Approx(2000.0));
 }

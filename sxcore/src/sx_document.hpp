@@ -7,6 +7,7 @@
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/packed_string_array.hpp>
 
+#include <functional>
 #include <memory>
 
 #include "sx/command.hpp"
@@ -86,7 +87,7 @@ public:
     // --- feature graph (parametric timeline) ---
     // Features are returned as Dictionaries {id, name, type, suppressed,
     // params (JSON string), output_body}. Graph mutations regenerate the
-    // document immediately; regeneration is NOT on the undo stack (v0).
+    // document immediately and are undoable (whole-graph snapshots).
     godot::Array graph_features() const;
     godot::String graph_add_primitive(const godot::String& kind, double a, double b, double c,
                                       const godot::Vector3& origin);
@@ -111,6 +112,7 @@ protected:
 private:
     godot::String add_primitive(sx::PrimitiveType type, double a, double b, double c,
                                 const godot::Vector3& origin);
+    bool apply_graph_edit(const std::string& label, const std::function<bool()>& mutate);
 
     std::unique_ptr<sx::Document> doc_;
     sx::CommandStack stack_;

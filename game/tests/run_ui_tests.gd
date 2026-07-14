@@ -31,6 +31,7 @@ func _init() -> void:
 	test_push_pull(main)
 	test_undo_wiring(main)
 	test_sketch_mode(main)
+	await test_timeline(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -125,6 +126,46 @@ func test_undo_wiring(main) -> void:
 		if view.body_node(id) != null:
 			live += 1
 	check(live == view.doc.body_ids().size(), "scene nodes exist for all bodies")
+
+
+func test_timeline(main) -> void:
+	print("- timeline panel")
+	var view: DocumentView = main.view
+	var tl: TimelinePanel = main.timeline
+	check(tl != null, "timeline panel exists")
+
+	tl.refresh()
+	await process_frame
+	var feats: Array = view.doc.graph_features()
+	check(feats.size() > 0, "timeline has features")
+	check(tl._rows.size() == feats.size(), "one row per feature")
+
+	# Find a primitive feature and edit its params through the panel.
+	var prim: Dictionary = {}
+	for f in feats:
+		if f["type"] == "primitive" and not f["suppressed"]:
+			prim = f
+			break
+	check(not prim.is_empty(), "found a primitive feature")
+	var body: String = prim["output_body"]
+	var vol0: float = view.doc.body_volume(body)
+	tl._select_feature(prim["id"])
+	check(tl._editor_box.visible, "param editor opens on select")
+	check(view.selected_body == body, "selecting feature selects its body")
+	var params: Dictionary = JSON.parse_string(tl._params_edit.text)
+	params["a"] = float(params["a"]) * 2.0
+	tl._params_edit.text = JSON.stringify(params)
+	tl._apply_params()
+	var vol1: float = view.doc.body_volume(body)
+	check(vol1 > vol0 * 1.5, "param edit grew the body (%.0f -> %.0f)" % [vol0, vol1])
+
+	# Suppress removes the body from the scene; undo brings the edit back.
+	tl._set_suppressed(prim["id"], true)
+	check(view.doc.body_volume(body) == 0.0, "suppressed body gone")
+	check(view.undo(), "undo suppress")
+	check(absf(view.doc.body_volume(body) - vol1) < 1e-6, "body back after undo")
+	check(view.undo(), "undo param edit")
+	check(absf(view.doc.body_volume(body) - vol0) < 1e-6, "original size after second undo")
 
 
 func test_sketch_mode(main) -> void:

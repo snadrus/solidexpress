@@ -49,26 +49,52 @@ func _make_material(color: Color) -> StandardMaterial3D:
 
 func insert_primitive(kind: String, world_point: Vector3) -> String:
 	# world_point is in model (kernel) space; primitives sit on the XY plane.
+	# Inserted through the feature graph so it appears on the timeline and
+	# stays parametrically editable.
 	var p := Vector3(world_point.x, world_point.y, 0.0)
-	var id := ""
+	var fid := ""
 	match kind:
 		"box":
-			id = doc.add_box(50, 50, 50, p - Vector3(25, 25, 0))
+			fid = doc.graph_add_primitive("box", 50, 50, 50, p - Vector3(25, 25, 0))
 		"cylinder":
-			id = doc.add_cylinder(25, 50, p)
+			fid = doc.graph_add_primitive("cylinder", 25, 50, 0, p)
 		"sphere":
-			id = doc.add_sphere(25, p + Vector3(0, 0, 25))
+			fid = doc.graph_add_primitive("sphere", 25, 0, 0, p + Vector3(0, 0, 25))
 		"cone":
-			id = doc.add_cone(25, 10, 50, p)
+			fid = doc.graph_add_primitive("cone", 25, 10, 50, p)
 		"torus":
-			id = doc.add_torus(30, 8, p + Vector3(0, 0, 8))
+			fid = doc.graph_add_primitive("torus", 30, 8, 0, p + Vector3(0, 0, 8))
 		_:
 			push_error("unknown primitive kind: " + kind)
 			return ""
+	var id := body_of_feature(fid)
 	_after_mutation()
 	if id != "":
 		select_entity(id, "")
 	return id
+
+
+# --- feature graph helpers ---
+
+func body_of_feature(fid: String) -> String:
+	if fid == "":
+		return ""
+	for f in doc.graph_features():
+		if f["id"] == fid:
+			return f["output_body"]
+	return ""
+
+
+func feature_of_body(body_id: String) -> String:
+	for f in doc.graph_features():
+		if f["output_body"] == body_id:
+			return f["id"]
+	return ""
+
+
+func graph_changed() -> void:
+	clear_selection()
+	_after_mutation()
 
 
 # --- selection ---
@@ -160,7 +186,14 @@ func push_pull_selected(distance: float) -> bool:
 func delete_selected() -> bool:
 	if selected_body == "":
 		return false
-	var ok := doc.delete_body(selected_body)
+	# Bodies owned by a timeline feature are deleted by removing the feature
+	# (fails if later features depend on it); free bodies delete directly.
+	var fid := feature_of_body(selected_body)
+	var ok: bool
+	if fid != "":
+		ok = doc.graph_remove(fid)
+	else:
+		ok = doc.delete_body(selected_body)
 	clear_selection()
 	_after_mutation()
 	return ok
