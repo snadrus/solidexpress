@@ -228,6 +228,11 @@ func _gui_key(event: InputEventKey) -> bool:
 				view.redo()
 				status.emit("Redo")
 				return true
+		KEY_W:
+			if not event.ctrl_pressed:
+				var mode: int = view.cycle_display_mode()
+				status.emit("Display: " + ["Shaded", "Shaded + Edges", "Wireframe"][mode])
+				return true
 	return false
 
 

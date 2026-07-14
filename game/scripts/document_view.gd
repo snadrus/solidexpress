@@ -13,10 +13,13 @@ const SELECTED_BODY_COLOR := Color(0.55, 0.68, 0.9)
 const SELECTED_FACE_COLOR := Color(1.0, 0.62, 0.15)
 const EDGE_COLOR := Color(0.12, 0.13, 0.16)
 
+enum DisplayMode { SHADED, SHADED_EDGES, WIREFRAME }
+
 var doc: SxDocument = SxDocument.new()
 var selected_body := ""
 var selected_face := ""
 var selected_edge := ""
+var display_mode := DisplayMode.SHADED_EDGES
 
 const EDGE_PICK_TOLERANCE := 2.5  # model units (mm)
 
@@ -28,6 +31,8 @@ var _base_material: StandardMaterial3D
 var _selected_body_material: StandardMaterial3D
 var _selected_face_material: StandardMaterial3D
 var _edge_material: StandardMaterial3D
+var _selected_edge_material: StandardMaterial3D
+var _wireframe_hidden_material: StandardMaterial3D
 
 
 func _ready() -> void:
@@ -39,6 +44,12 @@ func _ready() -> void:
 	_edge_material = StandardMaterial3D.new()
 	_edge_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_edge_material.albedo_color = EDGE_COLOR
+	_selected_edge_material = StandardMaterial3D.new()
+	_selected_edge_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_selected_edge_material.albedo_color = SELECTED_BODY_COLOR
+	_wireframe_hidden_material = StandardMaterial3D.new()
+	_wireframe_hidden_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_wireframe_hidden_material.albedo_color = Color(0, 0, 0, 0)
 	var hl_mat := StandardMaterial3D.new()
 	hl_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	hl_mat.albedo_color = SELECTED_FACE_COLOR
@@ -56,6 +67,16 @@ func _make_material(color: Color) -> StandardMaterial3D:
 	m.metallic = 0.1
 	m.roughness = 0.55
 	return m
+
+
+func set_display_mode(mode: int) -> void:
+	display_mode = mode
+	_apply_selection_materials()
+
+
+func cycle_display_mode() -> int:
+	set_display_mode((display_mode + 1) % 3)
+	return display_mode
 
 
 # --- creation (palette drop / click-to-place) ---
@@ -388,10 +409,21 @@ func _apply_selection_materials() -> void:
 		var faces: PackedStringArray = _face_ids.get(body_id, PackedStringArray())
 		var body_selected: bool = body_id == selected_body
 		var base: StandardMaterial3D = _body_materials.get(body_id, _base_material)
+		var edges: MeshInstance3D = node.get_node_or_null("Edges") as MeshInstance3D
+		if edges != null:
+			edges.visible = display_mode != DisplayMode.SHADED
+			if display_mode == DisplayMode.WIREFRAME and body_selected:
+				edges.material_override = _selected_edge_material
+			else:
+				edges.material_override = _edge_material
 		for i in range(node.mesh.get_surface_count() if node.mesh else 0):
-			var mat := base
-			if body_selected and selected_face == "":
+			var mat: StandardMaterial3D
+			if display_mode == DisplayMode.WIREFRAME:
+				mat = _wireframe_hidden_material
+			elif body_selected and selected_face == "":
 				mat = _selected_body_material
 			elif body_selected and i < faces.size() and faces[i] == selected_face:
 				mat = _selected_face_material
+			else:
+				mat = base
 			node.set_surface_override_material(i, mat)
