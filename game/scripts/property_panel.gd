@@ -105,12 +105,10 @@ func _ready() -> void:
 	var buttons := HBoxContainer.new()
 	buttons.alignment = BoxContainer.ALIGNMENT_CENTER
 	vbox.add_child(buttons)
-	var ok := Button.new()
-	ok.text = "OK"
+	var ok := UIIcons.button("ok", "OK", "Keep these parameter changes")
 	ok.pressed.connect(commit)
 	buttons.add_child(ok)
-	var cancel := Button.new()
-	cancel.text = "Cancel"
+	var cancel := UIIcons.button("cancel", "Cancel", "Undo all changes made in this panel")
 	cancel.pressed.connect(cancel_edits)
 	buttons.add_child(cancel)
 

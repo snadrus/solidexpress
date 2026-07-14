@@ -84,9 +84,13 @@ func _labeled_spin(parent: Container, text: String, min_v: float, max_v: float,
 	return spin
 
 
-func _op_button(parent: Container, text: String, handler: Callable) -> Button:
+func _op_button(parent: Container, text: String, handler: Callable,
+		icon_name := "", tooltip := "") -> Button:
 	var b := Button.new()
 	b.text = text
+	if icon_name != "":
+		b.icon = UIIcons.get_icon(icon_name)
+	b.tooltip_text = tooltip if tooltip != "" else text
 	b.pressed.connect(handler)
 	parent.add_child(b)
 	return b
@@ -113,6 +117,7 @@ func _build_body_ops() -> void:
 	color_lbl.add_theme_font_size_override("font_size", 11)
 	color_row.add_child(color_lbl)
 	_color_picker = ColorPickerButton.new()
+	_color_picker.tooltip_text = "Change this body's display color"
 	_color_picker.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_color_picker.edit_alpha = false
 	_color_picker.color_changed.connect(_on_color_changed)
@@ -126,6 +131,7 @@ func _build_body_ops() -> void:
 	mat_lbl.add_theme_font_size_override("font_size", 11)
 	mat_row.add_child(mat_lbl)
 	_material_option = OptionButton.new()
+	_material_option.tooltip_text = "Material (density in g/cm³) — drives mass"
 	_material_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_material_option.fit_to_longest_item = false
 	for m in view.doc.material_list():
@@ -138,17 +144,22 @@ func _build_body_ops() -> void:
 	_radius_spin = _labeled_spin(_body_ops, "Radius", 0.1, 100.0, 0.5, 2.0)
 	var round_row := HBoxContainer.new()
 	_body_ops.add_child(round_row)
-	_op_button(round_row, "Fillet", _fillet_all)
-	_op_button(round_row, "Chamfer", _chamfer_all)
+	_op_button(round_row, "Fillet", _fillet_all, "fillet",
+		"Round the selected edges (or all edges) with the radius above")
+	_op_button(round_row, "Chamfer", _chamfer_all, "chamfer",
+		"Bevel the selected edges (or all edges) by the distance above")
 
 	_body_ops.add_child(HSeparator.new())
 	_pattern_spacing = _labeled_spin(_body_ops, "Spacing", 1.0, 1000.0, 1.0, 60.0)
 	_pattern_count = _labeled_spin(_body_ops, "Count", 2, 36, 1, 3)
 	var pat_row := HBoxContainer.new()
 	_body_ops.add_child(pat_row)
-	_op_button(pat_row, "Linear", _linear_pattern)
-	_op_button(pat_row, "Circular", _circular_pattern)
-	_op_button(pat_row, "Mirror", _mirror)
+	_op_button(pat_row, "Linear", _linear_pattern, "linear_pattern",
+		"Repeat the body along X with the spacing and count above")
+	_op_button(pat_row, "Circular", _circular_pattern, "circular_pattern",
+		"Repeat the body around the Z axis with the count above")
+	_op_button(pat_row, "Mirror", _mirror, "mirror",
+		"Mirror the body across the YZ plane")
 
 	# Instance placement (direct doc mutation — not undoable in v1).
 	_body_ops.add_child(HSeparator.new())
@@ -159,36 +170,44 @@ func _build_body_ops() -> void:
 	_inst_ox = _labeled_spin(_body_ops, "Offset X", -10000.0, 10000.0, 1.0, 30.0)
 	_inst_oy = _labeled_spin(_body_ops, "Offset Y", -10000.0, 10000.0, 1.0, 0.0)
 	_inst_oz = _labeled_spin(_body_ops, "Offset Z", -10000.0, 10000.0, 1.0, 0.0)
-	_op_button(_body_ops, "Place", _place_instance)
+	_op_button(_body_ops, "Place", _place_instance, "instance",
+		"Place a linked instance of this body at the offset above")
 
 	_body_ops.add_child(HSeparator.new())
 	_offset_spin = _labeled_spin(_body_ops, "Offset", -50.0, 50.0, 0.5, 2.0)
-	_op_button(_body_ops, "Offset body", _offset)
+	_op_button(_body_ops, "Offset body", _offset, "offset",
+		"Grow or shrink the body by the offset above")
 
 	_body_ops.add_child(HSeparator.new())
 	var bool_row := HBoxContainer.new()
 	_body_ops.add_child(bool_row)
-	for op in ["fuse", "cut", "common"]:
-		var b := Button.new()
-		b.text = op.capitalize()
+	for entry in [["fuse", "Fuse: combine this body with the next one clicked"],
+			["cut", "Cut: subtract the next body clicked from this one"],
+			["common", "Common: keep only the overlap with the next body clicked"]]:
+		var op: String = entry[0]
+		var b := UIIcons.button(op, op.capitalize(), entry[1])
 		b.pressed.connect(_arm_boolean.bind(op))
 		bool_row.add_child(b)
-	_op_button(_body_ops, "Measure to...", _arm_measure)
+	_op_button(_body_ops, "Measure to...", _arm_measure, "measure",
+		"Measure distance: click the other body or face")
 	_op_button(_body_ops, "Mass properties", func() -> void:
 		var mp: Dictionary = view.doc.measure_mass(view.selected_body)
 		if mp.is_empty():
 			status.emit("No body selected")
 		else:
 			status.emit("%s: %.1f g · %.0f mm^3 · CoM %s" % [mp.get("material", "?"),
-				mp.get("mass_g", 0.0), mp.get("volume", 0.0), str(mp.get("center_of_mass"))]))
+				mp.get("mass_g", 0.0), mp.get("volume", 0.0), str(mp.get("center_of_mass"))]),
+		"mass", "Show mass, volume, and center of mass for this body")
 
 
 func _build_face_ops() -> void:
 	_thickness_spin = _labeled_spin(_face_ops, "Thickness", 0.1, 50.0, 0.5, 2.0)
-	_op_button(_face_ops, "Shell (open here)", _shell)
+	_op_button(_face_ops, "Shell (open here)", _shell, "shell",
+		"Hollow the body, removing the selected face(s) as the opening")
 	_face_ops.add_child(HSeparator.new())
 	_draft_angle_spin = _labeled_spin(_face_ops, "Draft °", 0.1, 45.0, 0.5, 3.0)
-	_op_button(_face_ops, "Apply draft", _draft)
+	_op_button(_face_ops, "Apply draft", _draft, "draft",
+		"Taper this face by the angle above (pull direction +Z)")
 	_face_ops.add_child(HSeparator.new())
 	var hole_type_row := HBoxContainer.new()
 	_face_ops.add_child(hole_type_row)
@@ -205,9 +224,11 @@ func _build_face_ops() -> void:
 	hole_type_row.add_child(_hole_type)
 	_hole_diameter = _labeled_spin(_face_ops, "Hole Ø", 0.1, 200.0, 0.5, 6.0)
 	_hole_depth = _labeled_spin(_face_ops, "Depth", 0.0, 1000.0, 1.0, 0.0)
-	_op_button(_face_ops, "Apply hole", _apply_hole)
+	_op_button(_face_ops, "Apply hole", _apply_hole, "hole",
+		"Drill the hole at the center of this face")
 	_op_button(_face_ops, "Face area", func() -> void:
-		status.emit("Area: %.2f mm^2" % view.doc.measure_face_area(view.selected_face)))
+		status.emit("Area: %.2f mm^2" % view.doc.measure_face_area(view.selected_face)),
+		"area", "Show the area of this face")
 
 
 func _on_selection_changed(body: String, face: String) -> void:

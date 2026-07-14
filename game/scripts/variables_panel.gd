@@ -44,8 +44,7 @@ func _ready() -> void:
 	_expr_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_expr_edit.text_submitted.connect(func(_t: String) -> void: _on_add())
 	add_row.add_child(_expr_edit)
-	var add_btn := Button.new()
-	add_btn.text = "Add"
+	var add_btn := UIIcons.button("add", "", "Add the variable")
 	add_btn.pressed.connect(_on_add)
 	add_row.add_child(add_btn)
 
@@ -59,12 +58,11 @@ func _ready() -> void:
 	cfg_lbl.add_theme_font_size_override("font_size", 11)
 	cfg_row.add_child(cfg_lbl)
 	_config_option = OptionButton.new()
+	_config_option.tooltip_text = "Switch configuration (regenerates the model)"
 	_config_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_config_option.item_selected.connect(_on_config_selected)
 	cfg_row.add_child(_config_option)
-	var cfg_del := Button.new()
-	cfg_del.text = "x"
-	cfg_del.tooltip_text = "Delete selected configuration"
+	var cfg_del := UIIcons.button("delete", "", "Delete the selected configuration")
 	cfg_del.pressed.connect(_on_config_delete)
 	cfg_row.add_child(cfg_del)
 	var save_row := HBoxContainer.new()
@@ -74,9 +72,7 @@ func _ready() -> void:
 	_config_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_config_name.text_submitted.connect(func(_t: String) -> void: _on_config_save())
 	save_row.add_child(_config_name)
-	var cfg_save := Button.new()
-	cfg_save.text = "Save"
-	cfg_save.tooltip_text = "Snapshot current variables under this name"
+	var cfg_save := UIIcons.button("save", "", "Snapshot current variables under this name")
 	cfg_save.pressed.connect(_on_config_save)
 	save_row.add_child(cfg_save)
 
@@ -215,9 +211,7 @@ func _make_row(entry: Dictionary) -> Control:
 	val_lbl.add_theme_font_size_override("font_size", 12)
 	row.add_child(val_lbl)
 
-	var del := Button.new()
-	del.text = "x"
-	del.tooltip_text = "Delete variable"
+	var del := UIIcons.button("delete", "", "Delete variable " + name)
 	del.pressed.connect(func() -> void: delete_variable(name))
 	row.add_child(del)
 	return row

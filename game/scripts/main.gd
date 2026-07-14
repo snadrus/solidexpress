@@ -204,8 +204,9 @@ func _build_ui() -> void:
 		btn.insert_requested.connect(interaction.insert_at_center)
 		vbox.add_child(btn)
 	vbox.add_child(HSeparator.new())
-	var sketch_btn := Button.new()
-	sketch_btn.text = "Sketch"
+	var sketch_btn := UIIcons.button("sketch", "Sketch",
+		"Start a sketch on the selected face (or the ground plane)")
+	sketch_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	sketch_btn.custom_minimum_size = Vector2(110, 44)
 	sketch_btn.pressed.connect(_start_sketch)
 	vbox.add_child(sketch_btn)
@@ -259,8 +260,8 @@ func _build_ui() -> void:
 	notes_edit.custom_minimum_size = Vector2(290, 60)
 	notes_edit.add_theme_font_size_override("font_size", 11)
 	card_vbox.add_child(notes_edit)
-	var save_card := Button.new()
-	save_card.text = "Save card text"
+	var save_card := UIIcons.button("save", "Save card text",
+		"Save the aliases and notes onto the selection's semantic card")
 	save_card.pressed.connect(func() -> void: _save_card_text(alias_edit.text, notes_edit.text))
 	card_vbox.add_child(save_card)
 
@@ -329,19 +330,22 @@ func _build_ui() -> void:
 	ui.add_child(sketch_toolbar)
 	var hbox := HBoxContainer.new()
 	sketch_toolbar.add_child(hbox)
-	for entry in [[SketchMode.Tool.SELECT, "Sel (S)"], [SketchMode.Tool.LINE, "Line (L)"],
-			[SketchMode.Tool.RECT, "Rect (R)"], [SketchMode.Tool.CIRCLE, "Circle (C)"]]:
-		var b := Button.new()
-		b.text = entry[1]
+	for entry in [[SketchMode.Tool.SELECT, "select", "Select tool (S)"],
+			[SketchMode.Tool.LINE, "line", "Line tool (L)"],
+			[SketchMode.Tool.RECT, "rect", "Rectangle tool (R)"],
+			[SketchMode.Tool.CIRCLE, "circle", "Circle tool (C)"]]:
+		var b := UIIcons.button(entry[1], "", entry[2])
 		b.pressed.connect(sketch_mode.set_tool.bind(entry[0]))
 		hbox.add_child(b)
 	hbox.add_child(VSeparator.new())
 	# Constraints (act on the SELECT tool's selection).
-	for entry in [["horizontal", "H"], ["vertical", "V"], ["parallel", "//"],
-			["perpendicular", "T"], ["equal", "="], ["coincident", "o"]]:
-		var cb := Button.new()
-		cb.text = entry[1]
-		cb.tooltip_text = entry[0]
+	for entry in [["horizontal", "Horizontal constraint"],
+			["vertical", "Vertical constraint"],
+			["parallel", "Parallel constraint (two lines)"],
+			["perpendicular", "Perpendicular constraint (two lines)"],
+			["equal", "Equal length/radius constraint"],
+			["coincident", "Coincident constraint (two points)"]]:
+		var cb := UIIcons.button(entry[0], "", entry[1])
 		cb.pressed.connect(_apply_constraint.bind(entry[0], 0.0))
 		hbox.add_child(cb)
 	dim_value = SpinBox.new()
@@ -350,9 +354,8 @@ func _build_ui() -> void:
 	dim_value.step = 0.5
 	dim_value.value = 10
 	hbox.add_child(dim_value)
-	var dim_btn := Button.new()
-	dim_btn.text = "Dim"
-	dim_btn.tooltip_text = "distance (line/two points) or radius (circle)"
+	var dim_btn := UIIcons.button("dimension", "",
+		"Apply dimension: distance (line/two points) or radius (circle)")
 	dim_btn.pressed.connect(_apply_dimension)
 	hbox.add_child(dim_btn)
 	hbox.add_child(VSeparator.new())
@@ -371,19 +374,17 @@ func _build_ui() -> void:
 		finish_op.add_item(op_name)
 	finish_op.tooltip_text = "How the result combines with the body sketched on"
 	hbox.add_child(finish_op)
-	var finish_btn := Button.new()
-	finish_btn.text = "Extrude"
+	var finish_btn := UIIcons.button("extrude", "Extrude",
+		"Extrude the sketch profile by the distance")
 	finish_btn.pressed.connect(func() -> void:
 		sketch_mode.finish_extrude(extrude_distance.value, _finish_op_name()))
 	hbox.add_child(finish_btn)
-	var revolve_btn := Button.new()
-	revolve_btn.text = "Revolve"
-	revolve_btn.tooltip_text = "Full revolve around the selected line (or sketch Y axis)"
+	var revolve_btn := UIIcons.button("revolve", "Revolve",
+		"Full revolve around the selected line (or sketch Y axis)")
 	revolve_btn.pressed.connect(func() -> void:
 		sketch_mode.finish_revolve(TAU, _finish_op_name()))
 	hbox.add_child(revolve_btn)
-	var cancel_btn := Button.new()
-	cancel_btn.text = "Cancel"
+	var cancel_btn := UIIcons.button("cancel", "", "Cancel sketch (Esc)")
 	cancel_btn.pressed.connect(sketch_mode.cancel)
 	hbox.add_child(cancel_btn)
 

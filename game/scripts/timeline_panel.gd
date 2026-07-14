@@ -59,9 +59,8 @@ func _ready() -> void:
 	_params_edit.add_theme_font_size_override("font_size", 11)
 	_params_edit.visible = false
 	_editor_box.add_child(_params_edit)
-	var apply_btn := Button.new()
+	var apply_btn := UIIcons.button("ok", "Apply", "Apply the edited JSON parameters")
 	apply_btn.name = "ApplyJson"
-	apply_btn.text = "Apply"
 	apply_btn.visible = false
 	apply_btn.pressed.connect(_apply_params)
 	_editor_box.add_child(apply_btn)
@@ -108,6 +107,7 @@ func _make_row(f: Dictionary, index: int, count: int) -> Control:
 
 	var name_btn := Button.new()
 	name_btn.text = f["name"]
+	name_btn.tooltip_text = "Select feature (click again to rename)"
 	name_btn.flat = true
 	name_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
@@ -121,29 +121,21 @@ func _make_row(f: Dictionary, index: int, count: int) -> Control:
 	)
 	row.add_child(name_btn)
 
-	var edit_btn := Button.new()
-	edit_btn.text = "e"
-	edit_btn.tooltip_text = "Rename feature"
+	var edit_btn := UIIcons.button("rename", "", "Rename feature")
 	edit_btn.pressed.connect(func() -> void: _begin_rename(fid, row, name_btn))
 	row.add_child(edit_btn)
 
-	var up := Button.new()
-	up.text = "^"
-	up.tooltip_text = "Move up"
+	var up := UIIcons.button("up", "", "Move up the timeline")
 	up.disabled = index <= 0
 	up.pressed.connect(func() -> void: _move_feature(fid, index - 1))
 	row.add_child(up)
 
-	var down := Button.new()
-	down.text = "v"
-	down.tooltip_text = "Move down"
+	var down := UIIcons.button("down", "", "Move down the timeline")
 	down.disabled = index >= count - 1
 	down.pressed.connect(func() -> void: _move_feature(fid, index + 1))
 	row.add_child(down)
 
-	var del := Button.new()
-	del.text = "x"
-	del.tooltip_text = "Delete feature"
+	var del := UIIcons.button("delete", "", "Delete feature")
 	del.pressed.connect(_delete_feature.bind(fid))
 	row.add_child(del)
 	return row
