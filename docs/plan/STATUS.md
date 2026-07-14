@@ -90,8 +90,9 @@ Godot suites: integration 97 checks, UI 114 checks, sketch 23 checks.
 
 - [x] Draft/taper kernel command ([draft], BRepOffsetAPI_DraftAngle with undo)
 
+- [x] Sketch corner fillet + entity offset tools ([sketchtools])
+
 ## In flight (background agents)
-- Sketch fillet + offset tools ([sketchtools])
 - Draft bindings + ops-panel UI
 
 ## Later phases
