@@ -98,9 +98,10 @@ Godot suites: integration 97 checks, UI 114 checks, sketch 23 checks.
 
 - [x] Section view: clipping plane via discard shader (set_section_plane/clear_section_plane)
 
+- [x] Sketch construction geometry (excluded from profiles, solves normally, JSON-persisted)
+
 ## In flight (background agents)
 - Sweep/loft timeline bindings (graph_add_sweep/graph_add_loft)
-- Sketch construction geometry
 
 ## Later phases
 Not started. See implementation plan.
