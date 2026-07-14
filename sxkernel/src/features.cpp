@@ -52,6 +52,7 @@ const char* to_string(FeatureType t) {
         case FeatureType::Boolean: return "boolean";
         case FeatureType::Fillet: return "fillet";
         case FeatureType::Chamfer: return "chamfer";
+        case FeatureType::Hole: return "hole";
         case FeatureType::Mirror: return "mirror";
         case FeatureType::LinearPattern: return "linear_pattern";
         case FeatureType::CircularPattern: return "circular_pattern";
@@ -71,6 +72,7 @@ FeatureType feature_type_from_string(const std::string& s) {
     if (s == "boolean") return FeatureType::Boolean;
     if (s == "fillet") return FeatureType::Fillet;
     if (s == "chamfer") return FeatureType::Chamfer;
+    if (s == "hole") return FeatureType::Hole;
     if (s == "mirror") return FeatureType::Mirror;
     if (s == "linear_pattern") return FeatureType::LinearPattern;
     if (s == "circular_pattern") return FeatureType::CircularPattern;
@@ -190,6 +192,66 @@ gp_Dir dir_from(const json& a) {
     double len = std::sqrt(x * x + y * y + z * z);
     if (len < 1e-15) throw std::runtime_error("zero-length direction");
     return gp_Dir(x / len, y / len, z / len);
+}
+
+// Minimal duplicate of HoleCommand tool construction (see commands_hole.cpp).
+// Owned-file constraint prevents extracting a shared helper from commands_hole.
+constexpr double k_hole_nudge = 1.0;
+constexpr double k_hole_through = 1e6;
+
+shape::Placement hole_ax_placement(const gp_Pnt& origin, const gp_Dir& z) {
+    shape::Placement p;
+    p.origin = {origin.X(), origin.Y(), origin.Z()};
+    p.z_dir = {z.X(), z.Y(), z.Z()};
+    const gp_Dir ref = (std::abs(z.Dot(gp_Dir(0, 0, 1))) < 0.9) ? gp_Dir(0, 0, 1)
+                                                                  : gp_Dir(1, 0, 0);
+    const gp_Dir x = z.Crossed(ref);
+    p.x_dir = {x.X(), x.Y(), x.Z()};
+    return p;
+}
+
+TopoDS_Shape build_feature_hole_tool(const gp_Pnt& position, const gp_Dir& direction,
+                                     double diameter, double depth, const std::string& type,
+                                     double cb_diameter, double cb_depth, double cs_diameter,
+                                     double cs_angle_deg) {
+    const double radius = diameter * 0.5;
+    if (radius <= 0.0 || depth <= 0.0) return {};
+
+    const gp_Pnt origin = position.Translated(gp_Vec(direction) * (-k_hole_nudge));
+    const double cyl_h = depth + k_hole_nudge;
+    const auto place = hole_ax_placement(origin, direction);
+
+    TopoDS_Shape tool = shape::make_cylinder(radius, cyl_h, place);
+    if (tool.IsNull()) return {};
+
+    if (type == "simple") return tool;
+
+    if (type == "counterbore") {
+        const double cb_r = cb_diameter * 0.5;
+        if (cb_r <= radius || cb_depth <= 0.0) return {};
+        TopoDS_Shape cb = shape::make_cylinder(cb_r, cb_depth + k_hole_nudge, place);
+        BRepAlgoAPI_Fuse fuse(tool, cb);
+        if (!fuse.IsDone()) return {};
+        return fuse.Shape();
+    }
+
+    if (type == "countersink") {
+        const double cs_r = cs_diameter * 0.5;
+        const double angle = cs_angle_deg * M_PI / 180.0;
+        if (cs_r <= radius || angle <= 0.0 || angle >= M_PI) return {};
+        const double half = angle * 0.5;
+        const double tan_half = std::tan(half);
+        if (tan_half <= 1e-12) return {};
+        const double cs_h = (cs_r - radius) / tan_half;
+        if (cs_h <= 0.0) return {};
+        const double cone_h = cs_h + k_hole_nudge;
+        const double r2 = std::max(0.0, cs_r - cone_h * tan_half);
+        TopoDS_Shape cone = shape::make_cone(cs_r, r2, cone_h, place);
+        BRepAlgoAPI_Fuse fuse(tool, cone);
+        if (!fuse.IsDone()) return {};
+        return fuse.Shape();
+    }
+    return {};
 }
 
 void ensure_pattern_slots(Feature& f, int count, Document& doc) {
@@ -379,6 +441,31 @@ bool FeatureGraph::apply(Document& doc, Feature& f, std::string* err) {
                     result = mk.Shape();
                 }
                 if (!shape::is_valid(result)) return fail("result invalid");
+                doc.replace_body_shape(target, result);
+                return true;
+            }
+
+            case FeatureType::Hole: {
+                EntityId target = find_feature_body("target");
+                const Body* tb = doc.body(target);
+                if (!tb) return fail("missing target body");
+                double diameter = f.params.value("diameter", 0.0);
+                if (diameter <= 0.0) return fail("invalid diameter");
+                double depth_param = f.params.value("depth", 0.0);
+                double depth = depth_param > 0.0 ? depth_param : k_hole_through;
+                std::string htype = f.params.value("type", "simple");
+                TopoDS_Shape tool = build_feature_hole_tool(
+                    pnt_from(f.params.at("position")), dir_from(f.params.at("direction")),
+                    diameter, depth, htype, f.params.value("cb_diameter", 0.0),
+                    f.params.value("cb_depth", 0.0), f.params.value("cs_diameter", 0.0),
+                    f.params.value("cs_angle_deg", 90.0));
+                if (tool.IsNull() || !shape::is_valid(tool)) return fail("hole tool failed");
+                BRepAlgoAPI_Cut cut(tb->shape, tool);
+                if (!cut.IsDone()) return fail("hole cut failed");
+                TopoDS_Shape result = cut.Shape();
+                if (result.IsNull() || !shape::is_valid(result)) return fail("hole result invalid");
+                if (shape::count(result).solids < 1 || shape::volume(result) <= 0.0)
+                    return fail("hole destroyed the solid");
                 doc.replace_body_shape(target, result);
                 return true;
             }

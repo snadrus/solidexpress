@@ -710,6 +710,33 @@ String SxDocument::graph_add_chamfer(const String& target_fid, const PackedStrin
     return graph_add_dressup(false, target_fid, edge_ids, distance);
 }
 
+String SxDocument::graph_add_hole(const String& target_fid, const String& type,
+                                  const Vector3& position, const Vector3& direction,
+                                  float diameter, float depth, float cb_diameter, float cb_depth,
+                                  float cs_diameter, float cs_angle_deg) {
+    if (diameter <= 0.0f) return {};
+    std::string htype = to_std(type);
+    if (htype != "simple" && htype != "counterbore" && htype != "countersink") return {};
+    sx::EntityId fid;
+    bool ok = apply_graph_edit("hole", [&] {
+        sx::Feature f;
+        f.type = sx::FeatureType::Hole;
+        f.params = {{"target", to_std(target_fid)},
+                    {"type", htype},
+                    {"position", {position.x, position.y, position.z}},
+                    {"direction", {direction.x, direction.y, direction.z}},
+                    {"diameter", static_cast<double>(diameter)},
+                    {"depth", static_cast<double>(depth)},
+                    {"cb_diameter", static_cast<double>(cb_diameter)},
+                    {"cb_depth", static_cast<double>(cb_depth)},
+                    {"cs_diameter", static_cast<double>(cs_diameter)},
+                    {"cs_angle_deg", static_cast<double>(cs_angle_deg)}};
+        fid = doc_->graph().add(std::move(f));
+        return true;
+    });
+    return ok ? to_gd(fid.str()) : String();
+}
+
 bool SxDocument::graph_set_params(const String& fid, const String& params_json) {
     nlohmann::json p;
     try {
@@ -874,6 +901,10 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("graph_add_loft", "sketch_fids", "ruled"), &SxDocument::graph_add_loft);
     ClassDB::bind_method(D_METHOD("graph_add_fillet", "target_fid", "edge_ids", "radius"), &SxDocument::graph_add_fillet);
     ClassDB::bind_method(D_METHOD("graph_add_chamfer", "target_fid", "edge_ids", "distance"), &SxDocument::graph_add_chamfer);
+    ClassDB::bind_method(D_METHOD("graph_add_hole", "target_fid", "type", "position", "direction",
+                                  "diameter", "depth", "cb_diameter", "cb_depth", "cs_diameter",
+                                  "cs_angle_deg"),
+                         &SxDocument::graph_add_hole);
     ClassDB::bind_method(D_METHOD("graph_set_params", "fid", "params_json"), &SxDocument::graph_set_params);
     ClassDB::bind_method(D_METHOD("graph_set_suppressed", "fid", "suppressed"), &SxDocument::graph_set_suppressed);
     ClassDB::bind_method(D_METHOD("graph_remove", "fid"), &SxDocument::graph_remove);

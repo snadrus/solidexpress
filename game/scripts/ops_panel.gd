@@ -21,6 +21,9 @@ var _pattern_spacing: SpinBox
 var _offset_spin: SpinBox
 var _thickness_spin: SpinBox
 var _draft_angle_spin: SpinBox
+var _hole_type: OptionButton
+var _hole_diameter: SpinBox
+var _hole_depth: SpinBox
 var _boolean_op := "fuse"
 var _pending: Pending = Pending.NONE
 var _pending_first := ""  # armed source entity (body for boolean, any for measure)
@@ -137,6 +140,23 @@ func _build_face_ops() -> void:
 	_face_ops.add_child(HSeparator.new())
 	_draft_angle_spin = _labeled_spin(_face_ops, "Draft °", 0.1, 45.0, 0.5, 3.0)
 	_op_button(_face_ops, "Apply draft", _draft)
+	_face_ops.add_child(HSeparator.new())
+	var hole_type_row := HBoxContainer.new()
+	_face_ops.add_child(hole_type_row)
+	var hole_type_lbl := Label.new()
+	hole_type_lbl.text = "Hole type"
+	hole_type_lbl.custom_minimum_size = Vector2(80, 0)
+	hole_type_lbl.add_theme_font_size_override("font_size", 11)
+	hole_type_row.add_child(hole_type_lbl)
+	_hole_type = OptionButton.new()
+	_hole_type.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_hole_type.add_item("Simple", 0)
+	_hole_type.add_item("Counterbore", 1)
+	_hole_type.add_item("Countersink", 2)
+	hole_type_row.add_child(_hole_type)
+	_hole_diameter = _labeled_spin(_face_ops, "Hole Ø", 0.1, 200.0, 0.5, 6.0)
+	_hole_depth = _labeled_spin(_face_ops, "Depth", 0.0, 1000.0, 1.0, 0.0)
+	_op_button(_face_ops, "Apply hole", _apply_hole)
 	_op_button(_face_ops, "Face area", func() -> void:
 		status.emit("Area: %.2f mm^2" % view.doc.measure_face_area(view.selected_face)))
 
@@ -289,6 +309,51 @@ func _draft() -> bool:
 		status.emit("Draft %.1f° applied" % angle)
 		return true
 	status.emit("Draft failed")
+	return false
+
+
+func _apply_hole() -> bool:
+	var face := view.selected_face
+	var body := view.selected_body
+	if face == "" or body == "":
+		return false
+	var target_fid := view.feature_of_body(body)
+	if target_fid == "":
+		status.emit("Hole needs a timeline body")
+		return false
+	var face_bb: Dictionary = view.doc.measure_bbox(face)
+	if face_bb.is_empty():
+		status.emit("Hole failed (no face bbox)")
+		return false
+	var fmn: Vector3 = face_bb["min"]
+	var fmx: Vector3 = face_bb["max"]
+	var position := (fmn + fmx) * 0.5
+	# Outward face normal → reverse so direction points into the material.
+	var outward: Vector3 = view.selected_face_normal()
+	var direction: Vector3
+	if outward.length_squared() > 1e-12:
+		direction = -outward.normalized()
+	else:
+		var body_bb: Dictionary = view.doc.measure_bbox(body)
+		if body_bb.is_empty():
+			status.emit("Hole failed (no body bbox)")
+			return false
+		var bmn: Vector3 = body_bb["min"]
+		var bmx: Vector3 = body_bb["max"]
+		var body_center := (bmn + bmx) * 0.5
+		direction = (body_center - position).normalized()
+	var d: float = _hole_diameter.value
+	var depth: float = _hole_depth.value
+	var type_names := ["simple", "counterbore", "countersink"]
+	var htype: String = type_names[_hole_type.selected]
+	var hole_fid: String = view.doc.graph_add_hole(
+		target_fid, htype, position, direction, d, depth,
+		1.6 * d, 0.5 * d, 2.0 * d, 90.0)
+	if hole_fid != "":
+		view.graph_changed()
+		status.emit("Hole Ø%.1f applied" % d)
+		return true
+	status.emit("Hole failed")
 	return false
 
 

@@ -158,6 +158,12 @@ public:
                                    const godot::PackedStringArray& edge_ids, double radius);
     godot::String graph_add_chamfer(const godot::String& target_fid,
                                     const godot::PackedStringArray& edge_ids, double distance);
+    // Drill a parametric hole into a timeline body's output. type:
+    // "simple" | "counterbore" | "countersink". depth <= 0 = through-all.
+    godot::String graph_add_hole(const godot::String& target_fid, const godot::String& type,
+                                 const godot::Vector3& position, const godot::Vector3& direction,
+                                 float diameter, float depth, float cb_diameter, float cb_depth,
+                                 float cs_diameter, float cs_angle_deg);
     bool graph_set_params(const godot::String& fid, const godot::String& params_json);
     bool graph_set_suppressed(const godot::String& fid, bool suppressed);
     bool graph_remove(const godot::String& fid);

@@ -43,6 +43,7 @@ func _init() -> void:
 	test_draft(main)
 	test_graph_sweep_loft()
 	test_datums(main)
+	test_hole(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -656,3 +657,42 @@ func test_datums(main) -> void:
 	check(view.datum_node(plane_id) != null, "plane visual after reload")
 	check(view.datum_node(point_id) != null, "point visual after reload")
 	DirAccess.remove_absolute(path)
+
+
+func test_hole(main) -> void:
+	print("- hole via ops panel")
+	var view: DocumentView = main.view
+	var ops: OpsPanel = main.ops_panel
+	view.new_document()
+	# Graph box: 50^3 with origin at (-25,-25,0) so top face center is (0,0,50).
+	var box_fid: String = view.doc.graph_add_primitive("box", 50.0, 50.0, 50.0, Vector3(-25, -25, 0))
+	check(box_fid != "", "box feature added")
+	var body: String = ""
+	for f in view.doc.graph_features():
+		if f["id"] == box_fid:
+			body = f["output_body"]
+	check(body != "", "box has output_body")
+	view.refresh()
+	view.select_entity(body, "")
+	# Top face (+Z).
+	view.select_ray(Vector3(0, 0, 500), Vector3(0, 0, -1))
+	check(view.selected_face != "" and ops._face_ops.visible, "top face selected for hole")
+	var n := view.selected_face_normal()
+	check(n.distance_to(Vector3(0, 0, 1)) < 0.01, "selected +Z top face")
+
+	var vol0: float = view.doc.body_volume(body)
+	var feats0: int = view.doc.graph_features().size()
+	ops._hole_type.select(0)  # Simple
+	ops._hole_diameter.value = 6.0
+	ops._hole_depth.value = 0.0  # through-all
+	check(ops._apply_hole(), "hole apply returned true")
+	var vol1: float = view.doc.body_volume(body)
+	check(vol1 < vol0, "hole decreased volume (%.0f -> %.0f)" % [vol0, vol1])
+	check(view.doc.graph_features().size() == feats0 + 1, "timeline gained a Hole feature")
+	var has_hole := false
+	for f in view.doc.graph_features():
+		if f["type"] == "hole":
+			has_hole = true
+	check(has_hole, "hole feature on timeline")
+	check(view.doc.undo(), "undo hole")
+	check(absf(view.doc.body_volume(body) - vol0) < 1e-6, "undo restored original volume")

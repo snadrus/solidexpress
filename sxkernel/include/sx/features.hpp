@@ -31,6 +31,10 @@ enum class FeatureType {
     Boolean,    // params: {op: "fuse|cut|common", target: <fid>, tool: <fid>}
     Fillet,     // params: {target: <fid>, radius, edges: [1-based map indices]}
     Chamfer,    // params: {target: <fid>, distance, edges: [...]}
+    Hole,       // params: {target: <fid>, type: "simple|counterbore|countersink",
+                //          position: [x,y,z], direction: [x,y,z], diameter, depth
+                //          (<=0 = through-all), cb_diameter, cb_depth,
+                //          cs_diameter, cs_angle_deg}
     Mirror,     // params: {target: <fid>, plane_point: [x,y,z], plane_normal: [x,y,z]}
     LinearPattern,   // params: {target, direction: [x,y,z], spacing, count}
     CircularPattern, // params: {target, axis_point, axis_dir, count, total_angle}
