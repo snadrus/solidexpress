@@ -127,6 +127,11 @@ void Sketch::set_construction(const EntityId& id, bool construction) {
         }
 }
 
+bool Sketch::is_construction(const EntityId& id) const {
+    const SketchEntity* e = entity(id);
+    return e != nullptr && e->construction;
+}
+
 const SketchEntity* Sketch::entity(const EntityId& id) const {
     for (const auto& e : entities_)
         if (e.id == id) return &e;

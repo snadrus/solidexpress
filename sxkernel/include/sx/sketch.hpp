@@ -87,6 +87,7 @@ public:
     EntityId add_arc(double cx, double cy, double r, double start_angle, double end_angle);
     bool remove_entity(const EntityId& id);  // drops dependent constraints too
     void set_construction(const EntityId& id, bool construction);
+    bool is_construction(const EntityId& id) const;
 
     const SketchEntity* entity(const EntityId& id) const;
     const std::vector<SketchEntity>& entities() const { return entities_; }
