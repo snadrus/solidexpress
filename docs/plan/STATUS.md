@@ -65,7 +65,16 @@ Kernel suite: 72 cases / 5678 assertions.
 - [x] SxDocument bindings: mirror_body, linear/circular_pattern, rotate_body, shell_body, offset_body, measure_* (distance/bbox/mass/edge/face/angle)
 - [x] OpsPanel (context ops on selection): fillet/chamfer all edges, mirror, patterns, offset, shell-from-face, armed two-click boolean + measure flows
 
-Godot suites: integration 97 checks, UI 65 checks, sketch 23 checks.
+Godot suites: integration 97 checks, UI 114 checks, sketch 23 checks.
+
+## Phase 5: workflow depth
+- [x] Sketch select tool + constraint toolbar (H/V/parallel/perpendicular/equal/coincident, driving dims with live PlaneGCS solve)
+- [x] Revolve + cut/fuse finish modes via the graph (target = body sketched on; parametric cut depth)
+- [x] Editable card aliases/notes in the panel; free text survives rebuilds (naming service)
+- [x] Edge selection (pick near edge, highlight, edge card) + single-edge fillet/chamfer
+- [x] Fillet/chamfer on timeline bodies recorded as parametric graph features
+- [x] File menu: New/Open/Save/Save As (.sxp), STEP import/export, STL export
+- [x] Standard views (1/2/3/7) + zoom-to-fit (F)
 
 ## In flight (background agents, round 3)
 - Sweep/loft commands ([sweep])
