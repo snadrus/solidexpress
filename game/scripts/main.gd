@@ -16,6 +16,7 @@ var sketch_mode: SketchMode
 var sketch_toolbar: PanelContainer
 var timeline: TimelinePanel
 var ops_panel: OpsPanel
+var dim_value: SpinBox
 var extrude_distance: SpinBox
 var _last_saved_revision := 0
 
@@ -218,12 +219,32 @@ func _build_ui() -> void:
 	ui.add_child(sketch_toolbar)
 	var hbox := HBoxContainer.new()
 	sketch_toolbar.add_child(hbox)
-	for entry in [[SketchMode.Tool.LINE, "Line (L)"], [SketchMode.Tool.RECT, "Rect (R)"],
-			[SketchMode.Tool.CIRCLE, "Circle (C)"]]:
+	for entry in [[SketchMode.Tool.SELECT, "Sel (S)"], [SketchMode.Tool.LINE, "Line (L)"],
+			[SketchMode.Tool.RECT, "Rect (R)"], [SketchMode.Tool.CIRCLE, "Circle (C)"]]:
 		var b := Button.new()
 		b.text = entry[1]
 		b.pressed.connect(sketch_mode.set_tool.bind(entry[0]))
 		hbox.add_child(b)
+	hbox.add_child(VSeparator.new())
+	# Constraints (act on the SELECT tool's selection).
+	for entry in [["horizontal", "H"], ["vertical", "V"], ["parallel", "//"],
+			["perpendicular", "T"], ["equal", "="], ["coincident", "o"]]:
+		var cb := Button.new()
+		cb.text = entry[1]
+		cb.tooltip_text = entry[0]
+		cb.pressed.connect(_apply_constraint.bind(entry[0], 0.0))
+		hbox.add_child(cb)
+	dim_value = SpinBox.new()
+	dim_value.min_value = 0.01
+	dim_value.max_value = 10000
+	dim_value.step = 0.5
+	dim_value.value = 10
+	hbox.add_child(dim_value)
+	var dim_btn := Button.new()
+	dim_btn.text = "Dim"
+	dim_btn.tooltip_text = "distance (line/two points) or radius (circle)"
+	dim_btn.pressed.connect(_apply_dimension)
+	hbox.add_child(dim_btn)
 	hbox.add_child(VSeparator.new())
 	var dist_label := Label.new()
 	dist_label.text = "Extrude:"
@@ -250,6 +271,34 @@ func _build_ui() -> void:
 	sketch_mode.status.connect(_on_status)
 	sketch_mode.finished.connect(func(_id: String) -> void: sketch_toolbar.visible = false)
 	sketch_mode.cancelled.connect(func() -> void: sketch_toolbar.visible = false)
+	sketch_mode.selection_changed.connect(_on_sketch_selection)
+
+
+func _apply_constraint(type: String, value: float) -> void:
+	var result := sketch_mode.constrain(type, value)
+	if result == "":
+		_on_status("Select entities with the Sel tool first (%s)" % type)
+	else:
+		_on_status("%s: %s" % [type, result])
+
+
+func _apply_dimension() -> void:
+	var kind := "distance"
+	if sketch_mode.selected.size() == 1:
+		var t: String = sketch_mode.sketch.entity_info(sketch_mode.selected[0]).get("type", "")
+		if t == "circle" or t == "arc":
+			kind = "radius"
+	_apply_constraint(kind, dim_value.value)
+
+
+func _on_sketch_selection(ids: Array) -> void:
+	var v := sketch_mode.measured_value()
+	if v > 0.0:
+		dim_value.value = v
+	if ids.is_empty():
+		_on_status("Sketch selection cleared")
+	else:
+		_on_status("%d sketch entities selected" % ids.size())
 
 
 func _build_autosave() -> void:

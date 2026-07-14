@@ -33,6 +33,7 @@ func _init() -> void:
 	test_sketch_mode(main)
 	await test_timeline(main)
 	test_ops_panel(main)
+	test_sketch_constraints(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -167,6 +168,43 @@ func test_timeline(main) -> void:
 	check(absf(view.doc.body_volume(body) - vol1) < 1e-6, "body back after undo")
 	check(view.undo(), "undo param edit")
 	check(absf(view.doc.body_volume(body) - vol0) < 1e-6, "original size after second undo")
+
+
+func test_sketch_constraints(main) -> void:
+	print("- sketch select tool + constraints")
+	var sm: SketchMode = main.sketch_mode
+	main.view.clear_selection()
+	main._start_sketch()
+
+	# Rough quadrilateral, roughly axis-aligned.
+	sm.set_tool(SketchMode.Tool.LINE)
+	sm.click(Vector2(0, 0)); sm.click(Vector2(52, 3))
+	sm.click(Vector2(51, 32)); sm.click(Vector2(-2, 29))
+	sm.click(Vector2(0, 0))
+	sm.end_chain()
+	check(sm.sketch.entity_ids().size() == 4, "four lines drawn")
+
+	# Select the bottom line, make it horizontal, dimension it to 50.
+	sm.set_tool(SketchMode.Tool.SELECT)
+	sm.click(Vector2(25, 1))
+	check(sm.selected.size() == 1, "bottom line selected")
+	check(sm.measured_value() > 40.0, "measured length pre-filled")
+	check(sm.constrain("horizontal") == "success", "horizontal solves")
+	check(sm.constrain("distance", 50.0) == "success", "length dim solves")
+	var info: Dictionary = sm.sketch.entity_info(sm.selected[0])
+	check(absf(info["start"].y - info["end"].y) < 1e-6, "line is horizontal")
+	check(absf((info["end"] - info["start"]).length() - 50.0) < 1e-6, "line is 50 long")
+
+	# Select two adjacent lines, apply perpendicular.
+	sm.click(Vector2(51, 16))
+	check(sm.selected.size() == 2, "two lines selected")
+	check(sm.constrain("perpendicular") == "success", "perpendicular solves")
+
+	# Empty click clears the selection; constraint without selection is a no-op.
+	sm.click(Vector2(500, 500))
+	check(sm.selected.is_empty(), "empty click clears selection")
+	check(sm.constrain("horizontal") == "", "constrain with no selection is no-op")
+	sm.cancel()
 
 
 func test_ops_panel(main) -> void:

@@ -8,7 +8,11 @@ signal finished(body_id: String)
 signal cancelled
 signal status(text: String)
 
-enum Tool { NONE, LINE, RECT, CIRCLE }
+enum Tool { NONE, LINE, RECT, CIRCLE, SELECT }
+
+signal selection_changed(ids: Array)
+
+const PICK_TOLERANCE := 5.0  # model units (mm)
 
 var sketch: SxSketch
 var view: DocumentView
@@ -20,8 +24,13 @@ var plane_origin := Vector3.ZERO
 var plane_x := Vector3.RIGHT
 var plane_y := Vector3.UP  # model-space Y (kernel), set on begin()
 
+## Selected entity ids (SELECT tool), most recent last, max 2.
+var selected: Array[String] = []
+
 var _draw_node: MeshInstance3D
 var _preview_node: MeshInstance3D
+var _selected_node: MeshInstance3D
+var _selected_material: StandardMaterial3D
 var _tool_points: Array[Vector2] = []  # committed anchor points of current tool
 var _hover: Vector2 = Vector2.ZERO
 var _line_material: StandardMaterial3D
@@ -41,6 +50,12 @@ func _ready() -> void:
 	_preview_node = MeshInstance3D.new()
 	_preview_node.material_override = _preview_material
 	add_child(_preview_node)
+	_selected_material = StandardMaterial3D.new()
+	_selected_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_selected_material.albedo_color = Color(1.0, 0.62, 0.15)
+	_selected_node = MeshInstance3D.new()
+	_selected_node.material_override = _selected_material
+	add_child(_selected_node)
 
 
 ## Begin a sketch on the model-space plane (origin + normal). x_hint picks the
@@ -109,13 +124,191 @@ func ray_to_sketch(origin: Vector3, direction: Vector3) -> Variant:
 func set_tool(t: Tool) -> void:
 	tool = t
 	_tool_points.clear()
+	if t != Tool.SELECT:
+		_set_selected([])
 	_update_preview()
+
+
+# --- selection & constraints ---
+
+func _set_selected(ids: Array[String]) -> void:
+	selected = ids
+	_redraw_selected()
+	selection_changed.emit(selected)
+
+
+func _select_at(pos2: Vector2) -> void:
+	var best_id := ""
+	var best_d := PICK_TOLERANCE
+	for id in sketch.entity_ids():
+		var d := _entity_distance(sketch.entity_info(id), pos2)
+		if d < best_d:
+			best_d = d
+			best_id = id
+	if best_id == "":
+		_set_selected([])
+		return
+	var ids := selected.duplicate()
+	if ids.has(best_id):
+		ids.erase(best_id)  # click again to deselect
+	else:
+		ids.append(best_id)
+		while ids.size() > 2:
+			ids.pop_front()
+	_set_selected(ids)
+
+
+func _entity_distance(info: Dictionary, p: Vector2) -> float:
+	match info.get("type", ""):
+		"line":
+			return _point_segment_distance(p, info["start"], info["end"])
+		"circle", "arc":
+			return absf(p.distance_to(info["center"]) - info["radius"])
+		"point":
+			return p.distance_to(info["position"])
+	return INF
+
+
+func _point_segment_distance(p: Vector2, a: Vector2, b: Vector2) -> float:
+	var ab := b - a
+	var t := 0.0 if ab.length_squared() < 1e-12 else clampf((p - a).dot(ab) / ab.length_squared(), 0.0, 1.0)
+	return p.distance_to(a + ab * t)
+
+
+## Length of the selected line / radius of the selected circle, for pre-filling
+## the dimension input. 0 when not applicable.
+func measured_value() -> float:
+	if selected.size() == 1:
+		var info: Dictionary = sketch.entity_info(selected[0])
+		match info.get("type", ""):
+			"line":
+				return (info["end"] - info["start"]).length()
+			"circle", "arc":
+				return info["radius"]
+	elif selected.size() == 2:
+		var pair := _closest_endpoints(selected[0], selected[1])
+		if pair.size() == 2:
+			return _endpoint_pos(selected[0], pair[0]).distance_to(_endpoint_pos(selected[1], pair[1]))
+	return 0.0
+
+
+## Applies a constraint to the current selection. Supported types:
+## horizontal/vertical (each selected line), parallel/perpendicular/equal
+## (two entities), coincident (nearest endpoints of two lines), distance
+## (line length, or nearest endpoints of two entities), radius (circle/arc).
+## Solves afterwards; returns the solve status string ("" when nothing done).
+func constrain(type: String, value: float = 0.0) -> String:
+	if not active or selected.is_empty():
+		return ""
+	var added := false
+	match type:
+		"horizontal", "vertical":
+			for id in selected:
+				if sketch.entity_info(id).get("type", "") == "line":
+					sketch.add_constraint(type, [{"entity": id, "role": "self"}], 0.0)
+					added = true
+		"parallel", "perpendicular", "equal":
+			if selected.size() == 2:
+				sketch.add_constraint(type, [
+					{"entity": selected[0], "role": "self"},
+					{"entity": selected[1], "role": "self"}], 0.0)
+				added = true
+		"coincident":
+			if selected.size() == 2:
+				var pair := _closest_endpoints(selected[0], selected[1])
+				if pair.size() == 2:
+					sketch.add_constraint("coincident", [
+						{"entity": selected[0], "role": pair[0]},
+						{"entity": selected[1], "role": pair[1]}], 0.0)
+					added = true
+		"distance":
+			if selected.size() == 1 and sketch.entity_info(selected[0]).get("type", "") == "line":
+				sketch.add_constraint("distance", [
+					{"entity": selected[0], "role": "start"},
+					{"entity": selected[0], "role": "end"}], value)
+				added = true
+			elif selected.size() == 2:
+				var pair2 := _closest_endpoints(selected[0], selected[1])
+				if pair2.size() == 2:
+					sketch.add_constraint("distance", [
+						{"entity": selected[0], "role": pair2[0]},
+						{"entity": selected[1], "role": pair2[1]}], value)
+					added = true
+		"radius":
+			for id in selected:
+				var k: String = sketch.entity_info(id).get("type", "")
+				if k == "circle" or k == "arc":
+					sketch.add_constraint("radius", [{"entity": id, "role": "self"}], value)
+					added = true
+	if not added:
+		return ""
+	var res: Dictionary = sketch.solve()
+	_redraw()
+	_redraw_selected()
+	return res["status"]
+
+
+func _endpoint_pos(id: String, role: String) -> Vector2:
+	var info: Dictionary = sketch.entity_info(id)
+	match info.get("type", ""):
+		"line":
+			return info["start"] if role == "start" else info["end"]
+		"circle", "arc":
+			return info["center"]
+	return info.get("position", Vector2.ZERO)
+
+
+## Roles of the closest endpoint pair between two entities (["end","start"]...).
+func _closest_endpoints(id_a: String, id_b: String) -> Array[String]:
+	var roles_for := func(id: String) -> Array[String]:
+		var k: String = sketch.entity_info(id).get("type", "")
+		var out: Array[String] = []
+		if k == "line":
+			out.assign(["start", "end"])
+		elif k == "circle" or k == "arc":
+			out.assign(["center"])
+		else:
+			out.assign(["self"])
+		return out
+	var best := INF
+	var pair: Array[String] = []
+	for ra: String in roles_for.call(id_a):
+		for rb: String in roles_for.call(id_b):
+			var d := _endpoint_pos(id_a, ra).distance_to(_endpoint_pos(id_b, rb))
+			if d < best:
+				best = d
+				pair = [ra, rb]
+	return pair
+
+
+func _redraw_selected() -> void:
+	if sketch == null or selected.is_empty():
+		_selected_node.mesh = null
+		return
+	var im := ImmediateMesh.new()
+	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	for id in selected:
+		var info: Dictionary = sketch.entity_info(id)
+		match info.get("type", ""):
+			"line":
+				im.surface_add_vertex(_to3(info["start"]))
+				im.surface_add_vertex(_to3(info["end"]))
+			"circle", "arc":
+				var c: Vector2 = info["center"]
+				var r: float = info["radius"]
+				for i in range(48):
+					im.surface_add_vertex(_to3(c + Vector2.from_angle(TAU * i / 48.0) * r))
+					im.surface_add_vertex(_to3(c + Vector2.from_angle(TAU * (i + 1) / 48.0) * r))
+	im.surface_end()
+	_selected_node.mesh = im
 
 
 func click(pos2: Vector2) -> void:
 	if not active:
 		return
 	match tool:
+		Tool.SELECT:
+			_select_at(pos2)
 		Tool.LINE:
 			_tool_points.append(pos2)
 			if _tool_points.size() >= 2:
@@ -164,6 +357,8 @@ func _to3(p: Vector2) -> Vector3:
 func _clear_meshes() -> void:
 	_draw_node.mesh = null
 	_preview_node.mesh = null
+	_selected_node.mesh = null
+	selected = []
 
 
 func _redraw() -> void:

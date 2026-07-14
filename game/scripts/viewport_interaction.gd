@@ -105,8 +105,9 @@ func _sketch_input(event: InputEvent) -> void:
 		var p2 = sketch_mode.ray_to_sketch(ray[0], ray[1])
 		if p2 != null:
 			sketch_mode.hover(p2)
-	elif event is InputEventKey and event.pressed:
+	elif event is InputEventKey and event.pressed and not event.ctrl_pressed:
 		match (event as InputEventKey).keycode:
+			KEY_S: sketch_mode.set_tool(SketchMode.Tool.SELECT)
 			KEY_L: sketch_mode.set_tool(SketchMode.Tool.LINE)
 			KEY_R: sketch_mode.set_tool(SketchMode.Tool.RECT)
 			KEY_C: sketch_mode.set_tool(SketchMode.Tool.CIRCLE)
