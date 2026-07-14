@@ -15,8 +15,10 @@ var _rows := {}  # feature id -> row control
 var _selected_fid := ""
 var _editor_box: VBoxContainer
 var _params_edit: TextEdit
+var _json_toggle: CheckButton
 var _refreshing := false
 var _renaming_fid := ""
+var property_panel: PropertyPanel
 
 
 func _ready() -> void:
@@ -35,19 +37,32 @@ func _ready() -> void:
 	_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(_list)
 
+	# Structured property editor (typed fields, live preview). The raw JSON
+	# editor below stays available behind an "advanced" toggle.
+	property_panel = PropertyPanel.new()
+	property_panel.view = view
+	property_panel.status.connect(func(t: String) -> void: status.emit(t))
+	vbox.add_child(property_panel)
+
 	_editor_box = VBoxContainer.new()
 	_editor_box.visible = false
 	vbox.add_child(_editor_box)
-	var ed_label := Label.new()
-	ed_label.text = "Params (JSON)"
-	ed_label.add_theme_font_size_override("font_size", 11)
-	_editor_box.add_child(ed_label)
+	_json_toggle = CheckButton.new()
+	_json_toggle.text = "Params (JSON, advanced)"
+	_json_toggle.add_theme_font_size_override("font_size", 11)
+	_json_toggle.toggled.connect(func(on: bool) -> void:
+		_params_edit.visible = on
+		_params_edit.get_parent().get_node("ApplyJson").visible = on)
+	_editor_box.add_child(_json_toggle)
 	_params_edit = TextEdit.new()
 	_params_edit.custom_minimum_size = Vector2(250, 70)
 	_params_edit.add_theme_font_size_override("font_size", 11)
+	_params_edit.visible = false
 	_editor_box.add_child(_params_edit)
 	var apply_btn := Button.new()
+	apply_btn.name = "ApplyJson"
 	apply_btn.text = "Apply"
+	apply_btn.visible = false
 	apply_btn.pressed.connect(_apply_params)
 	_editor_box.add_child(apply_btn)
 
@@ -186,6 +201,12 @@ func _select_feature(fid: String) -> void:
 			continue
 		_params_edit.text = _pretty_json(f["params"])
 		_editor_box.visible = true
+		# Typed property editor when the feature type has a schema; the JSON
+		# editor stays available behind the advanced toggle either way.
+		if PropertyPanel.has_schema(f["type"]):
+			property_panel.open(fid)
+		else:
+			property_panel.visible = false
 		var body: String = f["output_body"]
 		if body != "":
 			view.select_entity(body, "")
