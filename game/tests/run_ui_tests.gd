@@ -35,6 +35,7 @@ func _init() -> void:
 	test_ops_panel(main)
 	test_sketch_constraints(main)
 	test_revolve_and_cut(main)
+	test_card_editing(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -206,6 +207,33 @@ func test_sketch_constraints(main) -> void:
 	check(sm.selected.is_empty(), "empty click clears selection")
 	check(sm.constrain("horizontal") == "", "constrain with no selection is no-op")
 	sm.cancel()
+
+
+func test_card_editing(main) -> void:
+	print("- semantic card editing")
+	var view: DocumentView = main.view
+	var a: String = view.insert_primitive("box", Vector3(-400, -400, 0))
+	view.select_entity(a, "")
+	main._save_card_text("the base plate", "keep this under 5mm thick")
+	check(view.doc.get_card_alias(a) == "the base plate", "alias saved")
+	check(view.doc.get_card_notes(a) == "keep this under 5mm thick", "notes saved")
+	check(view.selection_card().contains("the base plate"), "alias visible in card markdown")
+
+	# Free text survives a parametric rebuild of the body.
+	var fid := view.feature_of_body(a)
+	var params: Dictionary = {}
+	for f in view.doc.graph_features():
+		if f["id"] == fid:
+			params = JSON.parse_string(f["params"])
+	params["a"] = 80.0
+	view.doc.graph_set_params(fid, JSON.stringify(params))
+	check(view.doc.get_card_notes(a) == "keep this under 5mm thick", "notes survive rebuild")
+
+	# Selection change repopulates the editors.
+	view.clear_selection()
+	check(main.alias_edit.text == "", "editors cleared on deselect")
+	view.select_entity(a, "")
+	check(main.alias_edit.text == "the base plate", "alias editor repopulated")
 
 
 func test_revolve_and_cut(main) -> void:

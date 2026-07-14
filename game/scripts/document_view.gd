@@ -205,6 +205,12 @@ func set_selection_alias(text: String) -> void:
 		doc.set_card_alias(target, text)
 
 
+func set_selection_notes(text: String) -> void:
+	var target := selected_face if selected_face != "" else selected_body
+	if target != "":
+		doc.set_card_notes(target, text)
+
+
 func undo() -> bool:
 	var ok := doc.undo()
 	clear_selection()

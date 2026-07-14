@@ -18,6 +18,8 @@ var timeline: TimelinePanel
 var ops_panel: OpsPanel
 var dim_value: SpinBox
 var finish_op: OptionButton
+var alias_edit: LineEdit
+var notes_edit: TextEdit
 
 
 func _finish_op_name() -> String:
@@ -171,9 +173,31 @@ func _build_ui() -> void:
 	card_panel = RichTextLabel.new()
 	card_panel.fit_content = false
 	card_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	card_panel.custom_minimum_size = Vector2(290, 360)
+	card_panel.custom_minimum_size = Vector2(290, 240)
 	card_panel.add_theme_font_size_override("normal_font_size", 12)
 	card_vbox.add_child(card_panel)
+
+	# Editable semantic-card free text: aliases (one line) and notes.
+	var alias_label := Label.new()
+	alias_label.text = "Aliases (what you'd call this)"
+	alias_label.add_theme_font_size_override("font_size", 11)
+	card_vbox.add_child(alias_label)
+	alias_edit = LineEdit.new()
+	alias_edit.placeholder_text = "e.g. the mounting face"
+	alias_edit.text_submitted.connect(func(t: String) -> void: _save_card_text(t, notes_edit.text))
+	card_vbox.add_child(alias_edit)
+	var notes_label := Label.new()
+	notes_label.text = "Notes (intent, constraints, context)"
+	notes_label.add_theme_font_size_override("font_size", 11)
+	card_vbox.add_child(notes_label)
+	notes_edit = TextEdit.new()
+	notes_edit.custom_minimum_size = Vector2(290, 70)
+	notes_edit.add_theme_font_size_override("font_size", 11)
+	card_vbox.add_child(notes_edit)
+	var save_card := Button.new()
+	save_card.text = "Save card text"
+	save_card.pressed.connect(func() -> void: _save_card_text(alias_edit.text, notes_edit.text))
+	card_vbox.add_child(save_card)
 
 	# Right, below card panel: context operations for the selection.
 	ops_panel = OpsPanel.new()
@@ -356,9 +380,28 @@ func _start_sketch() -> void:
 	sketch_toolbar.visible = true
 
 
+func _selected_entity() -> String:
+	return view.selected_face if view.selected_face != "" else view.selected_body
+
+
+func _save_card_text(alias_text: String, notes_text: String) -> void:
+	var target := _selected_entity()
+	if target == "":
+		return
+	view.doc.set_card_alias(target, alias_text)
+	view.doc.set_card_notes(target, notes_text)
+	card_panel.text = view.selection_card()
+	_on_status("Card text saved")
+
+
 func _on_selection_changed(_body: String, _face: String) -> void:
 	var md := view.selection_card()
 	card_panel.text = md if md != "" else "[i]nothing selected[/i]"
+	var target := _selected_entity()
+	alias_edit.text = view.doc.get_card_alias(target) if target != "" else ""
+	notes_edit.text = view.doc.get_card_notes(target) if target != "" else ""
+	alias_edit.editable = target != ""
+	notes_edit.editable = target != ""
 
 
 func _on_document_changed() -> void:

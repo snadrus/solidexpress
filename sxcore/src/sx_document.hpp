@@ -114,6 +114,8 @@ public:
     godot::String card_markdown(const godot::String& entity_id) const;
     void set_card_alias(const godot::String& entity_id, const godot::String& text);
     void set_card_notes(const godot::String& entity_id, const godot::String& text);
+    godot::String get_card_alias(const godot::String& entity_id) const;
+    godot::String get_card_notes(const godot::String& entity_id) const;
 
     // --- feature graph (parametric timeline) ---
     // Features are returned as Dictionaries {id, name, type, suppressed,

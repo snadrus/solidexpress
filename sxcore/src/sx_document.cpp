@@ -472,6 +472,16 @@ void SxDocument::set_card_notes(const String& entity_id, const String& text) {
     doc_->cards().set_notes(parse_id(entity_id), to_std(text));
 }
 
+String SxDocument::get_card_alias(const String& entity_id) const {
+    const sx::Card* c = doc_->cards().find(parse_id(entity_id));
+    return c ? to_gd(c->aliases) : String();
+}
+
+String SxDocument::get_card_notes(const String& entity_id) const {
+    const sx::Card* c = doc_->cards().find(parse_id(entity_id));
+    return c ? to_gd(c->notes) : String();
+}
+
 Array SxDocument::graph_features() const {
     Array out;
     for (const auto& f : doc_->graph().timeline()) {
@@ -662,6 +672,8 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("card_markdown", "entity_id"), &SxDocument::card_markdown);
     ClassDB::bind_method(D_METHOD("set_card_alias", "entity_id", "text"), &SxDocument::set_card_alias);
     ClassDB::bind_method(D_METHOD("set_card_notes", "entity_id", "text"), &SxDocument::set_card_notes);
+    ClassDB::bind_method(D_METHOD("get_card_alias", "entity_id"), &SxDocument::get_card_alias);
+    ClassDB::bind_method(D_METHOD("get_card_notes", "entity_id"), &SxDocument::get_card_notes);
     ClassDB::bind_method(D_METHOD("graph_features"), &SxDocument::graph_features);
     ClassDB::bind_method(D_METHOD("graph_add_primitive", "kind", "a", "b", "c", "origin"), &SxDocument::graph_add_primitive);
     ClassDB::bind_method(D_METHOD("graph_add_sketch", "sketch"), &SxDocument::graph_add_sketch);
