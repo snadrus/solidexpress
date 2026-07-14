@@ -30,6 +30,7 @@ test-godot: build import
 	$(GODOT) --headless --path game --script tests/run_select_tests.gd
 	$(GODOT) --headless --path game --script tests/run_property_tests.gd
 	$(GODOT) --headless --path game --script tests/run_infer_tests.gd
+	$(GODOT) --headless --path game --script tests/run_mate_tests.gd
 
 test: test-kernel test-godot
 	@echo "ALL TESTS PASSED"

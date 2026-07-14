@@ -18,6 +18,7 @@
 #include <gp_Vec.hxx>
 #include <type_traits>
 #include <variant>
+#include "sx/mates.hpp"
 #include "sx/measure.hpp"
 #include "sx/features.hpp"
 #include "sx/interop.hpp"
@@ -999,6 +1000,51 @@ bool SxDocument::set_instance_transform(const String& id, const Vector3& transla
                                         quat);
 }
 
+String SxDocument::add_mate(const String& type, const String& instance_a, const String& face_a,
+                            const String& instance_b, const String& face_b, double offset,
+                            bool flip, const String& name) {
+    sx::Mate m;
+    try {
+        m.type = sx::mate_type_from_string(to_std(type));
+    } catch (const std::exception&) {
+        return {};
+    }
+    m.instance_a = parse_id(instance_a);
+    m.face_a = parse_id(face_a);
+    m.instance_b = parse_id(instance_b);
+    m.face_b = parse_id(face_b);
+    m.offset = offset;
+    m.flip = flip;
+    m.name = to_std(name);
+    auto id = doc_->add_mate(std::move(m));
+    return id.is_null() ? String() : to_gd(id.str());
+}
+
+Array SxDocument::mate_list() const {
+    Array out;
+    for (const auto& m : doc_->mates()) {
+        Dictionary d;
+        d["id"] = to_gd(m.id.str());
+        d["type"] = to_gd(sx::to_string(m.type));
+        d["instance_a"] = m.instance_a.is_null() ? String() : to_gd(m.instance_a.str());
+        d["face_a"] = m.face_a.is_null() ? String() : to_gd(m.face_a.str());
+        d["instance_b"] = m.instance_b.is_null() ? String() : to_gd(m.instance_b.str());
+        d["face_b"] = m.face_b.is_null() ? String() : to_gd(m.face_b.str());
+        d["offset"] = m.offset;
+        d["flip"] = m.flip;
+        d["name"] = to_gd(m.name);
+        out.push_back(d);
+    }
+    return out;
+}
+
+bool SxDocument::remove_mate(const String& id) {
+    auto mid = parse_id(id);
+    return !mid.is_null() && doc_->remove_mate(mid);
+}
+
+bool SxDocument::solve_mates() { return sx::solve_mates(*doc_); }
+
 void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("add_box", "dx", "dy", "dz", "origin"), &SxDocument::add_box);
     ClassDB::bind_method(D_METHOD("add_cylinder", "radius", "height", "origin"), &SxDocument::add_cylinder);
@@ -1094,6 +1140,12 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_instance_transform", "id", "translation", "rotation_axis",
                                   "rotation_angle_deg"),
                          &SxDocument::set_instance_transform);
+    ClassDB::bind_method(D_METHOD("add_mate", "type", "instance_a", "face_a", "instance_b",
+                                  "face_b", "offset", "flip", "name"),
+                         &SxDocument::add_mate);
+    ClassDB::bind_method(D_METHOD("mate_list"), &SxDocument::mate_list);
+    ClassDB::bind_method(D_METHOD("remove_mate", "id"), &SxDocument::remove_mate);
+    ClassDB::bind_method(D_METHOD("solve_mates"), &SxDocument::solve_mates);
 }
 
 }  // namespace sx_godot

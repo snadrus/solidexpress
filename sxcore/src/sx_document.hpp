@@ -207,6 +207,19 @@ public:
     bool set_instance_transform(const godot::String& id, const godot::Vector3& translation,
                                 const godot::Vector3& rotation_axis, double rotation_angle_deg);
 
+    // --- assembly mates (closed-form placement; solve moves instance_b) ---
+    // type: "fixed" | "plane_coincident" | "concentric". instance_a may be ""
+    // for a grounded body reference. Returns the mate id or "".
+    godot::String add_mate(const godot::String& type, const godot::String& instance_a,
+                           const godot::String& face_a, const godot::String& instance_b,
+                           const godot::String& face_b, double offset, bool flip,
+                           const godot::String& name);
+    // Array of {id, type, instance_a, face_a, instance_b, face_b, offset, flip, name}.
+    godot::Array mate_list() const;
+    bool remove_mate(const godot::String& id);
+    // Applies all mates in order; true when every mate solved.
+    bool solve_mates();
+
 protected:
     static void _bind_methods();
 
