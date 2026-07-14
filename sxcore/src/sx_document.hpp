@@ -7,6 +7,7 @@
 #include <godot_cpp/variant/color.hpp>
 #include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/packed_string_array.hpp>
+#include <godot_cpp/variant/packed_vector3_array.hpp>
 
 #include <functional>
 #include <memory>
@@ -146,6 +147,11 @@ public:
                                     const godot::Vector2& axis_point,
                                     const godot::Vector2& axis_dir, double angle,
                                     const godot::String& op, const godot::String& target_fid);
+    // Sweep a sketch profile along a 3D polyline path (at least two points).
+    godot::String graph_add_sweep(const godot::String& sketch_fid,
+                                  const godot::PackedVector3Array& path);
+    // Loft through two or more sketch profiles (each on its own plane).
+    godot::String graph_add_loft(const godot::PackedStringArray& sketch_fids, bool ruled);
     // Dress-up features on a timeline body. Edge ids are converted to the
     // 1-based edge-map indices the graph stores.
     godot::String graph_add_fillet(const godot::String& target_fid,

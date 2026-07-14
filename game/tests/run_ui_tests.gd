@@ -41,6 +41,7 @@ func _init() -> void:
 	test_camera_views(main)
 	test_body_props(main)
 	test_draft(main)
+	test_graph_sweep_loft()
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -549,3 +550,59 @@ func test_sketch_mode(main) -> void:
 	sm.cancel()
 	check(not sm.active, "cancel exits sketch mode")
 	check(view.doc.body_ids().size() == count0 + 1, "cancel adds nothing")
+
+
+func test_graph_sweep_loft() -> void:
+	print("- graph sweep and loft")
+	var doc := SxDocument.new()
+
+	# Sweep: circle profile along a 2-segment L-path.
+	var sk := SxSketch.new()
+	sk.add_circle(0, 0, 2.0)
+	var sk_fid: String = doc.graph_add_sketch(sk)
+	check(sk_fid != "", "sweep sketch feature added")
+
+	var path := PackedVector3Array()
+	path.append(Vector3(0, 0, 0))
+	path.append(Vector3(0, 0, 20))
+	path.append(Vector3(15, 0, 20))
+	var bodies0: int = doc.body_ids().size()
+	var sw_fid: String = doc.graph_add_sweep(sk_fid, path)
+	check(sw_fid != "", "sweep feature added")
+	check(doc.body_ids().size() == bodies0 + 1, "sweep created a body")
+	var sw_body: String = ""
+	for f in doc.graph_features():
+		if f["id"] == sw_fid:
+			sw_body = f["output_body"]
+	check(sw_body != "", "sweep has output_body")
+	check(doc.body_volume(sw_body) > 0.0, "swept body volume > 0")
+
+	# Undo removes the swept body (and the sweep feature via graph snapshot).
+	check(doc.undo(), "undo sweep")
+	check(doc.body_ids().size() == bodies0, "undo dropped swept body")
+
+	# Loft: concentric circles on offset parallel planes via set_plane.
+	var bottom := SxSketch.new()
+	bottom.add_circle(0, 0, 10.0)
+	var bottom_fid: String = doc.graph_add_sketch(bottom)
+	check(bottom_fid != "", "loft bottom sketch added")
+
+	var top := SxSketch.new()
+	top.set_plane(Vector3(0, 0, 25), Vector3(1, 0, 0), Vector3(0, 1, 0))
+	top.add_circle(0, 0, 5.0)
+	var top_fid: String = doc.graph_add_sketch(top)
+	check(top_fid != "", "loft top sketch added")
+
+	var loft_fids := PackedStringArray()
+	loft_fids.append(bottom_fid)
+	loft_fids.append(top_fid)
+	var loft_bodies0: int = doc.body_ids().size()
+	var loft_fid: String = doc.graph_add_loft(loft_fids, true)
+	check(loft_fid != "", "loft feature added")
+	check(doc.body_ids().size() == loft_bodies0 + 1, "loft created a body")
+	var loft_body: String = ""
+	for f in doc.graph_features():
+		if f["id"] == loft_fid:
+			loft_body = f["output_body"]
+	check(loft_body != "", "loft has output_body")
+	check(doc.body_volume(loft_body) > 0.0, "lofted body volume > 0")
