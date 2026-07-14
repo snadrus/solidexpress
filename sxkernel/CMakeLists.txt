@@ -14,6 +14,7 @@ target_link_libraries(sxkernel
         TKXSBase TKDESTEP TKDEIGES TKDESTL
         miniz
         sx_json
+        planegcs
 )
 
 if(SX_BUILD_TESTS)
