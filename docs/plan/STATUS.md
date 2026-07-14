@@ -79,10 +79,13 @@ Godot suites: integration 97 checks, UI 114 checks, sketch 23 checks.
 - [x] Fillet/chamfer on timeline bodies recorded as parametric graph features
 - [x] File menu: New/Open/Save/Save As (.sxp), STEP import/export, STL export
 - [x] Standard views (1/2/3/7) + zoom-to-fit (F)
+- [x] Sweep/loft kernel commands ([sweep]); datum planes/axes/points ([datum])
+- [x] Mirror/pattern/shell/offset as parametric graph feature types ([featops])
+- [x] Sketch arc (3-point) + polygon tools
+- [x] Body rename + per-body display color (ops panel, tinted materials, .sxp persistence; rename refreshes face cards)
 
-## In flight (background agents, round 3)
-- Sweep/loft commands ([sweep])
-- Datum planes/axes/points ([datum])
+## In flight (background agents)
+- Sweep/loft as graph feature types
 
 ## Later phases
 Not started. See implementation plan.
