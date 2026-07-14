@@ -49,10 +49,12 @@ Kernel suite now 51 cases / 5492 assertions.
 - [ ] 3.3 Timeline UI (feature list panel, suppress/edit/rollback) + SxDocument graph bindings
 - [ ] 3.4 Route interactive commands (palette insert, sketch-extrude, fillet UI) through the graph instead of direct commands
 
-## In flight (background agents, round 2)
-- Transform/pattern commands: mirror, linear/circular pattern, rotate ([transform])
-- Shell/offset commands ([hollow])
-- Measurement module ([measure])
+## Modeling operations round 2 (parallel agents, merged)
+- [x] Transforms: MirrorBody, LinearPattern, CircularPattern, RotateBody (in-place, ids preserved) ([transform], 5 cases)
+- [x] Shell (open-face hollow via MakeThickSolidByJoin) + OffsetBody ([hollow], 3 cases). Note: oversized shell must use thickness ≥ half the box to reliably fail in OCCT
+- [x] Measure: min_distance, bounding_box, mass_properties (incl. inertia), edge_length, face_area, angle_between_faces ([measure], 6 cases)
+
+Kernel suite: 72 cases / 5678 assertions.
 
 ## Later phases
 Not started. See implementation plan.
