@@ -12,6 +12,8 @@ var _list: VBoxContainer
 var _rows := {}  # name -> row control
 var _name_edit: LineEdit
 var _expr_edit: LineEdit
+var _config_option: OptionButton
+var _config_name: LineEdit
 var _refreshing := false
 
 
@@ -47,8 +49,89 @@ func _ready() -> void:
 	add_btn.pressed.connect(_on_add)
 	add_row.add_child(add_btn)
 
+	# Configurations: named snapshots of this table. Selecting one activates
+	# it (regenerating the model); Save captures the current values.
+	vbox.add_child(HSeparator.new())
+	var cfg_row := HBoxContainer.new()
+	vbox.add_child(cfg_row)
+	var cfg_lbl := Label.new()
+	cfg_lbl.text = "Config"
+	cfg_lbl.add_theme_font_size_override("font_size", 11)
+	cfg_row.add_child(cfg_lbl)
+	_config_option = OptionButton.new()
+	_config_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_config_option.item_selected.connect(_on_config_selected)
+	cfg_row.add_child(_config_option)
+	var cfg_del := Button.new()
+	cfg_del.text = "x"
+	cfg_del.tooltip_text = "Delete selected configuration"
+	cfg_del.pressed.connect(_on_config_delete)
+	cfg_row.add_child(cfg_del)
+	var save_row := HBoxContainer.new()
+	vbox.add_child(save_row)
+	_config_name = LineEdit.new()
+	_config_name.placeholder_text = "config name"
+	_config_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_config_name.text_submitted.connect(func(_t: String) -> void: _on_config_save())
+	save_row.add_child(_config_name)
+	var cfg_save := Button.new()
+	cfg_save.text = "Save"
+	cfg_save.tooltip_text = "Snapshot current variables under this name"
+	cfg_save.pressed.connect(_on_config_save)
+	save_row.add_child(cfg_save)
+
 	view.document_changed.connect(refresh)
 	refresh()
+
+
+func _refresh_configs() -> void:
+	_config_option.clear()
+	var active: String = view.doc.active_configuration()
+	var configs: Array = view.doc.configuration_list()
+	for i in range(configs.size()):
+		var config_name: String = configs[i]["name"]
+		_config_option.add_item(config_name, i)
+		if config_name == active:
+			_config_option.select(i)
+	if active == "" and configs.size() > 0:
+		_config_option.select(-1)
+
+
+func _on_config_save() -> void:
+	var config_name := _config_name.text.strip_edges()
+	if config_name == "":
+		config_name = str(view.doc.active_configuration())
+	if config_name == "":
+		status.emit("Enter a configuration name")
+		return
+	if view.doc.save_configuration(config_name):
+		_config_name.text = ""
+		refresh()
+		status.emit("Configuration saved: " + config_name)
+
+
+func _on_config_selected(index: int) -> void:
+	if _refreshing or index < 0:
+		return
+	var config_name := _config_option.get_item_text(index)
+	if view.doc.activate_configuration(config_name):
+		# Binding already regenerated; rebuild meshes and notify panels.
+		view.refresh()
+		view.document_changed.emit()
+		status.emit("Configuration: " + config_name)
+	else:
+		status.emit("Failed to activate " + config_name)
+
+
+func _on_config_delete() -> void:
+	var index := _config_option.selected
+	if index < 0:
+		status.emit("No configuration selected")
+		return
+	var config_name := _config_option.get_item_text(index)
+	if view.doc.remove_configuration(config_name):
+		refresh()
+		status.emit("Configuration deleted: " + config_name)
 
 
 func refresh() -> void:
@@ -60,6 +143,7 @@ func refresh() -> void:
 	_rows.clear()
 	for entry in view.doc.list_variables():
 		_list.add_child(_make_row(entry))
+	_refresh_configs()
 	_refreshing = false
 
 

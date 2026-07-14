@@ -84,10 +84,22 @@ bool save_sxp(const Document& doc, const std::string& path, std::string* err) {
     json mates_json = json::array();
     for (const auto& m : doc.mates()) mates_json.push_back(m);
 
+    json configs_json;
+    configs_json["active"] = doc.active_configuration();
+    configs_json["configurations"] = json::array();
+    for (const auto& c : doc.configurations()) {
+        json jc;
+        jc["name"] = c.name;
+        jc["variables"] = json::array();
+        for (const auto& [var, expr] : c.variables) jc["variables"].push_back({var, expr});
+        configs_json["configurations"].push_back(jc);
+    }
+
     ok = ok && add("features.json", doc.graph().to_json().dump(2));
     ok = ok && add("datums.json", datums_json.dump(2));
     ok = ok && add("instances.json", instances_json.dump(2));
     ok = ok && add("mates.json", mates_json.dump(2));
+    ok = ok && add("configurations.json", configs_json.dump(2));
     ok = ok && add("manifest.json", manifest.dump(2));
     ok = ok && mz_zip_writer_finalize_archive(&zip) == MZ_TRUE;
     mz_zip_writer_end(&zip);
@@ -161,6 +173,11 @@ bool load_sxp(Document& doc, const std::string& path, std::string* err) {
         mate_ids.reserve(doc.mates().size());
         for (const auto& m : doc.mates()) mate_ids.push_back(m.id);
         for (const auto& id : mate_ids) doc.remove_mate(id);
+    }
+    {
+        std::vector<std::string> config_names;
+        for (const auto& c : doc.configurations()) config_names.push_back(c.name);
+        for (const auto& n : config_names) doc.remove_configuration(n);
     }
 
     try {
@@ -260,6 +277,27 @@ bool load_sxp(Document& doc, const std::string& path, std::string* err) {
             }
         } catch (const std::exception& e) {
             log::warn(std::string("sxp: ignoring bad mates.json: ") + e.what());
+        }
+    }
+
+    // Configurations are optional for backward compatibility.
+    std::string configs_text = read_entry(zip, "configurations.json", &found);
+    if (found) {
+        try {
+            json cj = json::parse(configs_text);
+            std::string active = cj.value("active", "");
+            for (const auto& jc : cj["configurations"]) {
+                Document::Configuration c;
+                c.name = jc.value("name", "");
+                if (c.name.empty()) continue;
+                for (const auto& jv : jc["variables"]) {
+                    c.variables.emplace_back(jv[0].get<std::string>(), jv[1].get<std::string>());
+                }
+                bool is_active = c.name == active;
+                doc.restore_configuration(std::move(c), is_active);
+            }
+        } catch (const std::exception& e) {
+            log::warn(std::string("sxp: ignoring bad configurations.json: ") + e.what());
         }
     }
 

@@ -452,6 +452,37 @@ Array SxDocument::material_list() const {
     return out;
 }
 
+bool SxDocument::save_configuration(const String& name) {
+    return doc_->save_configuration(to_std(name));
+}
+
+bool SxDocument::activate_configuration(const String& name) {
+    if (!doc_->activate_configuration(to_std(name))) return false;
+    doc_->graph().regenerate(*doc_);
+    return true;
+}
+
+bool SxDocument::remove_configuration(const String& name) {
+    return doc_->remove_configuration(to_std(name));
+}
+
+Array SxDocument::configuration_list() const {
+    Array out;
+    for (const auto& c : doc_->configurations()) {
+        Dictionary d;
+        d["name"] = to_gd(c.name);
+        Dictionary vars;
+        for (const auto& [var, expr] : c.variables) vars[to_gd(var)] = to_gd(expr);
+        d["variables"] = vars;
+        out.push_back(d);
+    }
+    return out;
+}
+
+String SxDocument::active_configuration() const {
+    return to_gd(doc_->active_configuration());
+}
+
 double SxDocument::body_volume(const String& body_id) const {
     const sx::Body* b = doc_->body(parse_id(body_id));
     return b ? sx::shape::volume(b->shape) : 0.0;
@@ -1130,6 +1161,13 @@ void SxDocument::_bind_methods() {
                          &SxDocument::set_body_material);
     ClassDB::bind_method(D_METHOD("body_material", "body_id"), &SxDocument::body_material);
     ClassDB::bind_method(D_METHOD("material_list"), &SxDocument::material_list);
+    ClassDB::bind_method(D_METHOD("save_configuration", "name"), &SxDocument::save_configuration);
+    ClassDB::bind_method(D_METHOD("activate_configuration", "name"),
+                         &SxDocument::activate_configuration);
+    ClassDB::bind_method(D_METHOD("remove_configuration", "name"),
+                         &SxDocument::remove_configuration);
+    ClassDB::bind_method(D_METHOD("configuration_list"), &SxDocument::configuration_list);
+    ClassDB::bind_method(D_METHOD("active_configuration"), &SxDocument::active_configuration);
     ClassDB::bind_method(D_METHOD("body_volume", "body_id"), &SxDocument::body_volume);
     ClassDB::bind_method(D_METHOD("revision"), &SxDocument::revision);
     ClassDB::bind_method(D_METHOD("get_mesh", "body_id"), &SxDocument::get_mesh);

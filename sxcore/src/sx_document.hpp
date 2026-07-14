@@ -109,6 +109,13 @@ public:
     bool set_body_material(const godot::String& body_id, const godot::String& material);
     godot::String body_material(const godot::String& body_id) const;
     godot::Array material_list() const;
+
+    // --- configurations (named variable-table snapshots) ---
+    bool save_configuration(const godot::String& name);
+    bool activate_configuration(const godot::String& name);  // then regenerate
+    bool remove_configuration(const godot::String& name);
+    godot::Array configuration_list() const;
+    godot::String active_configuration() const;
     double body_volume(const godot::String& body_id) const;
     uint64_t revision() const;
 

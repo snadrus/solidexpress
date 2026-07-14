@@ -141,6 +141,22 @@ public:
     // Used by the .sxp loader to restore persisted mates exactly.
     void restore_mate(Mate&& m);
 
+    // --- configurations (named snapshots of the variable table) ---
+    // Saving captures the graph's current variable expressions under `name`
+    // (overwriting an existing snapshot of that name). Activating replaces
+    // the variable table with the snapshot; callers regenerate afterwards.
+    struct Configuration {
+        std::string name;
+        std::vector<std::pair<std::string, std::string>> variables;
+    };
+    bool save_configuration(const std::string& name);  // false on empty name
+    bool activate_configuration(const std::string& name);
+    bool remove_configuration(const std::string& name);
+    const std::vector<Configuration>& configurations() const { return configurations_; }
+    const std::string& active_configuration() const { return active_configuration_; }
+    // Used by the .sxp loader to restore persisted configurations exactly.
+    void restore_configuration(Configuration&& c, bool active);
+
 private:
     void register_subshapes(Body& b, bool fresh_ids);
     void regenerate_cards_for_body(const Body& b);
@@ -159,6 +175,8 @@ private:
     std::vector<Instance> instances_;
     std::unordered_map<EntityId, size_t> instance_index_;
     std::vector<Mate> mates_;
+    std::vector<Configuration> configurations_;
+    std::string active_configuration_;
     std::unique_ptr<CardRegistry> cards_;
     std::unique_ptr<FeatureGraph> graph_;
     uint64_t revision_ = 0;

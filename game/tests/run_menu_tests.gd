@@ -30,6 +30,7 @@ func _init() -> void:
 	test_dirty_guard(main)
 	test_recent_files(main)
 	await test_materials(main)
+	await test_configurations(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -102,6 +103,43 @@ func test_materials(main) -> void:
 	var opt: OptionButton = main.ops_panel._material_option
 	check(str(opt.get_item_metadata(opt.selected)) == "Steel", "ops panel dropdown synced")
 	main.view.clear_selection()
+
+
+func test_configurations(main) -> void:
+	print("- configurations snapshot variables and regenerate")
+	main.view.new_document()
+	await process_frame
+	var doc = main.view.doc
+	check(doc.set_variable("w", "20"), "variable w set")
+	var fid: String = doc.graph_add_primitive("box", 20, 20, 10, Vector3.ZERO)
+	# Drive the box size by the variable through params JSON.
+	doc.graph_set_params(fid, JSON.stringify({"kind": "box", "a": "=w", "b": "=w", "c": 10.0}))
+	main.view.graph_changed()
+	var body: String = main.view.body_of_feature(fid)
+	check(absf(doc.body_volume(body) - 4000.0) < 1.0, "box follows w=20 (vol %.0f)" % doc.body_volume(body))
+
+	check(doc.save_configuration("Small"), "save Small")
+	doc.set_variable("w", "40")
+	main.view.graph_changed()
+	check(doc.save_configuration("Large"), "save Large")
+	check(doc.configuration_list().size() == 2, "two configurations")
+	check(str(doc.active_configuration()) == "Large", "Large active")
+
+	check(doc.activate_configuration("Small"), "activate Small")
+	main.view.refresh()
+	check(absf(doc.body_volume(body) - 4000.0) < 1.0, "Small regenerated (vol %.0f)" % doc.body_volume(body))
+	check(doc.activate_configuration("Large"), "activate Large")
+	check(absf(doc.body_volume(body) - 16000.0) < 1.0, "Large regenerated (vol %.0f)" % doc.body_volume(body))
+
+	# Variables panel exposes the switcher.
+	var panel = main.variables_panel
+	panel.refresh()
+	check(panel._config_option.item_count == 2, "config dropdown populated")
+	check(doc.remove_configuration("Small"), "delete Small")
+	panel.refresh()
+	check(panel._config_option.item_count == 1, "dropdown updates after delete")
+	main.view.new_document()
+	await process_frame
 
 
 func test_dirty_guard(main) -> void:

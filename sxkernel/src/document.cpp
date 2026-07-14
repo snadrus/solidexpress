@@ -442,4 +442,57 @@ void Document::restore_mate(Mate&& m) {
     bump_revision();
 }
 
+Document::Configuration* find_configuration(std::vector<Document::Configuration>& configs,
+                                            const std::string& name) {
+    for (auto& c : configs) {
+        if (c.name == name) return &c;
+    }
+    return nullptr;
+}
+
+bool Document::save_configuration(const std::string& name) {
+    if (name.empty()) return false;
+    Configuration snapshot{name, graph_->variables().entries()};
+    if (Configuration* existing = find_configuration(configurations_, name)) {
+        *existing = std::move(snapshot);
+    } else {
+        configurations_.push_back(std::move(snapshot));
+    }
+    active_configuration_ = name;
+    bump_revision();
+    return true;
+}
+
+bool Document::activate_configuration(const std::string& name) {
+    Configuration* c = find_configuration(configurations_, name);
+    if (!c) return false;
+    VariableTable table;
+    for (const auto& [var, expr] : c->variables) table.set(var, expr);
+    graph_->variables() = std::move(table);
+    active_configuration_ = name;
+    bump_revision();
+    return true;
+}
+
+bool Document::remove_configuration(const std::string& name) {
+    for (auto it = configurations_.begin(); it != configurations_.end(); ++it) {
+        if (it->name == name) {
+            configurations_.erase(it);
+            if (active_configuration_ == name) active_configuration_.clear();
+            bump_revision();
+            return true;
+        }
+    }
+    return false;
+}
+
+void Document::restore_configuration(Configuration&& c, bool active) {
+    if (active) active_configuration_ = c.name;
+    if (Configuration* existing = find_configuration(configurations_, c.name)) {
+        *existing = std::move(c);
+    } else {
+        configurations_.push_back(std::move(c));
+    }
+}
+
 }  // namespace sx
