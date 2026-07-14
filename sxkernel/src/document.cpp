@@ -4,6 +4,8 @@
 #include <TopTools_IndexedMapOfShape.hxx>
 
 #include <cmath>
+#include <sstream>
+#include <type_traits>
 
 #include "sx/cards.hpp"
 #include "sx/features.hpp"
@@ -37,6 +39,12 @@ std::array<double, 3> plane_x_dir(const std::array<double, 3>& n) {
 
 EntityId datum_entity_id(const Datum& d) {
     return std::visit([](const auto& x) { return x.id; }, d);
+}
+
+std::string format_vec3(const std::array<double, 3>& v) {
+    std::ostringstream os;
+    os << '(' << v[0] << ", " << v[1] << ", " << v[2] << ')';
+    return os.str();
 }
 
 }  // namespace
@@ -237,6 +245,34 @@ void Document::index_datum(Datum&& d) {
     bump_revision();
 }
 
+void Document::upsert_card_for_datum(const Datum& d) {
+    Card c;
+    std::visit(
+        [&](const auto& x) {
+            using T = std::decay_t<decltype(x)>;
+            c.id = x.id;
+            c.title = x.name;
+            if constexpr (std::is_same_v<T, DatumPlane>) {
+                c.kind = EntityKind::DatumPlane;
+                c.digest = "datum plane origin " + format_vec3(x.origin) +
+                           " normal " + format_vec3(x.normal);
+            } else if constexpr (std::is_same_v<T, DatumAxis>) {
+                c.kind = EntityKind::DatumAxis;
+                c.digest = "datum axis point " + format_vec3(x.point) +
+                           " direction " + format_vec3(x.direction);
+            } else if constexpr (std::is_same_v<T, DatumPoint>) {
+                c.kind = EntityKind::DatumPoint;
+                c.digest = "datum point position " + format_vec3(x.position);
+            }
+        },
+        d);
+    cards_->upsert(std::move(c));
+}
+
+void Document::ensure_datum_cards() {
+    for (const auto& d : datums_) upsert_card_for_datum(d);
+}
+
 EntityId Document::add_datum_plane(const std::array<double, 3>& origin,
                                    const std::array<double, 3>& normal,
                                    const EntityId& keep_id) {
@@ -249,7 +285,9 @@ EntityId Document::add_datum_plane(const std::array<double, 3>& origin,
         p.normal = {0, 0, 1};
     p.x_dir = plane_x_dir(p.normal);
     const EntityId id = p.id;
-    index_datum(Datum{std::move(p)});
+    Datum stored{std::move(p)};
+    upsert_card_for_datum(stored);
+    index_datum(std::move(stored));
     return id;
 }
 
@@ -264,7 +302,9 @@ EntityId Document::add_datum_axis(const std::array<double, 3>& point,
     if (a.direction[0] == 0 && a.direction[1] == 0 && a.direction[2] == 0)
         a.direction = {0, 0, 1};
     const EntityId id = a.id;
-    index_datum(Datum{std::move(a)});
+    Datum stored{std::move(a)};
+    upsert_card_for_datum(stored);
+    index_datum(std::move(stored));
     return id;
 }
 
@@ -275,7 +315,9 @@ EntityId Document::add_datum_point(const std::array<double, 3>& position,
     p.name = "Datum Point " + std::to_string(++datum_point_seq_);
     p.position = position;
     const EntityId id = p.id;
-    index_datum(Datum{std::move(p)});
+    Datum stored{std::move(p)};
+    upsert_card_for_datum(stored);
+    index_datum(std::move(stored));
     return id;
 }
 
@@ -285,6 +327,7 @@ bool Document::remove_datum(const EntityId& id) {
     const size_t idx = it->second;
     datums_.erase(datums_.begin() + static_cast<long>(idx));
     datum_index_.erase(it);
+    cards_->erase(id);
     for (size_t i = idx; i < datums_.size(); ++i)
         datum_index_[datum_entity_id(datums_[i])] = i;
     bump_revision();
@@ -292,6 +335,7 @@ bool Document::remove_datum(const EntityId& id) {
 }
 
 void Document::restore_datum(Datum&& d) {
+    upsert_card_for_datum(d);
     index_datum(std::move(d));
 }
 

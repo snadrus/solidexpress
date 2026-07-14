@@ -102,13 +102,19 @@ public:
     bool remove_datum(const EntityId& id);
     const std::vector<Datum>& datums() const { return datums_; }
     // Used by the .sxp loader to restore persisted datums exactly.
+    // Also upserts a semantic card for the datum (aliases/notes preserved).
     void restore_datum(Datum&& d);
+    // Upserts semantic cards for every datum currently in the document.
+    // Called by add_datum_* / restore_datum; .sxp loaders that write datums
+    // without those APIs should call this after restore so cards exist.
+    void ensure_datum_cards();
 
 private:
     void register_subshapes(Body& b, bool fresh_ids);
     void regenerate_cards_for_body(const Body& b);
     void unregister_body_entities(const Body& b);
     void index_datum(Datum&& d);
+    void upsert_card_for_datum(const Datum& d);
 
     std::vector<std::unique_ptr<Body>> bodies_;
     std::unordered_map<EntityId, size_t> body_index_;

@@ -17,6 +17,9 @@ enum class EntityKind {
     Component,
     Joint,
     DrawingView,
+    DatumPlane,
+    DatumAxis,
+    DatumPoint,
 };
 
 const char* to_string(EntityKind k);

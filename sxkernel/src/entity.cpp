@@ -17,6 +17,9 @@ const char* to_string(EntityKind k) {
         case EntityKind::Component: return "component";
         case EntityKind::Joint: return "joint";
         case EntityKind::DrawingView: return "drawing_view";
+        case EntityKind::DatumPlane: return "datum_plane";
+        case EntityKind::DatumAxis: return "datum_axis";
+        case EntityKind::DatumPoint: return "datum_point";
     }
     return "unknown";
 }
@@ -33,6 +36,9 @@ EntityKind entity_kind_from_string(const std::string& s) {
     if (s == "component") return EntityKind::Component;
     if (s == "joint") return EntityKind::Joint;
     if (s == "drawing_view") return EntityKind::DrawingView;
+    if (s == "datum_plane") return EntityKind::DatumPlane;
+    if (s == "datum_axis") return EntityKind::DatumAxis;
+    if (s == "datum_point") return EntityKind::DatumPoint;
     throw std::invalid_argument("unknown EntityKind: " + s);
 }
 
