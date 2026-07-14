@@ -86,9 +86,10 @@ Godot suites: integration 97 checks, UI 114 checks, sketch 23 checks.
 
 - [x] Sweep/loft as parametric graph feature types ([featsweep])
 
+- [x] Display modes: shaded / shaded+edges / wireframe (W key cycles)
+
 ## In flight (background agents)
 - Draft/taper kernel command ([draft])
-- Display modes: shaded / shaded+edges / wireframe
 - Sketch fillet + offset tools ([sketchtools])
 
 ## Later phases
