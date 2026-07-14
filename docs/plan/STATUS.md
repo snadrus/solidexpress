@@ -61,6 +61,12 @@ Kernel suite: 72 cases / 5678 assertions.
 - [x] 3.3 Timeline UI: TimelinePanel (rows, suppress, delete, universal JSON param editor), SxDocument graph_* bindings, palette/sketch ops routed through the graph, undoable via whole-graph GraphSnapshotCommand
 - [x] 3.2 Topological naming service ([naming], 5 cases): signature matching (geom type, centroid, size, axis; normalized greedy assignment) in `sx::naming`; replace_body_shape remaps ids, regeneration reuses live bodies, cards/aliases survive parametric edits and undo/redo
 
+## Phase 4: modeling ops in the UI
+- [x] SxDocument bindings: mirror_body, linear/circular_pattern, rotate_body, shell_body, offset_body, measure_* (distance/bbox/mass/edge/face/angle)
+- [x] OpsPanel (context ops on selection): fillet/chamfer all edges, mirror, patterns, offset, shell-from-face, armed two-click boolean + measure flows
+
+Godot suites: integration 97 checks, UI 65 checks, sketch 23 checks.
+
 ## In flight (background agents, round 3)
 - Sweep/loft commands ([sweep])
 - Datum planes/axes/points ([datum])
