@@ -94,8 +94,10 @@ Godot suites: integration 97 checks, UI 114 checks, sketch 23 checks.
 
 - [x] Sketch fillet/offset exposed in sketch mode (SxSketch bindings + fillet_selected/offset_selected)
 
+- [x] Face draft in ops panel (angle spinbox, +Z pull, bbox-bottom neutral plane)
+
 ## In flight (background agents)
-- Draft bindings + ops-panel UI
+- (none)
 
 ## Later phases
 Not started. See implementation plan.
