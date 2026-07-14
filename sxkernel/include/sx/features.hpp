@@ -76,6 +76,9 @@ public:
 private:
     bool apply(Document& doc, Feature& f, std::string* err);
     std::vector<Feature> timeline_;
+    // Body ids created by the last regenerate. Needed so bodies belonging to
+    // features that were since removed from the timeline still get cleaned up.
+    std::vector<EntityId> generated_;
 };
 
 }  // namespace sx

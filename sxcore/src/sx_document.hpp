@@ -83,6 +83,24 @@ public:
     void set_card_alias(const godot::String& entity_id, const godot::String& text);
     void set_card_notes(const godot::String& entity_id, const godot::String& text);
 
+    // --- feature graph (parametric timeline) ---
+    // Features are returned as Dictionaries {id, name, type, suppressed,
+    // params (JSON string), output_body}. Graph mutations regenerate the
+    // document immediately; regeneration is NOT on the undo stack (v0).
+    godot::Array graph_features() const;
+    godot::String graph_add_primitive(const godot::String& kind, double a, double b, double c,
+                                      const godot::Vector3& origin);
+    godot::String graph_add_sketch(const godot::Ref<class SxSketch>& sketch);
+    // op: "new" | "fuse" | "cut"; target_fid required for fuse/cut.
+    godot::String graph_add_extrude(const godot::String& sketch_fid, double distance,
+                                    bool symmetric, const godot::String& op,
+                                    const godot::String& target_fid);
+    bool graph_set_params(const godot::String& fid, const godot::String& params_json);
+    bool graph_set_suppressed(const godot::String& fid, bool suppressed);
+    bool graph_remove(const godot::String& fid);
+    // Returns {ok: bool, error: String}.
+    godot::Dictionary graph_regenerate();
+
     // --- persistence ---
     bool save(const godot::String& path);
     bool load(const godot::String& path);

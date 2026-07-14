@@ -26,6 +26,7 @@ func _init() -> void:
 	test_save_load()
 	test_modeling_ops()
 	test_interop()
+	test_feature_graph()
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
 
@@ -51,6 +52,58 @@ func test_modeling_ops() -> void:
 	check(absf(doc.body_volume(c) - vol0) < 1e-6, "volume restored")
 	check(doc.chamfer_edges(PackedStringArray([doc.get_edge_ids(c)[0]]), 2.0), "chamfer one edge")
 	check(doc.body_volume(c) < vol0, "chamfer removed material")
+
+
+func test_feature_graph() -> void:
+	print("- feature graph bindings")
+	var doc := SxDocument.new()
+	var fid: String = doc.graph_add_primitive("box", 10, 20, 30, Vector3.ZERO)
+	check(fid != "", "graph primitive added")
+	check(doc.body_ids().size() == 1, "graph produced a body")
+	var feats: Array = doc.graph_features()
+	check(feats.size() == 1, "one feature in timeline")
+	var body0: String = feats[0]["output_body"]
+	check(doc.body_volume(body0) > 5999.0, "box volume ~6000")
+
+	# Parametric edit: change size, body id stays stable.
+	var params: Dictionary = JSON.parse_string(feats[0]["params"])
+	params["a"] = 20.0
+	check(doc.graph_set_params(fid, JSON.stringify(params)), "set_params + regen ok")
+	check(absf(doc.body_volume(body0) - 12000.0) < 1e-4, "edited volume 12000, id stable")
+
+	# Suppress hides the body; unsuppress restores it.
+	check(doc.graph_set_suppressed(fid, true), "suppress ok")
+	check(doc.body_ids().size() == 0, "suppressed body removed")
+	check(doc.graph_set_suppressed(fid, false), "unsuppress ok")
+	check(doc.body_ids().size() == 1, "body restored")
+
+	# Sketch feature + extrude referencing it.
+	var sk := SxSketch.new()
+	sk.add_line(0, 0, 30, 0)
+	sk.add_line(30, 0, 30, 15)
+	sk.add_line(30, 15, 0, 15)
+	sk.add_line(0, 15, 0, 0)
+	var sk_fid: String = doc.graph_add_sketch(sk)
+	check(sk_fid != "", "sketch feature added")
+	var ex_fid: String = doc.graph_add_extrude(sk_fid, 8.0, false, "new", "")
+	check(ex_fid != "", "extrude feature added")
+	check(doc.body_ids().size() == 2, "extrude created second body")
+
+	# Dependency protection: sketch removal blocked while extrude exists.
+	check(not doc.graph_remove(sk_fid), "sketch removal blocked by dependent")
+	check(doc.graph_remove(ex_fid), "extrude removed")
+	check(doc.graph_remove(sk_fid), "sketch removable after dependent gone")
+	check(doc.body_ids().size() == 1, "only primitive body remains")
+
+	# Graph persists through save/load.
+	var path := "/tmp/sx_graph_roundtrip.sxp"
+	check(doc.save(path), "save with graph")
+	var doc2 := SxDocument.new()
+	check(doc2.load(path), "load with graph")
+	check(doc2.graph_features().size() == 1, "timeline survives round-trip")
+	var regen: Dictionary = doc2.graph_regenerate()
+	check(regen["ok"], "loaded graph regenerates")
+	DirAccess.remove_absolute(path)
 
 
 func test_interop() -> void:

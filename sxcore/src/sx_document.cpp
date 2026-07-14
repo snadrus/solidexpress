@@ -5,6 +5,7 @@
 #include "sx/commands_boolean.hpp"
 #include "sx/commands_dress.hpp"
 #include "sx/commands_sketch.hpp"
+#include "sx/features.hpp"
 #include "sx/interop.hpp"
 #include "sx_sketch.hpp"
 #include <godot_cpp/variant/packed_float32_array.hpp>
@@ -339,6 +340,110 @@ void SxDocument::set_card_notes(const String& entity_id, const String& text) {
     doc_->cards().set_notes(parse_id(entity_id), to_std(text));
 }
 
+Array SxDocument::graph_features() const {
+    Array out;
+    for (const auto& f : doc_->graph().timeline()) {
+        Dictionary d;
+        d["id"] = to_gd(f.id.str());
+        d["name"] = to_gd(f.name);
+        d["type"] = to_gd(sx::to_string(f.type));
+        d["suppressed"] = f.suppressed;
+        d["params"] = to_gd(f.params.dump());
+        d["output_body"] = f.output_body.is_null() ? String() : to_gd(f.output_body.str());
+        out.push_back(d);
+    }
+    return out;
+}
+
+String SxDocument::graph_add_primitive(const String& kind, double a, double b, double c,
+                                       const Vector3& origin) {
+    sx::Feature f;
+    f.type = sx::FeatureType::Primitive;
+    f.params = {{"kind", to_std(kind)}, {"a", a}, {"b", b}, {"c", c},
+                {"origin", {origin.x, origin.y, origin.z}}};
+    auto fid = doc_->graph().add(std::move(f));
+    std::string err;
+    if (!doc_->graph().regenerate(*doc_, &err)) {
+        sx::log::error("graph_add_primitive: " + err);
+        doc_->graph().remove(fid);
+        doc_->graph().regenerate(*doc_, nullptr);
+        return {};
+    }
+    return to_gd(fid.str());
+}
+
+String SxDocument::graph_add_sketch(const Ref<SxSketch>& sketch) {
+    if (sketch.is_null()) return {};
+    sx::Feature f;
+    f.type = sx::FeatureType::Sketch;
+    f.sketch = sketch->sketch();
+    return to_gd(doc_->graph().add(std::move(f)).str());
+}
+
+String SxDocument::graph_add_extrude(const String& sketch_fid, double distance,
+                                     bool symmetric, const String& op,
+                                     const String& target_fid) {
+    sx::Feature f;
+    f.type = sx::FeatureType::Extrude;
+    f.params = {{"sketch", to_std(sketch_fid)}, {"distance", distance},
+                {"symmetric", symmetric}, {"op", to_std(op)}};
+    if (!target_fid.is_empty()) f.params["target"] = to_std(target_fid);
+    auto fid = doc_->graph().add(std::move(f));
+    std::string err;
+    if (!doc_->graph().regenerate(*doc_, &err)) {
+        sx::log::error("graph_add_extrude: " + err);
+        doc_->graph().remove(fid);
+        doc_->graph().regenerate(*doc_, nullptr);
+        return {};
+    }
+    return to_gd(fid.str());
+}
+
+bool SxDocument::graph_set_params(const String& fid, const String& params_json) {
+    nlohmann::json p;
+    try {
+        p = nlohmann::json::parse(to_std(params_json));
+    } catch (...) {
+        return false;
+    }
+    if (!doc_->graph().set_params(parse_id(fid), std::move(p))) return false;
+    std::string err;
+    if (!doc_->graph().regenerate(*doc_, &err)) {
+        sx::log::error("graph_set_params regenerate: " + err);
+        return false;
+    }
+    return true;
+}
+
+bool SxDocument::graph_set_suppressed(const String& fid, bool suppressed) {
+    if (!doc_->graph().set_suppressed(parse_id(fid), suppressed)) return false;
+    std::string err;
+    if (!doc_->graph().regenerate(*doc_, &err)) {
+        sx::log::error("graph_set_suppressed regenerate: " + err);
+        return false;
+    }
+    return true;
+}
+
+bool SxDocument::graph_remove(const String& fid) {
+    if (!doc_->graph().remove(parse_id(fid))) return false;
+    std::string err;
+    if (!doc_->graph().regenerate(*doc_, &err)) {
+        sx::log::error("graph_remove regenerate: " + err);
+        return false;
+    }
+    return true;
+}
+
+Dictionary SxDocument::graph_regenerate() {
+    Dictionary out;
+    std::string err;
+    bool ok = doc_->graph().regenerate(*doc_, &err);
+    out["ok"] = ok;
+    out["error"] = to_gd(err);
+    return out;
+}
+
 bool SxDocument::save(const String& path) {
     std::string err;
     bool ok = sx::save_sxp(*doc_, to_std(path), &err);
@@ -386,6 +491,14 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("card_markdown", "entity_id"), &SxDocument::card_markdown);
     ClassDB::bind_method(D_METHOD("set_card_alias", "entity_id", "text"), &SxDocument::set_card_alias);
     ClassDB::bind_method(D_METHOD("set_card_notes", "entity_id", "text"), &SxDocument::set_card_notes);
+    ClassDB::bind_method(D_METHOD("graph_features"), &SxDocument::graph_features);
+    ClassDB::bind_method(D_METHOD("graph_add_primitive", "kind", "a", "b", "c", "origin"), &SxDocument::graph_add_primitive);
+    ClassDB::bind_method(D_METHOD("graph_add_sketch", "sketch"), &SxDocument::graph_add_sketch);
+    ClassDB::bind_method(D_METHOD("graph_add_extrude", "sketch_fid", "distance", "symmetric", "op", "target_fid"), &SxDocument::graph_add_extrude);
+    ClassDB::bind_method(D_METHOD("graph_set_params", "fid", "params_json"), &SxDocument::graph_set_params);
+    ClassDB::bind_method(D_METHOD("graph_set_suppressed", "fid", "suppressed"), &SxDocument::graph_set_suppressed);
+    ClassDB::bind_method(D_METHOD("graph_remove", "fid"), &SxDocument::graph_remove);
+    ClassDB::bind_method(D_METHOD("graph_regenerate"), &SxDocument::graph_regenerate);
     ClassDB::bind_method(D_METHOD("save", "path"), &SxDocument::save);
     ClassDB::bind_method(D_METHOD("load", "path"), &SxDocument::load);
 }

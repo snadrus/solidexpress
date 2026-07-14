@@ -282,17 +282,23 @@ bool FeatureGraph::apply(Document& doc, Feature& f, std::string* err) {
 
 bool FeatureGraph::regenerate(Document& doc, std::string* err) {
     // Remove all bodies owned by this graph (bodies created outside the graph
-    // are untouched).
+    // are untouched). generated_ covers bodies whose features were removed
+    // from the timeline since the last regenerate.
+    for (const auto& id : generated_) {
+        if (doc.body(id)) doc.remove_body(id);
+    }
     for (const auto& f : timeline_) {
         if (!f.output_body.is_null() && doc.body(f.output_body))
             doc.remove_body(f.output_body);
     }
+    generated_.clear();
     for (auto& f : timeline_) {
         if (f.suppressed) continue;
         if (!apply(doc, f, err)) {
             log::error("regenerate stopped at feature " + f.name);
             return false;
         }
+        if (!f.output_body.is_null()) generated_.push_back(f.output_body);
     }
     return true;
 }
