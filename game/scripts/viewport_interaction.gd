@@ -1,7 +1,8 @@
 class_name ViewportInteraction
 extends Control
 ## Full-window overlay owning all 3D interaction: selection clicks, body
-## drag-move on the ground plane, face push/pull drag, and palette drops.
+## drag-move on the ground plane, face push/pull drag, palette drops, and
+## click-to-place for palette button clicks.
 
 signal status(text: String)
 
@@ -21,7 +22,12 @@ var _drag_pp_applied := 0.0
 var _press_pos := Vector2.ZERO
 var _pressed := false
 
+## Armed click-to-place kind, or "" when idle.
+var _place_kind := ""
+var _place_ghost: MeshInstance3D = null
+
 const CLICK_SLOP := 6.0
+const GHOST_NAME := "PlaceGhost"
 
 
 func _ready() -> void:
@@ -74,12 +80,115 @@ func _drop_data(at: Vector2, data: Variant) -> void:
 	status.emit("Inserted " + str(data["sx_primitive"]))
 
 
+## Arm click-to-place for `kind` (palette button click). Does not insert yet.
 func insert_at_center(kind: String) -> void:
-	var gp = ground_point(size / 2.0)
+	_arm_place(kind)
+
+
+func _screen_center() -> Vector2:
+	if size.x > 1.0 and size.y > 1.0:
+		return size * 0.5
+	return get_viewport().get_visible_rect().size * 0.5
+
+
+func _arm_place(kind: String) -> void:
+	_free_ghost()
+	_place_kind = kind
+	status.emit("Click to place %s (Esc to cancel)" % kind)
+	_place_ghost = _make_ghost(kind)
+	model_space.add_child(_place_ghost)
+	_update_ghost(_screen_center())
+
+
+func _make_ghost(kind: String) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.name = GHOST_NAME
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var mesh: Mesh
+	match kind:
+		"box":
+			var bm := BoxMesh.new()
+			bm.size = Vector3(60, 60, 60)
+			mesh = bm
+		"cylinder", "cone":
+			var cm := CylinderMesh.new()
+			cm.top_radius = 25.0
+			cm.bottom_radius = 25.0 if kind == "cylinder" else 5.0
+			cm.height = 50.0
+			mesh = cm
+			# Godot cylinder is Y-up; model space is Z-up.
+			mi.rotation_degrees.x = 90.0
+		"sphere", "torus":
+			var sm := SphereMesh.new()
+			sm.radius = 25.0
+			sm.height = 50.0
+			mesh = sm
+		_:
+			var fallback := BoxMesh.new()
+			fallback.size = Vector3(60, 60, 60)
+			mesh = fallback
+	mi.mesh = mesh
+	var mat := StandardMaterial3D.new()
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(0.45, 0.7, 1.0, 0.4)
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mi.material_override = mat
+	return mi
+
+
+func _update_ghost(screen_pos: Vector2) -> void:
+	if _place_ghost == null:
+		return
+	var gp = ground_point(screen_pos)
 	if gp == null:
+		_place_ghost.visible = false
+	else:
+		_place_ghost.visible = true
+		_place_ghost.position = gp
+
+
+func _free_ghost() -> void:
+	if _place_ghost != null and is_instance_valid(_place_ghost):
+		_place_ghost.queue_free()
+	_place_ghost = null
+
+
+func _disarm_place(emit_cancel: bool) -> void:
+	_free_ghost()
+	_place_kind = ""
+	if emit_cancel:
+		status.emit("Placement cancelled")
+
+
+func _commit_place(screen_pos: Vector2) -> void:
+	var kind := _place_kind
+	var gp = ground_point(screen_pos)
+	var need_frame := gp == null
+	if need_frame:
 		gp = Vector3.ZERO
+	_free_ghost()
+	_place_kind = ""
 	view.insert_primitive(kind, gp)
 	status.emit("Inserted " + kind)
+	if need_frame:
+		camera.frame_contents()
+
+
+func _place_input(event: InputEvent) -> void:
+	if event is InputEventMouseMotion:
+		_update_ghost((event as InputEventMouseMotion).position)
+		accept_event()
+	elif event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if not mb.pressed:
+			accept_event()
+			return
+		if mb.button_index == MOUSE_BUTTON_LEFT:
+			_commit_place(mb.position)
+			accept_event()
+		elif mb.button_index == MOUSE_BUTTON_RIGHT:
+			_disarm_place(true)
+			accept_event()
 
 
 func _gui_input(event: InputEvent) -> void:
@@ -87,7 +196,12 @@ func _gui_input(event: InputEvent) -> void:
 		accept_event()
 		return
 	if sketch_mode != null and sketch_mode.active:
+		if _place_kind != "":
+			_disarm_place(false)
 		_sketch_input(event)
+		return
+	if _place_kind != "":
+		_place_input(event)
 		return
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
@@ -227,6 +341,16 @@ func _gui_key(event: InputEventKey) -> bool:
 	if not event.pressed:
 		return false
 	match event.keycode:
+		KEY_ESCAPE:
+			# Sketch Esc is handled in _sketch_input; do not steal it.
+			if sketch_mode != null and sketch_mode.active:
+				return false
+			if _place_kind != "":
+				_disarm_place(true)
+				return true
+			view.clear_selection()
+			status.emit("")
+			return true
 		KEY_DELETE, KEY_BACKSPACE:
 			if view.delete_selected():
 				status.emit("Deleted body")

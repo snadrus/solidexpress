@@ -1,7 +1,7 @@
 class_name PaletteButton
 extends Button
 ## Palette entry that starts a drag carrying {"sx_primitive": kind}.
-## Clicking (without dragging) also inserts at the viewport center.
+## Clicking (without dragging) arms click-to-place mode; drag still drops directly.
 
 var kind := ""
 

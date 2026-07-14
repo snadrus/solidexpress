@@ -1,0 +1,137 @@
+# Headless tests for click-to-place (armed insert + ghost preview).
+# Run: tools/godot/godot --headless --path game --script tests/run_place_tests.gd
+extends SceneTree
+
+var failures := 0
+var checks := 0
+
+
+func check(cond: bool, what: String) -> void:
+	checks += 1
+	if cond:
+		print("  ok   - " + what)
+	else:
+		failures += 1
+		printerr("  FAIL - " + what)
+
+
+func _init() -> void:
+	print("click-to-place tests")
+	var main_scene: PackedScene = load("res://scenes/main.tscn")
+	var main = main_scene.instantiate()
+	root.add_child(main)
+	await process_frame
+	await process_frame
+
+	test_arming(main)
+	test_ghost_follows(main)
+	await test_commit(main)
+	await test_cancel(main)
+	test_esc_clears_selection(main)
+	test_drop_unchanged(main)
+
+	print("%d checks, %d failures" % [checks, failures])
+	quit(1 if failures > 0 else 0)
+
+
+func _center(ix: ViewportInteraction) -> Vector2:
+	# Headless Control size can be (0,0); rays use the camera viewport.
+	return ix._screen_center()
+
+
+func _ghost(main) -> MeshInstance3D:
+	return main.model_space.get_node_or_null("PlaceGhost") as MeshInstance3D
+
+
+func _lmb(ix: ViewportInteraction, pos: Vector2, pressed: bool) -> void:
+	var mb := InputEventMouseButton.new()
+	mb.button_index = MOUSE_BUTTON_LEFT
+	mb.pressed = pressed
+	mb.position = pos
+	ix._gui_input(mb)
+
+
+func _esc(ix: ViewportInteraction) -> void:
+	var ev := InputEventKey.new()
+	ev.keycode = KEY_ESCAPE
+	ev.pressed = true
+	ix._gui_key(ev)
+
+
+func test_arming(main) -> void:
+	print("- arming insert_at_center")
+	var ix: ViewportInteraction = main.interaction
+	main.view.new_document()
+	ix.insert_at_center("box")
+	check(main.view.doc.body_ids().is_empty(), "no body added yet after arm")
+	check(_ghost(main) != null, "ghost node exists under model_space")
+	check(ix._place_kind == "box", "place kind armed as box")
+
+
+func test_ghost_follows(main) -> void:
+	print("- ghost follows mouse")
+	var ix: ViewportInteraction = main.interaction
+	var center := _center(ix)
+	var mm := InputEventMouseMotion.new()
+	mm.position = center
+	ix._gui_input(mm)
+	var ghost := _ghost(main)
+	check(ghost != null and ghost.visible, "ghost visible at viewport center")
+	var gp = ix.ground_point(center)
+	check(gp != null, "ground point at center is valid")
+	if gp != null:
+		check(ghost.position.distance_to(gp) < 1e-3, "ghost at ground point for center")
+
+
+func test_commit(main) -> void:
+	print("- LMB commits place")
+	var ix: ViewportInteraction = main.interaction
+	var center := _center(ix)
+	_lmb(ix, center, true)
+	_lmb(ix, center, false)
+	check(main.view.doc.body_ids().size() == 1, "exactly one body after commit")
+	check(ix._place_kind == "", "place mode disarmed after commit")
+	check(ix._place_ghost == null, "ghost reference cleared after commit")
+	await process_frame
+	check(main.model_space.get_node_or_null("PlaceGhost") == null, "PlaceGhost gone from tree")
+
+
+func test_cancel(main) -> void:
+	print("- Esc cancels place")
+	var ix: ViewportInteraction = main.interaction
+	var count0: int = main.view.doc.body_ids().size()
+	ix.insert_at_center("cylinder")
+	check(_ghost(main) != null, "ghost present after re-arm")
+	_esc(ix)
+	check(main.view.doc.body_ids().size() == count0, "no second body after cancel")
+	check(ix._place_kind == "", "disarmed after Esc cancel")
+	check(ix._place_ghost == null, "ghost reference cleared after cancel")
+	await process_frame
+	check(main.model_space.get_node_or_null("PlaceGhost") == null, "ghost freed after cancel")
+
+
+func test_esc_clears_selection(main) -> void:
+	print("- Esc clears 3D selection")
+	var ix: ViewportInteraction = main.interaction
+	var view: DocumentView = main.view
+	view.new_document()
+	var id: String = view.insert_primitive("box", Vector3.ZERO)
+	check(id != "", "body inserted for selection test")
+	var ray := ix._model_ray(_center(ix))
+	# Select via ray API (may miss in headless if camera framing differs);
+	# fall back to select_entity.
+	if not view.select_ray(ray[0], ray[1]):
+		view.select_entity(id, "")
+	check(view.selected_body != "", "body selected before Esc")
+	_esc(ix)
+	check(view.selected_body == "", "Esc cleared selected_body")
+
+
+func test_drop_unchanged(main) -> void:
+	print("- drag-drop inserts immediately")
+	var ix: ViewportInteraction = main.interaction
+	var count0: int = main.view.doc.body_ids().size()
+	var center := _center(ix)
+	ix._drop_data(center, {"sx_primitive": "sphere"})
+	check(main.view.doc.body_ids().size() == count0 + 1, "drop increments body count immediately")
+	check(ix._place_kind == "", "drop does not arm place mode")
