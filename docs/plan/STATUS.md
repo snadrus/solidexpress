@@ -31,7 +31,7 @@ Key files: `game/scripts/document_view.gd` (view-model), `viewport_interaction.g
 - [x] 2.3 Profile→face builder (closed loop chaining of lines/arcs, circle→disk, construction geometry excluded)
 - [x] 2.4 Extrude (incl. symmetric) + Revolve commands, undoable, snapshot pattern
 - [x] 2.5 SxSketch GDExtension binding (entities, constraints, solve, entity_info snapshots) + `SxDocument.extrude_sketch/revolve_sketch`
-- [ ] 2.6 Sketch mode UI (draw on picked face, constraint toolbar, dimension input)
+- [x] 2.6 Sketch mode UI v1: sketch on ground plane or selected planar face; line-chain/rect/circle tools with live preview; toolbar with extrude distance; Esc cancel (`game/scripts/sketch_mode.gd`) — constraint toolbar + dimension input still TODO
 - [ ] 2.7 Sketch persistence in .sxp + semantic cards for sketch entities
 
 Test state additions: kernel [sketch]+[extrude] 14 cases; Godot sketch binding 23 checks PASS (parametric re-solve verified).

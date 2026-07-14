@@ -12,6 +12,9 @@ var interaction: ViewportInteraction
 var card_panel: RichTextLabel
 var status_label: Label
 var autosave_timer: Timer
+var sketch_mode: SketchMode
+var sketch_toolbar: PanelContainer
+var extrude_distance: SpinBox
 var _last_saved_revision := 0
 
 
@@ -55,6 +58,11 @@ func _build_world() -> void:
 	view = DocumentView.new()
 	view.name = "DocumentView"
 	model_space.add_child(view)
+
+	sketch_mode = SketchMode.new()
+	sketch_mode.name = "SketchMode"
+	sketch_mode.view = view
+	model_space.add_child(sketch_mode)
 
 	model_space.add_child(_make_grid())
 
@@ -103,6 +111,7 @@ func _build_ui() -> void:
 	interaction.view = view
 	interaction.camera = camera
 	interaction.model_space = model_space
+	interaction.sketch_mode = sketch_mode
 	ui.add_child(interaction)
 
 	# Left: primitive palette.
@@ -122,6 +131,12 @@ func _build_ui() -> void:
 		var btn := PaletteButton.new(entry[0], entry[1])
 		btn.insert_requested.connect(interaction.insert_at_center)
 		vbox.add_child(btn)
+	vbox.add_child(HSeparator.new())
+	var sketch_btn := Button.new()
+	sketch_btn.text = "Sketch"
+	sketch_btn.custom_minimum_size = Vector2(110, 44)
+	sketch_btn.pressed.connect(_start_sketch)
+	vbox.add_child(sketch_btn)
 	vbox.add_child(HSeparator.new())
 	var hint := Label.new()
 	hint.text = "drag into scene\nor click to insert"
@@ -163,9 +178,51 @@ func _build_ui() -> void:
 	status_label.add_theme_font_size_override("font_size", 12)
 	status_bar.add_child(status_label)
 
+	# Sketch toolbar (visible only in sketch mode): tools + extrude distance.
+	sketch_toolbar = PanelContainer.new()
+	sketch_toolbar.name = "SketchToolbar"
+	sketch_toolbar.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	sketch_toolbar.anchor_left = 0.5
+	sketch_toolbar.anchor_right = 0.5
+	sketch_toolbar.offset_left = -260
+	sketch_toolbar.offset_right = 260
+	sketch_toolbar.offset_top = 12
+	sketch_toolbar.visible = false
+	ui.add_child(sketch_toolbar)
+	var hbox := HBoxContainer.new()
+	sketch_toolbar.add_child(hbox)
+	for entry in [[SketchMode.Tool.LINE, "Line (L)"], [SketchMode.Tool.RECT, "Rect (R)"],
+			[SketchMode.Tool.CIRCLE, "Circle (C)"]]:
+		var b := Button.new()
+		b.text = entry[1]
+		b.pressed.connect(sketch_mode.set_tool.bind(entry[0]))
+		hbox.add_child(b)
+	hbox.add_child(VSeparator.new())
+	var dist_label := Label.new()
+	dist_label.text = "Extrude:"
+	hbox.add_child(dist_label)
+	extrude_distance = SpinBox.new()
+	extrude_distance.min_value = -1000
+	extrude_distance.max_value = 1000
+	extrude_distance.step = 1
+	extrude_distance.value = 20
+	extrude_distance.suffix = "mm"
+	hbox.add_child(extrude_distance)
+	var finish_btn := Button.new()
+	finish_btn.text = "Finish"
+	finish_btn.pressed.connect(func() -> void: sketch_mode.finish_extrude(extrude_distance.value))
+	hbox.add_child(finish_btn)
+	var cancel_btn := Button.new()
+	cancel_btn.text = "Cancel"
+	cancel_btn.pressed.connect(sketch_mode.cancel)
+	hbox.add_child(cancel_btn)
+
 	view.selection_changed.connect(_on_selection_changed)
 	view.document_changed.connect(_on_document_changed)
 	interaction.status.connect(_on_status)
+	sketch_mode.status.connect(_on_status)
+	sketch_mode.finished.connect(func(_id: String) -> void: sketch_toolbar.visible = false)
+	sketch_mode.cancelled.connect(func() -> void: sketch_toolbar.visible = false)
 
 
 func _build_autosave() -> void:
@@ -182,6 +239,26 @@ func _autosave() -> void:
 	var path := ProjectSettings.globalize_path("user://autosave.sxp")
 	if view.save(path):
 		_last_saved_revision = view.doc.revision()
+
+
+func _start_sketch() -> void:
+	# Sketch on the selected planar face if there is one, else the ground plane.
+	if sketch_mode.active:
+		return
+	var origin := Vector3.ZERO
+	var normal := Vector3(0, 0, 1)
+	if view.selected_face != "":
+		var n := view.selected_face_normal()
+		if n != Vector3.ZERO:
+			normal = n
+			# Anchor the plane at a point on the face: cast a ray at the face
+			# from outside along -normal through the body center.
+			var center := view.body_center(view.selected_body)
+			var hit: Dictionary = view.pick_info(center + n * 10000.0, -n)
+			if not hit.is_empty():
+				origin = hit["point"]
+	sketch_mode.begin(origin, normal)
+	sketch_toolbar.visible = true
 
 
 func _on_selection_changed(_body: String, _face: String) -> void:

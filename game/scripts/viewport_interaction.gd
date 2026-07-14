@@ -8,6 +8,7 @@ signal status(text: String)
 var view: DocumentView
 var camera: OrbitCamera
 var model_space: Node3D  # kernel Z-up frame
+var sketch_mode: SketchMode  # optional; when active, input goes to sketching
 
 enum DragMode { NONE, MOVE_BODY, PUSH_PULL }
 var _drag_mode := DragMode.NONE
@@ -71,6 +72,9 @@ func _gui_input(event: InputEvent) -> void:
 	if camera.handle_input(event):
 		accept_event()
 		return
+	if sketch_mode != null and sketch_mode.active:
+		_sketch_input(event)
+		return
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_LEFT:
@@ -81,6 +85,32 @@ func _gui_input(event: InputEvent) -> void:
 			accept_event()
 	elif event is InputEventMouseMotion and _pressed:
 		_on_drag(event.position)
+		accept_event()
+
+
+func _sketch_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
+			var ray := _model_ray(mb.position)
+			var p2 = sketch_mode.ray_to_sketch(ray[0], ray[1])
+			if p2 != null:
+				sketch_mode.click(p2)
+			accept_event()
+		elif mb.pressed and mb.button_index == MOUSE_BUTTON_RIGHT:
+			sketch_mode.end_chain()
+			accept_event()
+	elif event is InputEventMouseMotion:
+		var ray := _model_ray(event.position)
+		var p2 = sketch_mode.ray_to_sketch(ray[0], ray[1])
+		if p2 != null:
+			sketch_mode.hover(p2)
+	elif event is InputEventKey and event.pressed:
+		match (event as InputEventKey).keycode:
+			KEY_L: sketch_mode.set_tool(SketchMode.Tool.LINE)
+			KEY_R: sketch_mode.set_tool(SketchMode.Tool.RECT)
+			KEY_C: sketch_mode.set_tool(SketchMode.Tool.CIRCLE)
+			KEY_ESCAPE: sketch_mode.cancel()
 		accept_event()
 
 

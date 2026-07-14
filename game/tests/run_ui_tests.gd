@@ -30,6 +30,7 @@ func _init() -> void:
 	test_move(main)
 	test_push_pull(main)
 	test_undo_wiring(main)
+	test_sketch_mode(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -124,3 +125,44 @@ func test_undo_wiring(main) -> void:
 		if view.body_node(id) != null:
 			live += 1
 	check(live == view.doc.body_ids().size(), "scene nodes exist for all bodies")
+
+
+func test_sketch_mode(main) -> void:
+	print("- sketch mode: rect on ground plane, extrude")
+	var view: DocumentView = main.view
+	var sm: SketchMode = main.sketch_mode
+	var count0: int = view.doc.body_ids().size()
+
+	view.clear_selection()
+	main._start_sketch()
+	check(sm.active, "sketch mode active")
+	check(main.sketch_toolbar.visible, "sketch toolbar shown")
+
+	# Draw a 60x40 rectangle with the rect tool via direct 2D clicks.
+	sm.set_tool(SketchMode.Tool.RECT)
+	sm.click(Vector2(200, 200))
+	sm.hover(Vector2(260, 240))
+	sm.click(Vector2(260, 240))
+	check(sm.sketch.entity_ids().size() == 4, "rect tool created 4 lines")
+
+	sm.finish_extrude(25.0)
+	check(not sm.active, "sketch mode exits on finish")
+	check(view.doc.body_ids().size() == count0 + 1, "extruded body added")
+	var new_body: String = view.selected_body
+	check(new_body != "", "new body selected")
+	check(absf(view.doc.body_volume(new_body) - 60.0 * 40.0 * 25.0) < 1e-3,
+		"extruded volume 60*40*25")
+
+	# Ray through the middle of the new pad must hit it.
+	var hit: Dictionary = view.pick_info(Vector3(230, 220, 500), Vector3(0, 0, -1))
+	check(not hit.is_empty() and hit["body"] == new_body, "pad pickable from above")
+
+	# Cancel path: start a sketch, draw, cancel; nothing added.
+	main._start_sketch()
+	sm.set_tool(SketchMode.Tool.CIRCLE)
+	sm.click(Vector2(0, 0))
+	sm.click(Vector2(10, 0))
+	check(sm.sketch.entity_ids().size() == 1, "circle drawn")
+	sm.cancel()
+	check(not sm.active, "cancel exits sketch mode")
+	check(view.doc.body_ids().size() == count0 + 1, "cancel adds nothing")
