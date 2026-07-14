@@ -40,6 +40,7 @@ func _build_world() -> void:
 	camera = OrbitCamera.new()
 	camera.name = "Camera"
 	add_child(camera)
+	# view/model_space wired after they exist (end of _build_world).
 
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-45, -30, 0)
@@ -77,6 +78,8 @@ func _build_world() -> void:
 	model_space.add_child(sketch_mode)
 
 	model_space.add_child(_make_grid())
+	camera.view = view
+	camera.model_space = model_space
 
 
 func _make_grid() -> MeshInstance3D:
@@ -260,7 +263,7 @@ func _build_ui() -> void:
 	status_bar.offset_top = -30
 	ui.add_child(status_bar)
 	status_label = Label.new()
-	status_label.text = "middle-drag orbit · shift+middle pan · wheel zoom · click select (again for face) · drag selection to move · drag selected face to push/pull · Del delete · Ctrl+Z/Y undo/redo · Ctrl+S save"
+	status_label.text = "middle-drag orbit · shift+middle pan · wheel zoom · F fit · 1/2/3/7 views · click select (again for face/edge) · drag to move · drag face to push/pull · Del delete · Ctrl+Z/Y undo · Ctrl+S save"
 	status_label.add_theme_font_size_override("font_size", 12)
 	status_bar.add_child(status_label)
 

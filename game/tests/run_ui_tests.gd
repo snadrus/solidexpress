@@ -38,6 +38,7 @@ func _init() -> void:
 	test_card_editing(main)
 	test_edge_selection(main)
 	test_file_actions(main)
+	test_camera_views(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -209,6 +210,32 @@ func test_sketch_constraints(main) -> void:
 	check(sm.selected.is_empty(), "empty click clears selection")
 	check(sm.constrain("horizontal") == "", "constrain with no selection is no-op")
 	sm.cancel()
+
+
+func test_camera_views(main) -> void:
+	print("- camera standard views + fit")
+	var cam: OrbitCamera = main.camera
+	var view: DocumentView = main.view
+	view.insert_primitive("box", Vector3.ZERO)
+
+	cam.set_view(0.0, deg_to_rad(89.0))  # top
+	check(cam.global_position.y > 0.0, "top view is above the scene")
+	var to_pivot: Vector3 = (cam.pivot - cam.global_position).normalized()
+	check(to_pivot.dot(Vector3(0, -1, 0)) > 0.95, "top view looks down")
+
+	cam.set_view(0.0, 0.0)  # front
+	check(absf(cam.global_position.y - cam.pivot.y) < 1.0, "front view is level")
+
+	cam.frame_contents()
+	check(cam.distance > OrbitCamera.MIN_DISTANCE, "fit sets a sane distance")
+	var world_pivot: Vector3 = cam.pivot
+	# All bodies should be inside the view sphere used for framing.
+	for id in view.doc.body_ids():
+		var node := view.body_node(id)
+		var aabb: AABB = node.global_transform * node.get_aabb()
+		check(world_pivot.distance_to(aabb.get_center()) < cam.distance,
+			"body within framed view")
+		break
 
 
 func test_file_actions(main) -> void:
