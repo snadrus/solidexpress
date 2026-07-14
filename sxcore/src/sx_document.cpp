@@ -17,6 +17,7 @@
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 
 #include "sx/cards.hpp"
+#include "sx/context.hpp"
 #include "sx/log.hpp"
 #include "sx/pick.hpp"
 #include "sx/shape_utils.hpp"
@@ -482,6 +483,10 @@ String SxDocument::get_card_notes(const String& entity_id) const {
     return c ? to_gd(c->notes) : String();
 }
 
+String SxDocument::export_context() const {
+    return to_gd(sx::export_context_markdown(*doc_));
+}
+
 Array SxDocument::graph_features() const {
     Array out;
     for (const auto& f : doc_->graph().timeline()) {
@@ -709,6 +714,7 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_card_notes", "entity_id", "text"), &SxDocument::set_card_notes);
     ClassDB::bind_method(D_METHOD("get_card_alias", "entity_id"), &SxDocument::get_card_alias);
     ClassDB::bind_method(D_METHOD("get_card_notes", "entity_id"), &SxDocument::get_card_notes);
+    ClassDB::bind_method(D_METHOD("export_context"), &SxDocument::export_context);
     ClassDB::bind_method(D_METHOD("graph_features"), &SxDocument::graph_features);
     ClassDB::bind_method(D_METHOD("graph_add_primitive", "kind", "a", "b", "c", "origin"), &SxDocument::graph_add_primitive);
     ClassDB::bind_method(D_METHOD("graph_add_sketch", "sketch"), &SxDocument::graph_add_sketch);
