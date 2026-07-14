@@ -10,17 +10,20 @@ Updated by agents on every merge. See `docs/plan/implementation-plan.md` for tas
 - [x] 0.5 Exact B-rep ray picking with stable face UUIDs (kernel + Godot `pick()`)
 - [x] 0.6 `.sxp` container (miniz zip: manifest.json + breps + cards), UUID-stable round trip
 - [x] 0.7 Headless Godot test runner (`game/tests/run_tests.gd`), `make test` (kernel Catch2 + Godot integration)
-- [ ] 0.8 Autosave stub + config file (logging done via `sx::log`)
+- [x] 0.8 Autosave (60 s timer in main.gd, revision-gated, `user://autosave.sxp`); logging via `sx::log`
 
-Test state: `make test` → kernel 24 cases / 5373 assertions PASS; Godot integration 33 checks PASS.
+Test state: `make test` → kernel 24 cases / 5373 assertions PASS; Godot integration 33 checks PASS; Phase 1 shell 33 checks PASS.
 
 ## Phase 1 — Drag-and-drop shell
-- [ ] 1.1 Viewport navigation (orbit/pan/zoom, grid, axes)
-- [ ] 1.2 Primitive palette with drag-and-drop insert
-- [ ] 1.3 Selection (click faces/bodies, highlight, property panel showing card)
-- [ ] 1.4 Move gizmo (axis translate)
-- [ ] 1.5 Push/pull face interaction
-- [ ] 1.6 Undo/redo/delete/save/load wired to UI
+- [x] 1.1 Viewport navigation: OrbitCamera (middle-drag orbit, shift+middle pan, wheel zoom, F frame), grid + axes, Z-up ModelSpace mapping kernel frame to Godot Y-up
+- [x] 1.2 Primitive palette (box/cylinder/sphere/cone/torus) with Godot drag-and-drop onto viewport + click-to-insert
+- [x] 1.3 Selection: click = body, second click = face; per-face highlight materials; card panel (RichTextLabel) shows semantic card of selection
+- [x] 1.4 Move: drag selected body on ground plane (live preview, kernel commit on release) — axis gizmo still TODO
+- [x] 1.5 Push/pull: drag a selected face along its normal (ray-line closest-approach math), planar faces v0
+- [x] 1.6 Undo/redo (Ctrl+Z/Y), delete (Del), save/load (Ctrl+S/O) wired; status bar hints
+- [ ] 1.7 Move gizmo with per-axis constraints (follow-up)
+
+Key files: `game/scripts/document_view.gd` (view-model), `viewport_interaction.gd` (input), `orbit_camera.gd`, `palette_button.gd`, `main.gd` (composition root). Tests: `game/tests/run_ui_tests.gd`.
 
 ## Later phases
 Not started. See implementation plan.

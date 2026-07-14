@@ -1,0 +1,8 @@
+{
+	"InstallScripts" : 
+	[
+		"/home/andy/projects/solidexpress/build-bool/cmake_install.cmake",
+		"/home/andy/projects/solidexpress/build-bool/sxkernel/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

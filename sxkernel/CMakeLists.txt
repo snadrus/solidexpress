@@ -1,18 +1,8 @@
 # sxkernel: pure C++ modeling kernel. No Godot dependencies — headless testable.
 
-set(SXKERNEL_SOURCES
-    src/ids.cpp
-    src/entity.cpp
-    src/log.cpp
-    src/cards.cpp
-    src/document.cpp
-    src/command.cpp
-    src/commands_basic.cpp
-    src/shape_utils.cpp
-    src/tessellate.cpp
-    src/pick.cpp
-    src/sxp.cpp
-)
+# GLOB with CONFIGURE_DEPENDS so parallel agents can add sources without
+# editing this file (merge-conflict avoidance is worth the non-idiomatic glob).
+file(GLOB SXKERNEL_SOURCES CONFIGURE_DEPENDS src/*.cpp)
 
 add_library(sxkernel STATIC ${SXKERNEL_SOURCES})
 target_include_directories(sxkernel PUBLIC include)
