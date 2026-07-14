@@ -80,9 +80,13 @@ bool save_sxp(const Document& doc, const std::string& path, std::string* err) {
     json instances_json = json::array();
     for (const auto& inst : doc.instances()) instances_json.push_back(inst);
 
+    json mates_json = json::array();
+    for (const auto& m : doc.mates()) mates_json.push_back(m);
+
     ok = ok && add("features.json", doc.graph().to_json().dump(2));
     ok = ok && add("datums.json", datums_json.dump(2));
     ok = ok && add("instances.json", instances_json.dump(2));
+    ok = ok && add("mates.json", mates_json.dump(2));
     ok = ok && add("manifest.json", manifest.dump(2));
     ok = ok && mz_zip_writer_finalize_archive(&zip) == MZ_TRUE;
     mz_zip_writer_end(&zip);
@@ -150,6 +154,12 @@ bool load_sxp(Document& doc, const std::string& path, std::string* err) {
         instance_ids.reserve(doc.instances().size());
         for (const auto& inst : doc.instances()) instance_ids.push_back(inst.id);
         for (const auto& id : instance_ids) doc.remove_instance(id);
+    }
+    {
+        std::vector<EntityId> mate_ids;
+        mate_ids.reserve(doc.mates().size());
+        for (const auto& m : doc.mates()) mate_ids.push_back(m.id);
+        for (const auto& id : mate_ids) doc.remove_mate(id);
     }
 
     try {
@@ -229,6 +239,25 @@ bool load_sxp(Document& doc, const std::string& path, std::string* err) {
             }
         } catch (const std::exception& e) {
             log::warn(std::string("sxp: ignoring bad instances.json: ") + e.what());
+        }
+    }
+
+    // Mates are optional for backward compatibility with older .sxp files.
+    std::string mates_text = read_entry(zip, "mates.json", &found);
+    if (found) {
+        try {
+            json mj = json::parse(mates_text);
+            for (const auto& jm : mj) {
+                Mate m = jm.get<Mate>();
+                if (!m.instance_b.is_null() && !doc.instance(m.instance_b)) {
+                    log::warn("sxp: dropping mate '" + m.name +
+                              "' — missing instance " + m.instance_b.str());
+                    continue;
+                }
+                doc.restore_mate(std::move(m));
+            }
+        } catch (const std::exception& e) {
+            log::warn(std::string("sxp: ignoring bad mates.json: ") + e.what());
         }
     }
 

@@ -20,6 +20,7 @@
 #include "sx/entity.hpp"
 #include "sx/ids.hpp"
 #include "sx/instances.hpp"
+#include "sx/mates.hpp"
 
 namespace sx {
 
@@ -128,6 +129,14 @@ public:
     // Used by the .sxp loader to restore persisted instances exactly.
     void restore_instance(Instance&& inst);
 
+    // --- assembly mates (see sx/mates.hpp; applied in insertion order) ---
+    // Returns the mate id, or a null id when instance_b is not an instance.
+    EntityId add_mate(Mate m);
+    bool remove_mate(const EntityId& id);
+    const std::vector<Mate>& mates() const { return mates_; }
+    // Used by the .sxp loader to restore persisted mates exactly.
+    void restore_mate(Mate&& m);
+
 private:
     void register_subshapes(Body& b, bool fresh_ids);
     void regenerate_cards_for_body(const Body& b);
@@ -145,6 +154,7 @@ private:
     int datum_point_seq_ = 0;
     std::vector<Instance> instances_;
     std::unordered_map<EntityId, size_t> instance_index_;
+    std::vector<Mate> mates_;
     std::unique_ptr<CardRegistry> cards_;
     std::unique_ptr<FeatureGraph> graph_;
     uint64_t revision_ = 0;

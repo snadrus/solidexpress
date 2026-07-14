@@ -368,6 +368,10 @@ EntityId Document::add_instance(const EntityId& source_body,
 bool Document::remove_instance(const EntityId& id) {
     auto it = instance_index_.find(id);
     if (it == instance_index_.end()) return false;
+    // Cascade: mates referencing a removed instance are meaningless.
+    std::erase_if(mates_, [&](const Mate& m) {
+        return m.instance_a == id || m.instance_b == id;
+    });
     const size_t idx = it->second;
     instances_.erase(instances_.begin() + static_cast<long>(idx));
     instance_index_.erase(it);
@@ -397,6 +401,35 @@ const Instance* Document::instance(const EntityId& id) const {
 void Document::restore_instance(Instance&& inst) {
     instance_index_[inst.id] = instances_.size();
     instances_.push_back(std::move(inst));
+    bump_revision();
+}
+
+EntityId Document::add_mate(Mate m) {
+    if (m.type != MateType::Fixed || !m.instance_b.is_null()) {
+        if (!instance(m.instance_b)) return {};
+    }
+    if (m.id.is_null()) m.id = EntityId::generate();
+    if (m.name.empty())
+        m.name = std::string(to_string(m.type)) + " " + std::to_string(mates_.size() + 1);
+    const EntityId id = m.id;
+    mates_.push_back(std::move(m));
+    bump_revision();
+    return id;
+}
+
+bool Document::remove_mate(const EntityId& id) {
+    for (size_t i = 0; i < mates_.size(); ++i) {
+        if (mates_[i].id == id) {
+            mates_.erase(mates_.begin() + static_cast<long>(i));
+            bump_revision();
+            return true;
+        }
+    }
+    return false;
+}
+
+void Document::restore_mate(Mate&& m) {
+    mates_.push_back(std::move(m));
     bump_revision();
 }
 
