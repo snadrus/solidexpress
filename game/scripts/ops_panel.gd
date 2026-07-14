@@ -120,24 +120,31 @@ func _on_selection_changed(body: String, face: String) -> void:
 
 # --- body ops ---
 
+# Fillet/chamfer target: the selected edge when there is one, else all edges.
+func _round_targets() -> PackedStringArray:
+	if view.selected_edge != "":
+		return PackedStringArray([view.selected_edge])
+	return view.doc.get_edge_ids(view.selected_body)
+
+
 func _fillet_all() -> void:
-	var body := view.selected_body
-	if body == "":
+	if view.selected_body == "":
 		return
-	if view.doc.fillet_edges(view.doc.get_edge_ids(body), _radius_spin.value):
+	var scope := "edge" if view.selected_edge != "" else "all edges"
+	if view.doc.fillet_edges(_round_targets(), _radius_spin.value):
 		view.graph_changed()
-		status.emit("Filleted all edges r=%.1f" % _radius_spin.value)
+		status.emit("Filleted %s r=%.1f" % [scope, _radius_spin.value])
 	else:
 		status.emit("Fillet failed (radius too large?)")
 
 
 func _chamfer_all() -> void:
-	var body := view.selected_body
-	if body == "":
+	if view.selected_body == "":
 		return
-	if view.doc.chamfer_edges(view.doc.get_edge_ids(body), _radius_spin.value):
+	var scope := "edge" if view.selected_edge != "" else "all edges"
+	if view.doc.chamfer_edges(_round_targets(), _radius_spin.value):
 		view.graph_changed()
-		status.emit("Chamfered all edges d=%.1f" % _radius_spin.value)
+		status.emit("Chamfered %s d=%.1f" % [scope, _radius_spin.value])
 	else:
 		status.emit("Chamfer failed (distance too large?)")
 

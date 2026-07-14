@@ -16,9 +16,13 @@ const EDGE_COLOR := Color(0.12, 0.13, 0.16)
 var doc: SxDocument = SxDocument.new()
 var selected_body := ""
 var selected_face := ""
+var selected_edge := ""
+
+const EDGE_PICK_TOLERANCE := 2.5  # model units (mm)
 
 var _body_nodes := {}  # body_id -> MeshInstance3D
 var _face_ids := {}    # body_id -> PackedStringArray
+var _edge_highlight: MeshInstance3D
 var _base_material: StandardMaterial3D
 var _selected_body_material: StandardMaterial3D
 var _selected_face_material: StandardMaterial3D
@@ -34,6 +38,14 @@ func _ready() -> void:
 	_edge_material = StandardMaterial3D.new()
 	_edge_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_edge_material.albedo_color = EDGE_COLOR
+	var hl_mat := StandardMaterial3D.new()
+	hl_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	hl_mat.albedo_color = SELECTED_FACE_COLOR
+	hl_mat.no_depth_test = true
+	_edge_highlight = MeshInstance3D.new()
+	_edge_highlight.name = "EdgeHighlight"
+	_edge_highlight.material_override = hl_mat
+	add_child(_edge_highlight)
 	refresh()
 
 
@@ -105,12 +117,48 @@ func select_ray(origin: Vector3, direction: Vector3) -> bool:
 	if hit.is_empty():
 		clear_selection()
 		return false
-	# First click on a body selects the body; clicking again refines to face.
-	if selected_body == hit["body"] and selected_face != hit["face"]:
-		select_entity(hit["body"], hit["face"])
-	else:
-		select_entity(hit["body"], "")
+	# First click on a body selects the body; clicking again refines to an
+	# edge (when the hit point is within tolerance of one) or the hit face.
+	if selected_body == hit["body"]:
+		var edge := _edge_near_point(hit["body"], hit["point"])
+		if edge != "" and edge != selected_edge:
+			select_edge(hit["body"], edge)
+			return true
+		if selected_face != hit["face"]:
+			select_entity(hit["body"], hit["face"])
+			return true
+	select_entity(hit["body"], "")
 	return true
+
+
+## Closest edge of `body_id` to a model-space point, "" when none in tolerance.
+func _edge_near_point(body_id: String, point: Vector3) -> String:
+	var lines: Dictionary = doc.get_edge_lines(body_id)
+	var best_id := ""
+	var best_d := EDGE_PICK_TOLERANCE
+	for edge_id in lines:
+		var pts: PackedVector3Array = lines[edge_id]
+		for i in range(pts.size() - 1):
+			var d := _point_segment_distance3(point, pts[i], pts[i + 1])
+			if d < best_d:
+				best_d = d
+				best_id = edge_id
+	return best_id
+
+
+func _point_segment_distance3(p: Vector3, a: Vector3, b: Vector3) -> float:
+	var ab := b - a
+	var t := 0.0 if ab.length_squared() < 1e-12 else clampf((p - a).dot(ab) / ab.length_squared(), 0.0, 1.0)
+	return p.distance_to(a + ab * t)
+
+
+func select_edge(body_id: String, edge_id: String) -> void:
+	selected_body = body_id
+	selected_face = ""
+	selected_edge = edge_id
+	_apply_selection_materials()
+	_highlight_edge()
+	selection_changed.emit(selected_body, selected_face)
 
 
 func pick_info(origin: Vector3, direction: Vector3) -> Dictionary:
@@ -120,7 +168,9 @@ func pick_info(origin: Vector3, direction: Vector3) -> Dictionary:
 func select_entity(body_id: String, face_id: String) -> void:
 	selected_body = body_id
 	selected_face = face_id
+	selected_edge = ""
 	_apply_selection_materials()
+	_highlight_edge()
 	selection_changed.emit(selected_body, selected_face)
 
 
@@ -130,6 +180,11 @@ func clear_selection() -> void:
 
 ## Card markdown of the innermost selected entity ("" if nothing selected).
 func selection_card() -> String:
+	if selected_edge != "":
+		var md := doc.card_markdown(selected_edge)
+		if md != "":
+			return md
+		return "## Edge\n`%s`\nlength %.2f mm" % [selected_edge, doc.measure_edge_length(selected_edge)]
 	if selected_face != "":
 		return doc.card_markdown(selected_face)
 	if selected_body != "":
@@ -257,6 +312,7 @@ func body_node(body_id: String) -> MeshInstance3D:
 func _after_mutation() -> void:
 	refresh()
 	_apply_selection_materials()
+	_highlight_edge()
 	document_changed.emit()
 
 
@@ -294,6 +350,27 @@ func _rebuild_edges(edge_node: MeshInstance3D, body_id: String) -> void:
 		im.surface_end()
 	edge_node.mesh = im
 	edge_node.material_override = _edge_material
+
+
+func _highlight_edge() -> void:
+	if selected_edge == "" or selected_body == "":
+		_edge_highlight.mesh = null
+		return
+	var lines: Dictionary = doc.get_edge_lines(selected_body)
+	if not lines.has(selected_edge):
+		_edge_highlight.mesh = null
+		return
+	var pts: PackedVector3Array = lines[selected_edge]
+	if pts.size() < 2:
+		_edge_highlight.mesh = null
+		return
+	var im := ImmediateMesh.new()
+	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	for i in range(pts.size() - 1):
+		im.surface_add_vertex(pts[i])
+		im.surface_add_vertex(pts[i + 1])
+	im.surface_end()
+	_edge_highlight.mesh = im
 
 
 func _apply_selection_materials() -> void:

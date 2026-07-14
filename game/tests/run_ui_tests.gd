@@ -36,6 +36,7 @@ func _init() -> void:
 	test_sketch_constraints(main)
 	test_revolve_and_cut(main)
 	test_card_editing(main)
+	test_edge_selection(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -207,6 +208,31 @@ func test_sketch_constraints(main) -> void:
 	check(sm.selected.is_empty(), "empty click clears selection")
 	check(sm.constrain("horizontal") == "", "constrain with no selection is no-op")
 	sm.cancel()
+
+
+func test_edge_selection(main) -> void:
+	print("- edge selection + targeted fillet")
+	var view: DocumentView = main.view
+	var ops: OpsPanel = main.ops_panel
+	var a: String = view.insert_primitive("box", Vector3(-600, -600, 0))
+	# Box spans -625..-575 in x/y, 0..50 in z. Ray down the top-front edge
+	# (y = -625): hits the top face within edge tolerance.
+	view.select_entity(a, "")
+	view.select_ray(Vector3(-600, -624.9, 500), Vector3(0, 0, -1))
+	check(view.selected_edge != "", "edge picked near hit point")
+	check(view.selection_card().contains("50.0"), "edge card shows length 50")
+
+	# Targeted fillet: only the selected edge is rounded (10 faces stays 7).
+	var vol0: float = view.doc.body_volume(a)
+	ops._radius_spin.value = 3.0
+	ops._fillet_all()
+	check(view.doc.body_volume(a) < vol0, "edge fillet removed material")
+	check(view.doc.get_face_ids(a).size() == 7, "only one edge filleted (7 faces)")
+
+	# Clicking mid-face selects the face, not an edge.
+	view.select_entity(a, "")
+	view.select_ray(Vector3(-600, -600, 500), Vector3(0, 0, -1))
+	check(view.selected_edge == "" and view.selected_face != "", "mid-face click picks face")
 
 
 func test_card_editing(main) -> void:
