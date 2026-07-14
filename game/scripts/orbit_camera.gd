@@ -1,7 +1,7 @@
 class_name OrbitCamera
 extends Camera3D
 ## Turntable orbit camera: middle-drag orbits, shift+middle-drag pans,
-## wheel zooms toward the pivot. F frames the scene contents;
+## wheel zooms toward the cursor. F frames the scene contents;
 ## 1/2/3/7 jump to front/right/top/isometric standard views;
 ## 5 toggles orthographic/perspective projection.
 
@@ -29,12 +29,10 @@ func handle_input(event: InputEvent) -> bool:
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
-			distance = clampf(distance * 0.9, MIN_DISTANCE, MAX_DISTANCE)
-			_update_transform()
+			zoom_at(mb.position, 0.9)
 			return true
 		if mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
-			distance = clampf(distance / 0.9, MIN_DISTANCE, MAX_DISTANCE)
-			_update_transform()
+			zoom_at(mb.position, 1.0 / 0.9)
 			return true
 	elif event is InputEventMouseMotion:
 		var mm := event as InputEventMouseMotion
@@ -72,6 +70,40 @@ func handle_input(event: InputEvent) -> bool:
 				toggle_projection()
 				return true
 	return false
+
+
+## Zoom by `factor` (< 1 in, > 1 out) keeping the point under `screen_pos`
+## approximately fixed: intersect the cursor ray with the plane through the
+## pivot perpendicular to the view axis, then shift the pivot by (1 - factor)
+## of that pivot→anchor vector (in-plane).
+func zoom_at(screen_pos: Vector2, factor: float) -> void:
+	var anchor := _zoom_anchor(screen_pos)
+	var basis := global_transform.basis if is_inside_tree() else transform.basis
+	var forward := -basis.z
+	var to_anchor := anchor - pivot
+	# Project onto the view plane (numerical safety; anchor should already lie on it).
+	var plane_delta := to_anchor - forward * to_anchor.dot(forward)
+	distance = clampf(distance * factor, MIN_DISTANCE, MAX_DISTANCE)
+	pivot += (1.0 - factor) * plane_delta
+	_update_transform()
+
+
+func _zoom_anchor(screen_pos: Vector2) -> Vector3:
+	var vp := get_viewport()
+	if vp == null:
+		return pivot
+	var vp_size := vp.get_visible_rect().size
+	if vp_size.x <= 0.0 or vp_size.y <= 0.0:
+		return pivot
+	var ray_origin := project_ray_origin(screen_pos)
+	var ray_dir := project_ray_normal(screen_pos)
+	var basis := global_transform.basis if is_inside_tree() else transform.basis
+	var forward := -basis.z
+	var denom := ray_dir.dot(forward)
+	if absf(denom) < 1e-12:
+		return pivot
+	var t := (pivot - ray_origin).dot(forward) / denom
+	return ray_origin + ray_dir * t
 
 
 ## Switch between perspective and orthographic, keeping apparent size:
@@ -126,5 +158,10 @@ func _update_transform() -> void:
 		sin(pitch),
 		cos(pitch) * cos(yaw)
 	) * distance
-	global_position = pivot + offset
-	look_at(pivot, Vector3.UP)
+	var pos := pivot + offset
+	if is_inside_tree():
+		global_position = pos
+		look_at(pivot, Vector3.UP)
+	else:
+		# Headless / orphan nodes (e.g. unit tests) cannot use look_at().
+		look_at_from_position(pos, pivot, Vector3.UP)
