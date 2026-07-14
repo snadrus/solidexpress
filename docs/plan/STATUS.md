@@ -84,8 +84,12 @@ Godot suites: integration 97 checks, UI 114 checks, sketch 23 checks.
 - [x] Sketch arc (3-point) + polygon tools
 - [x] Body rename + per-body display color (ops panel, tinted materials, .sxp persistence; rename refreshes face cards)
 
+- [x] Sweep/loft as parametric graph feature types ([featsweep])
+
 ## In flight (background agents)
-- Sweep/loft as graph feature types
+- Draft/taper kernel command ([draft])
+- Display modes: shaded / shaded+edges / wireframe
+- Sketch fillet + offset tools ([sketchtools])
 
 ## Later phases
 Not started. See implementation plan.
