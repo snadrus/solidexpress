@@ -2,12 +2,15 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
+#include <vector>
 
 namespace sx::sketch_tools {
 namespace {
 
 constexpr double k_eps = 1e-6;
 constexpr double k_pi = 3.14159265358979323846;
+constexpr double k_two_pi = 2.0 * k_pi;
 
 struct Vec2 {
     double x = 0, y = 0;
@@ -40,6 +43,229 @@ void set_line_end(Sketch& s, const SketchEntity& e, PointRole role, Vec2 p) {
         s.param_mut(e.params[2]) = p.x;
         s.param_mut(e.params[3]) = p.y;
     }
+}
+
+// Line-line: parameter t on segment A in (0,1) if segments properly intersect.
+std::optional<double> line_line_intersect_t(Vec2 a0, Vec2 a1, Vec2 b0, Vec2 b1) {
+    Vec2 da = sub(a1, a0);
+    Vec2 db = sub(b1, b0);
+    double den = cross(da, db);
+    if (std::abs(den) < 1e-15) return std::nullopt;  // parallel / degenerate
+    Vec2 ab = sub(b0, a0);
+    double t = cross(ab, db) / den;
+    double u = cross(ab, da) / den;
+    if (t <= k_eps || t >= 1.0 - k_eps || u <= k_eps || u >= 1.0 - k_eps)
+        return std::nullopt;
+    return t;
+}
+
+// Line-circle: parameters t in (0,1) where the segment meets the circle.
+std::vector<double> line_circle_intersect_t(Vec2 a0, Vec2 a1, Vec2 c, double r) {
+    std::vector<double> out;
+    if (r <= 0) return out;
+    Vec2 d = sub(a1, a0);
+    Vec2 f = sub(a0, c);
+    double A = dot(d, d);
+    if (A < 1e-30) return out;
+    double B = 2.0 * dot(f, d);
+    double C = dot(f, f) - r * r;
+    double disc = B * B - 4.0 * A * C;
+    if (disc < -k_eps) return out;
+    if (disc < 0) disc = 0;
+    double sqrt_d = std::sqrt(disc);
+    for (double sign : {-1.0, 1.0}) {
+        double t = (-B + sign * sqrt_d) / (2.0 * A);
+        if (t > k_eps && t < 1.0 - k_eps) out.push_back(t);
+    }
+    // Deduplicate near-tangent double root.
+    if (out.size() == 2 && std::abs(out[0] - out[1]) < k_eps) out.pop_back();
+    return out;
+}
+
+// Circle-circle: angles on circle A for proper intersection points.
+std::vector<double> circle_circle_intersect_angles(Vec2 ca, double ra, Vec2 cb,
+                                                   double rb) {
+    std::vector<double> out;
+    if (ra <= 0 || rb <= 0) return out;
+    Vec2 d = sub(cb, ca);
+    double dist = hypot2(d);
+    if (dist < 1e-15) return out;  // coincident centers
+    if (dist > ra + rb + k_eps || dist < std::abs(ra - rb) - k_eps) return out;
+
+    double a = (ra * ra - rb * rb + dist * dist) / (2.0 * dist);
+    double h2 = ra * ra - a * a;
+    if (h2 < -k_eps) return out;
+    if (h2 < 0) h2 = 0;
+    double h = std::sqrt(h2);
+    Vec2 p = add(ca, mul(d, a / dist));
+    Vec2 perp = {-d.y / dist * h, d.x / dist * h};
+
+    auto push_ang = [&](Vec2 pt) {
+        double ang = std::atan2(pt.y - ca.y, pt.x - ca.x);
+        out.push_back(ang);
+    };
+    if (h < k_eps) {
+        push_ang(p);  // tangent
+    } else {
+        push_ang(add(p, perp));
+        push_ang(sub(p, perp));
+    }
+    return out;
+}
+
+void unique_sorted(std::vector<double>& v) {
+    std::sort(v.begin(), v.end());
+    auto last = v.begin();
+    for (auto it = v.begin(); it != v.end(); ++it) {
+        if (last == v.begin() || std::abs(*it - *(last - 1)) > k_eps) {
+            *last++ = *it;
+        }
+    }
+    v.erase(last, v.end());
+}
+
+double normalize_angle(double a) {
+    while (a < 0) a += k_two_pi;
+    while (a >= k_two_pi) a -= k_two_pi;
+    return a;
+}
+
+bool collect_line_intersections(const Sketch& s, const SketchEntity& line,
+                                EntityId self_id, std::vector<double>& ts) {
+    Vec2 a0 = line_end(s, line, PointRole::Start);
+    Vec2 a1 = line_end(s, line, PointRole::End);
+    for (const SketchEntity& other : s.entities()) {
+        if (other.id == self_id || other.construction) continue;
+        if (other.type == SketchEntityType::Line) {
+            Vec2 b0 = line_end(s, other, PointRole::Start);
+            Vec2 b1 = line_end(s, other, PointRole::End);
+            if (auto t = line_line_intersect_t(a0, a1, b0, b1)) ts.push_back(*t);
+        } else if (other.type == SketchEntityType::Circle) {
+            Vec2 c = {s.param(other.params[0]), s.param(other.params[1])};
+            double r = s.param(other.params[2]);
+            auto hits = line_circle_intersect_t(a0, a1, c, r);
+            ts.insert(ts.end(), hits.begin(), hits.end());
+        }
+    }
+    unique_sorted(ts);
+    return !ts.empty();
+}
+
+bool collect_circle_intersections(const Sketch& s, const SketchEntity& circ,
+                                  EntityId self_id, std::vector<double>& angs) {
+    Vec2 c = {s.param(circ.params[0]), s.param(circ.params[1])};
+    double r = s.param(circ.params[2]);
+    for (const SketchEntity& other : s.entities()) {
+        if (other.id == self_id || other.construction) continue;
+        if (other.type == SketchEntityType::Line) {
+            Vec2 a0 = line_end(s, other, PointRole::Start);
+            Vec2 a1 = line_end(s, other, PointRole::End);
+            for (double t : line_circle_intersect_t(a0, a1, c, r)) {
+                Vec2 p = add(a0, mul(sub(a1, a0), t));
+                angs.push_back(std::atan2(p.y - c.y, p.x - c.x));
+            }
+        } else if (other.type == SketchEntityType::Circle) {
+            Vec2 oc = {s.param(other.params[0]), s.param(other.params[1])};
+            double or_ = s.param(other.params[2]);
+            auto hits = circle_circle_intersect_angles(c, r, oc, or_);
+            angs.insert(angs.end(), hits.begin(), hits.end());
+        }
+    }
+    for (double& a : angs) a = normalize_angle(a);
+    unique_sorted(angs);
+    return angs.size() >= 2;
+}
+
+bool trim_line(Sketch& s, EntityId id, double px, double py) {
+    const SketchEntity* e = s.entity(id);
+    if (!e || e->type != SketchEntityType::Line) return false;
+
+    Vec2 a0 = line_end(s, *e, PointRole::Start);
+    Vec2 a1 = line_end(s, *e, PointRole::End);
+    Vec2 d = sub(a1, a0);
+    double len2 = dot(d, d);
+    if (len2 < 1e-30) return false;
+
+    std::vector<double> ts;
+    if (!collect_line_intersections(s, *e, id, ts)) return false;
+
+    double t_pick = dot(sub({px, py}, a0), d) / len2;
+    t_pick = std::clamp(t_pick, 0.0, 1.0);
+
+    // Sub-segments: [0, t0], [t0, t1], ..., [tn-1, 1]. Find one containing pick.
+    double lo = 0.0;
+    double hi = ts[0];
+    size_t seg = 0;  // 0 = first end, ts.size() = last end, else interior
+    for (size_t i = 0; i <= ts.size(); ++i) {
+        lo = (i == 0) ? 0.0 : ts[i - 1];
+        hi = (i == ts.size()) ? 1.0 : ts[i];
+        if (t_pick >= lo - k_eps && t_pick <= hi + k_eps) {
+            seg = i;
+            break;
+        }
+    }
+
+    auto at_t = [&](double t) { return add(a0, mul(d, t)); };
+
+    if (seg == 0) {
+        // Trim start end-segment: move start to first intersection.
+        set_line_end(s, *e, PointRole::Start, at_t(ts[0]));
+        return true;
+    }
+    if (seg == ts.size()) {
+        // Trim end end-segment: move end to last intersection.
+        set_line_end(s, *e, PointRole::End, at_t(ts.back()));
+        return true;
+    }
+
+    // Interior: replace with two lines [0, lo] and [hi, 1].
+    Vec2 p_lo = at_t(lo);
+    Vec2 p_hi = at_t(hi);
+    s.remove_entity(id);
+    s.add_line(a0.x, a0.y, p_lo.x, p_lo.y);
+    s.add_line(p_hi.x, p_hi.y, a1.x, a1.y);
+    return true;
+}
+
+bool trim_circle(Sketch& s, EntityId id, double px, double py) {
+    const SketchEntity* e = s.entity(id);
+    if (!e || e->type != SketchEntityType::Circle) return false;
+
+    Vec2 c = {s.param(e->params[0]), s.param(e->params[1])};
+    double r = s.param(e->params[2]);
+    if (r <= 0) return false;
+
+    std::vector<double> angs;
+    if (!collect_circle_intersections(s, *e, id, angs)) return false;
+
+    double pick_ang = normalize_angle(std::atan2(py - c.y, px - c.x));
+
+    // Find consecutive intersection pair (wrapping) whose CCW arc contains pick.
+    size_t n = angs.size();
+    size_t i_start = 0;  // remaining arc ends at angs[i_start]; starts at next
+    bool found = false;
+    for (size_t i = 0; i < n; ++i) {
+        double a0 = angs[i];
+        double a1 = angs[(i + 1) % n];
+        double span = (i + 1 < n) ? (a1 - a0) : (a1 + k_two_pi - a0);
+        double from_a0 = (pick_ang >= a0) ? (pick_ang - a0) : (pick_ang + k_two_pi - a0);
+        if (from_a0 <= span + k_eps) {
+            // Remove [a0, a1]; keep from a1 CCW to a0.
+            i_start = i;
+            found = true;
+            break;
+        }
+    }
+    if (!found) return false;
+
+    double rem_start = angs[(i_start + 1) % n];
+    double rem_end = angs[i_start];
+    // add_arc expects end CCW from start; if rem_end <= rem_start, bump by 2π.
+    if (rem_end <= rem_start + k_eps) rem_end += k_two_pi;
+
+    s.remove_entity(id);
+    s.add_arc(c.x, c.y, r, rem_start, rem_end);
+    return true;
 }
 
 }  // namespace
@@ -179,6 +405,15 @@ std::vector<std::string> offset_entities(Sketch& s,
         // Arcs and other kinds skipped in v1.
     }
     return out;
+}
+
+bool trim_entity(Sketch& s, const std::string& entity_id, double px, double py) {
+    EntityId id = EntityId::from_string(entity_id);
+    const SketchEntity* e = s.entity(id);
+    if (!e) return false;
+    if (e->type == SketchEntityType::Line) return trim_line(s, id, px, py);
+    if (e->type == SketchEntityType::Circle) return trim_circle(s, id, px, py);
+    return false;
 }
 
 }  // namespace sx::sketch_tools

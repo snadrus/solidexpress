@@ -1,5 +1,8 @@
 #include <catch.hpp>
+#include <algorithm>
 #include <cmath>
+#include <utility>
+#include <vector>
 
 #include "sx/sketch.hpp"
 #include "sx/sketch_tools.hpp"
@@ -111,4 +114,147 @@ TEST_CASE("offset_entities offsets and skips circles by radius", "[sketchtools]"
     auto bad = offset_entities(sk, {c.str()}, -6.0);
     REQUIRE(bad.empty());
     REQUIRE(sk.entities().size() == n_before);
+}
+
+TEST_CASE("trim_entity shortens horizontal at cross near right end",
+          "[sketchtools][trim]") {
+    Sketch sk("TrimCross");
+    auto h = sk.add_line(0, 0, 10, 0);
+    auto v = sk.add_line(5, -5, 5, 5);
+    size_t n_before = sk.entities().size();
+
+    REQUIRE(trim_entity(sk, h.str(), 8.0, 0.0));
+    REQUIRE(sk.entities().size() == n_before);
+    REQUIRE(sk.entity(h) != nullptr);
+
+    auto start = *sk.point_pos({h, PointRole::Start});
+    auto end = *sk.point_pos({h, PointRole::End});
+    REQUIRE(start[0] == Approx(0.0).margin(1e-9));
+    REQUIRE(start[1] == Approx(0.0).margin(1e-9));
+    REQUIRE(end[0] == Approx(5.0).margin(1e-9));
+    REQUIRE(end[1] == Approx(0.0).margin(1e-9));
+    // Vertical unchanged.
+    auto vs = *sk.point_pos({v, PointRole::Start});
+    REQUIRE(vs[0] == Approx(5.0));
+}
+
+TEST_CASE("trim_entity splits line crossed by two parallels",
+          "[sketchtools][trim]") {
+    Sketch sk("TrimMid");
+    auto h = sk.add_line(0, 0, 10, 0);
+    sk.add_line(3, -2, 3, 2);
+    sk.add_line(7, -2, 7, 2);
+    size_t n_before = sk.entities().size();
+
+    REQUIRE(trim_entity(sk, h.str(), 5.0, 0.0));
+    // Original removed, two remnants added → +1 entity.
+    REQUIRE(sk.entities().size() == n_before + 1);
+    REQUIRE(sk.entity(h) == nullptr);
+
+    std::vector<const SketchEntity*> remnants;
+    for (const auto& e : sk.entities()) {
+        if (e.type == SketchEntityType::Line) {
+            auto p0 = *sk.point_pos({e.id, PointRole::Start});
+            auto p1 = *sk.point_pos({e.id, PointRole::End});
+            // Horizontal remnants only (y≈0 both ends, length < 10).
+            if (std::abs(p0[1]) < 1e-9 && std::abs(p1[1]) < 1e-9 &&
+                std::abs(p1[0] - p0[0]) < 9.5)
+                remnants.push_back(&e);
+        }
+    }
+    REQUIRE(remnants.size() == 2);
+
+    auto span_x = [&](const SketchEntity* e) {
+        double x0 = sk.param(e->params[0]);
+        double x1 = sk.param(e->params[2]);
+        return std::make_pair(std::min(x0, x1), std::max(x0, x1));
+    };
+    auto a = span_x(remnants[0]);
+    auto b = span_x(remnants[1]);
+    // One segment [0,3], one [7,10]; gap between the parallels.
+    bool gap_ok =
+        (std::abs(a.first - 0.0) < 1e-9 && std::abs(a.second - 3.0) < 1e-9 &&
+         std::abs(b.first - 7.0) < 1e-9 && std::abs(b.second - 10.0) < 1e-9) ||
+        (std::abs(b.first - 0.0) < 1e-9 && std::abs(b.second - 3.0) < 1e-9 &&
+         std::abs(a.first - 7.0) < 1e-9 && std::abs(a.second - 10.0) < 1e-9);
+    REQUIRE(gap_ok);
+}
+
+TEST_CASE("trim_entity returns false with no intersections",
+          "[sketchtools][trim]") {
+    Sketch sk("TrimNone");
+    auto h = sk.add_line(0, 0, 10, 0);
+    sk.add_line(0, 5, 10, 5);  // parallel, no intersection
+    size_t n_before = sk.entities().size();
+    uint64_t rev = sk.revision();
+
+    REQUIRE_FALSE(trim_entity(sk, h.str(), 5.0, 0.0));
+    REQUIRE(sk.entities().size() == n_before);
+    REQUIRE(sk.revision() == rev);
+    auto s = *sk.point_pos({h, PointRole::Start});
+    auto e = *sk.point_pos({h, PointRole::End});
+    REQUIRE(s[0] == Approx(0.0));
+    REQUIRE(e[0] == Approx(10.0));
+}
+
+TEST_CASE("trim_entity opens gap on line through circle", "[sketchtools][trim]") {
+    Sketch sk("TrimLineCirc");
+    auto h = sk.add_line(-10, 0, 10, 0);
+    sk.add_circle(0, 0, 5);
+    size_t n_before = sk.entities().size();
+
+    // Pick inside the circle → remove middle chord between intersections.
+    REQUIRE(trim_entity(sk, h.str(), 0.0, 0.0));
+    REQUIRE(sk.entities().size() == n_before + 1);
+    REQUIRE(sk.entity(h) == nullptr);
+
+    std::vector<std::pair<double, double>> segs;
+    for (const auto& e : sk.entities()) {
+        if (e.type != SketchEntityType::Line) continue;
+        double x0 = sk.param(e.params[0]);
+        double y0 = sk.param(e.params[1]);
+        double x1 = sk.param(e.params[2]);
+        double y1 = sk.param(e.params[3]);
+        if (std::abs(y0) > 1e-6 || std::abs(y1) > 1e-6) continue;
+        segs.push_back(std::minmax(x0, x1));
+    }
+    REQUIRE(segs.size() == 2);
+    std::sort(segs.begin(), segs.end());
+    REQUIRE(segs[0].first == Approx(-10.0).margin(1e-9));
+    REQUIRE(segs[0].second == Approx(-5.0).margin(1e-9));
+    REQUIRE(segs[1].first == Approx(5.0).margin(1e-9));
+    REQUIRE(segs[1].second == Approx(10.0).margin(1e-9));
+}
+
+TEST_CASE("trim_entity replaces circle with remaining arc",
+          "[sketchtools][trim]") {
+    Sketch sk("TrimCirc");
+    auto c = sk.add_circle(0, 0, 5);
+    // Two vertical chords → four intersections; pick near +X (angle 0).
+    sk.add_line(-2, -10, -2, 10);
+    sk.add_line(2, -10, 2, 10);
+    size_t n_before = sk.entities().size();
+
+    REQUIRE(trim_entity(sk, c.str(), 5.0, 0.0));
+    REQUIRE(sk.entities().size() == n_before);  // circle → arc (same count)
+    REQUIRE(sk.entity(c) == nullptr);
+
+    const SketchEntity* arc = nullptr;
+    for (const auto& e : sk.entities()) {
+        if (e.type == SketchEntityType::Arc) {
+            arc = &e;
+            break;
+        }
+    }
+    REQUIRE(arc != nullptr);
+    REQUIRE(sk.param(arc->params[0]) == Approx(0.0).margin(1e-9));
+    REQUIRE(sk.param(arc->params[1]) == Approx(0.0).margin(1e-9));
+    REQUIRE(sk.param(arc->params[2]) == Approx(5.0).margin(1e-9));
+
+    // Removed the short east arc between the two +X-side hits; remaining is long.
+    double sa = sk.param(arc->params[3]);
+    double ea = sk.param(arc->params[4]);
+    double sweep = ea - sa;
+    while (sweep < 0) sweep += 2.0 * 3.14159265358979323846;
+    REQUIRE(sweep > 3.14159265358979323846);  // more than half remains
 }
