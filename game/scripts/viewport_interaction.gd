@@ -96,9 +96,9 @@ func _drop_data(at: Vector2, data: Variant) -> void:
 	view.insert_primitive(data["sx_primitive"], target["point"])
 	_ignore_select_release = true
 	if target.get("stacked", false):
-		status.emit("Stacked " + str(data["sx_primitive"]) + " — Middle-drag to orbit anywhere")
+		status.emit("Stacked " + str(data["sx_primitive"]) + " — Alt-drag or two-finger drag to orbit")
 	else:
-		status.emit("Inserted " + str(data["sx_primitive"]) + " — Middle-drag to orbit anywhere")
+		status.emit("Inserted " + str(data["sx_primitive"]) + " — Alt-drag or two-finger drag to orbit")
 	if target.get("need_frame", false):
 		camera.frame_contents()
 
@@ -222,9 +222,9 @@ func _commit_place(screen_pos: Vector2) -> void:
 	_ignore_select_release = true
 	view.insert_primitive(kind, target["point"])
 	if target.get("stacked", false):
-		status.emit("Stacked %s on face — Middle-drag to orbit anywhere" % kind)
+		status.emit("Stacked %s on face — Alt-drag or two-finger drag to orbit" % kind)
 	else:
-		status.emit("Inserted %s — Middle-drag to orbit anywhere" % kind)
+		status.emit("Inserted %s — Alt-drag or two-finger drag to orbit" % kind)
 	if target.get("need_frame", false):
 		camera.frame_contents()
 
@@ -249,31 +249,16 @@ func _place_input(event: InputEvent) -> void:
 			accept_event()
 
 
-## Middle-drag / wheel: handled in _input so docks never block the camera.
-func _is_camera_nav_event(event: InputEvent) -> bool:
-	if event is InputEventMouseButton:
-		var mb := event as InputEventMouseButton
-		return mb.button_index == MOUSE_BUTTON_WHEEL_UP \
-				or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN \
-				or mb.button_index == MOUSE_BUTTON_MIDDLE
-	if event is InputEventMouseMotion:
-		var mm := event as InputEventMouseMotion
-		return (mm.button_mask & MOUSE_BUTTON_MASK_MIDDLE) != 0
-	return false
-
-
 func _gui_input(event: InputEvent) -> void:
-	# Camera nav is handled in _input (reaches us even over STOP panels).
-	if _is_camera_nav_event(event):
+	# Camera + place are handled in _input (viewport coords; works over docks).
+	if camera != null and camera.is_nav_event(event):
+		accept_event()
+		return
+	if _place_kind != "":
 		accept_event()
 		return
 	if sketch_mode != null and sketch_mode.active:
-		if _place_kind != "":
-			_disarm_place(false)
 		_sketch_input(event)
-		return
-	if _place_kind != "":
-		_place_input(event)
 		return
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
@@ -602,18 +587,42 @@ func toggle_section() -> void:
 
 
 func _input(event: InputEvent) -> void:
-	# Camera first — runs before Control STOP panels so orbit/zoom work over docks.
-	if camera != null and _is_camera_nav_event(event):
+	# Camera first — before Control STOP panels so orbit works over docks, and
+	# before place so Alt+drag / two-finger pan don't commit a solid.
+	if camera != null and camera.is_nav_event(event):
 		if camera.handle_input(event):
 			get_viewport().set_input_as_handled()
 			return
-	# Esc cancels place even when focus stayed on the palette button.
-	if event is InputEventKey and event.pressed and not event.echo:
-		var key := event as InputEventKey
-		if key.keycode == KEY_ESCAPE and _place_kind != "":
-			_disarm_place(true)
+	# Place mode uses viewport mouse coords so ghost/commit work even when the
+	# cursor is "over" a sibling Control or Interaction fails hit-tests.
+	if _place_kind != "" and sketch_mode != null and sketch_mode.active:
+		_disarm_place(false)
+	if _place_kind != "":
+		if event is InputEventMouseMotion:
+			# event.position is viewport coords in _input (not Control-local).
+			_update_ghost((event as InputEventMouseMotion).position)
 			get_viewport().set_input_as_handled()
 			return
+		if event is InputEventMouseButton:
+			var mb := event as InputEventMouseButton
+			if not mb.pressed:
+				if _ignore_select_release and mb.button_index == MOUSE_BUTTON_LEFT:
+					_ignore_select_release = false
+				get_viewport().set_input_as_handled()
+				return
+			if mb.button_index == MOUSE_BUTTON_LEFT and not mb.alt_pressed:
+				_commit_place(mb.position)
+				get_viewport().set_input_as_handled()
+				return
+			if mb.button_index == MOUSE_BUTTON_RIGHT:
+				_disarm_place(true)
+				get_viewport().set_input_as_handled()
+				return
+		if event is InputEventKey and event.pressed and not event.echo:
+			if (event as InputEventKey).keycode == KEY_ESCAPE:
+				_disarm_place(true)
+				get_viewport().set_input_as_handled()
+				return
 	if event is InputEventKey and has_focus():
 		if _gui_key(event):
 			get_viewport().set_input_as_handled()

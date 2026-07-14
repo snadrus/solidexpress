@@ -6,8 +6,11 @@ class_name Shortcuts
 const TABLE: Array[Dictionary] = [
 	# View (orbit_camera.gd + viewport_interaction display/section/gizmos)
 	{"keys": "Middle-drag", "context": "View", "desc": "Orbit camera"},
+	{"keys": "Alt+Left-drag", "context": "View", "desc": "Orbit camera (touchpad-friendly)"},
+	{"keys": "Two-finger drag", "context": "View", "desc": "Orbit camera (trackpad pan gesture)"},
 	{"keys": "Shift+Middle", "context": "View", "desc": "Pan camera"},
-	{"keys": "Wheel", "context": "View", "desc": "Zoom toward pivot"},
+	{"keys": "Alt+Shift+Left-drag", "context": "View", "desc": "Pan camera (touchpad-friendly)"},
+	{"keys": "Wheel / pinch", "context": "View", "desc": "Zoom toward pivot"},
 	{"keys": "F", "context": "View", "desc": "Fit / frame all bodies"},
 	{"keys": "1", "context": "View", "desc": "Front view"},
 	{"keys": "2", "context": "View", "desc": "Right view"},

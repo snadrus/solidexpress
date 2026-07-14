@@ -40,7 +40,7 @@ func _lmb(ix: ViewportInteraction, pos: Vector2, pressed: bool) -> void:
 	mb.button_index = MOUSE_BUTTON_LEFT
 	mb.pressed = pressed
 	mb.position = pos
-	ix._gui_input(mb)
+	ix._input(mb)
 
 
 ## docs/howto/place-and-orbit.md
@@ -54,8 +54,11 @@ func howto_place_and_orbit(main) -> void:
 	# 1. Click Box on palette → arms place
 	ix.insert_at_center("box")
 	check(ix._place_kind == "box", "place armed")
-	# 2. Click viewport ground → insert
+	# 2. Move then click viewport ground → insert (via _input path)
 	var center := _center(ix)
+	var mm_move := InputEventMouseMotion.new()
+	mm_move.position = center
+	ix._input(mm_move)
 	_lmb(ix, center, true)
 	_lmb(ix, center, false)
 	await process_frame
@@ -64,14 +67,15 @@ func howto_place_and_orbit(main) -> void:
 	var id: String = view.doc.body_ids()[0]
 	var bb: Dictionary = view.doc.measure_bbox(id)
 	check(absf(float(bb["min"].z)) < 1e-2, "box sits on ground (z=0)")
-	# 3. Middle-drag orbits (works over dock screen coords via _input)
+	# 3. Alt+left-drag orbits (touchpad-friendly; works over docks)
 	var yaw0: float = cam.yaw
 	var mm := InputEventMouseMotion.new()
-	mm.button_mask = MOUSE_BUTTON_MASK_MIDDLE
+	mm.button_mask = MOUSE_BUTTON_MASK_LEFT
+	mm.alt_pressed = true
 	mm.relative = Vector2(55, 0)
 	mm.position = Vector2(1400, 420)
 	ix._input(mm)
-	check(absf(cam.yaw - yaw0) > 1e-4, "camera yaw changed after orbit")
+	check(absf(cam.yaw - yaw0) > 1e-4, "camera yaw changed after Alt-orbit")
 
 
 ## docs/howto/stack-three-blocks.md

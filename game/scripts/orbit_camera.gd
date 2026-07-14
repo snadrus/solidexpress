@@ -1,9 +1,9 @@
 class_name OrbitCamera
 extends Camera3D
-## Turntable orbit camera: middle-drag orbits, shift+middle-drag pans,
-## wheel zooms toward the cursor. F frames the scene contents;
-## 1/2/3/7 jump to front/right/top/isometric standard views;
-## 5 toggles orthographic/perspective projection.
+## Turntable orbit camera: middle-drag OR Alt+left-drag orbits;
+## Shift+middle / Alt+Shift+left pans; two-finger PanGesture orbits
+## (touchpads); wheel zooms toward the cursor. F frames the scene;
+## 1/2/3/7 jump to front/right/top/isometric; 5 toggles ortho/perspective.
 ## Named views persist in user://views.cfg.
 
 var pivot := Vector3.ZERO
@@ -17,6 +17,7 @@ var model_space: Node3D
 const MIN_DISTANCE := 5.0
 const MAX_DISTANCE := 20000.0
 const ORBIT_SPEED := 0.008
+const PAN_GESTURE_SCALE := 0.02
 const MIN_PITCH := deg_to_rad(-89.0)
 const MAX_PITCH := deg_to_rad(89.0)
 const VIEWS_CFG := "user://views.cfg"
@@ -32,7 +33,57 @@ func _ready() -> void:
 	_update_transform()
 
 
+func _orbit_by(dx: float, dy: float) -> void:
+	yaw -= dx * ORBIT_SPEED
+	pitch = clampf(pitch + dy * ORBIT_SPEED, MIN_PITCH, MAX_PITCH)
+	_update_transform()
+
+
+func _pan_by(dx: float, dy: float) -> void:
+	var pan_scale := distance * 0.0012
+	pivot += global_transform.basis.x * (-dx * pan_scale)
+	pivot += global_transform.basis.y * (dy * pan_scale)
+	_update_transform()
+
+
+## True when this event should drive the camera (middle, Alt+left, pan gesture, wheel).
+func is_nav_event(event: InputEvent) -> bool:
+	if event is InputEventPanGesture or event is InputEventMagnifyGesture:
+		return true
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.button_index == MOUSE_BUTTON_WHEEL_UP \
+				or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN \
+				or mb.button_index == MOUSE_BUTTON_MIDDLE:
+			return true
+		# Consume Alt+LMB press/release so place/select don't also fire.
+		if mb.button_index == MOUSE_BUTTON_LEFT and mb.alt_pressed:
+			return true
+	if event is InputEventMouseMotion:
+		var mm := event as InputEventMouseMotion
+		if mm.button_mask & MOUSE_BUTTON_MASK_MIDDLE:
+			return true
+		if (mm.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0 and mm.alt_pressed:
+			return true
+	return false
+
+
 func handle_input(event: InputEvent) -> bool:
+	if event is InputEventPanGesture:
+		# Two-finger drag on many touchpads.
+		var pg := event as InputEventPanGesture
+		yaw -= pg.delta.x * PAN_GESTURE_SCALE
+		pitch = clampf(pitch + pg.delta.y * PAN_GESTURE_SCALE, MIN_PITCH, MAX_PITCH)
+		_update_transform()
+		return true
+	if event is InputEventMagnifyGesture:
+		var mg := event as InputEventMagnifyGesture
+		# factor > 1 = pinch out = zoom in
+		var factor := 1.0 / maxf(mg.factor, 0.01)
+		var vp := get_viewport()
+		var pos := vp.get_mouse_position() if vp != null else Vector2.ZERO
+		zoom_at(pos, factor)
+		return true
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
@@ -41,18 +92,22 @@ func handle_input(event: InputEvent) -> bool:
 		if mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
 			zoom_at(mb.position, 1.0 / 0.9)
 			return true
+		if mb.button_index == MOUSE_BUTTON_MIDDLE:
+			return true  # claim press/release so LMB paths ignore them
+		if mb.button_index == MOUSE_BUTTON_LEFT and mb.alt_pressed:
+			return true  # Alt+LMB orbit/pan — do not place/select
+		return false
 	elif event is InputEventMouseMotion:
 		var mm := event as InputEventMouseMotion
-		if mm.button_mask & MOUSE_BUTTON_MASK_MIDDLE:
-			if mm.shift_pressed:
-				var pan_scale := distance * 0.0012
-				pivot += global_transform.basis.x * (-mm.relative.x * pan_scale)
-				pivot += global_transform.basis.y * (mm.relative.y * pan_scale)
-			else:
-				yaw -= mm.relative.x * ORBIT_SPEED
-				pitch = clampf(pitch + mm.relative.y * ORBIT_SPEED, MIN_PITCH, MAX_PITCH)
-			_update_transform()
-			return true
+		var middle := (mm.button_mask & MOUSE_BUTTON_MASK_MIDDLE) != 0
+		var alt_left := (mm.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0 and mm.alt_pressed
+		if not middle and not alt_left:
+			return false
+		if mm.shift_pressed:
+			_pan_by(mm.relative.x, mm.relative.y)
+		else:
+			_orbit_by(mm.relative.x, mm.relative.y)
+		return true
 	elif event is InputEventKey:
 		var k := event as InputEventKey
 		if not k.pressed or k.ctrl_pressed:

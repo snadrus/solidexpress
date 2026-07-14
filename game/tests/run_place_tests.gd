@@ -51,14 +51,21 @@ func _lmb(ix: ViewportInteraction, pos: Vector2, pressed: bool) -> void:
 	mb.button_index = MOUSE_BUTTON_LEFT
 	mb.pressed = pressed
 	mb.position = pos
-	ix._gui_input(mb)
+	# Place mode is driven from _input (viewport coords), not _gui_input.
+	ix._input(mb)
+
+
+func _move(ix: ViewportInteraction, pos: Vector2) -> void:
+	var mm := InputEventMouseMotion.new()
+	mm.position = pos
+	ix._input(mm)
 
 
 func _esc(ix: ViewportInteraction) -> void:
 	var ev := InputEventKey.new()
 	ev.keycode = KEY_ESCAPE
 	ev.pressed = true
-	ix._gui_key(ev)
+	ix._input(ev)
 
 
 func test_arming(main) -> void:
@@ -75,9 +82,7 @@ func test_ghost_follows(main) -> void:
 	print("- ghost follows mouse (sits on plane)")
 	var ix: ViewportInteraction = main.interaction
 	var center := _center(ix)
-	var mm := InputEventMouseMotion.new()
-	mm.position = center
-	ix._gui_input(mm)
+	_move(ix, center)
 	var ghost := _ghost(main)
 	check(ghost != null and ghost.visible, "ghost visible at viewport center")
 	var gp = ix.ground_point(center)
@@ -87,6 +92,14 @@ func test_ghost_follows(main) -> void:
 		check(ghost.position.distance_to(expect) < 1e-2,
 			"ghost center is half-height above floor (got %s want %s)" % [ghost.position, expect])
 	check(ix.has_focus(), "Interaction grabbed focus on arm (Esc works)")
+	# Offset motion — ghost must track, not stay stuck at arm position.
+	var off := center + Vector2(80, 40)
+	_move(ix, off)
+	var gp2 = ix.ground_point(off)
+	ghost = _ghost(main)
+	if gp2 != null and ghost != null:
+		check(ghost.position.distance_to(gp2 + Vector3(0, 0, 25)) < 1e-2,
+			"ghost followed mouse offset")
 
 
 func test_commit(main) -> void:
@@ -196,18 +209,32 @@ func test_stack_on_face(main) -> void:
 
 
 func test_orbit_over_ops_panel(main) -> void:
-	print("- middle-drag orbit works via _input even with panels open")
+	print("- orbit via middle / Alt-left / pan gesture")
 	var ix: ViewportInteraction = main.interaction
 	var cam: OrbitCamera = main.camera
 	main.view.new_document()
 	main.view.insert_primitive("box", Vector3.ZERO)
 	await process_frame
-	# Ops / card become visible with a selection.
 	check(main.ops_panel.visible, "ops panel visible after select")
 	var yaw0: float = cam.yaw
 	var mm := InputEventMouseMotion.new()
 	mm.button_mask = MOUSE_BUTTON_MASK_MIDDLE
 	mm.relative = Vector2(40, 0)
-	mm.position = Vector2(1400, 400)  # over right-side docks
+	mm.position = Vector2(1400, 400)
 	ix._input(mm)
 	check(absf(cam.yaw - yaw0) > 1e-4, "yaw changed from middle-drag in _input")
+
+	yaw0 = cam.yaw
+	var alt := InputEventMouseMotion.new()
+	alt.button_mask = MOUSE_BUTTON_MASK_LEFT
+	alt.alt_pressed = true
+	alt.relative = Vector2(35, 0)
+	alt.position = Vector2(1400, 400)
+	ix._input(alt)
+	check(absf(cam.yaw - yaw0) > 1e-4, "yaw changed from Alt+left-drag")
+
+	yaw0 = cam.yaw
+	var pan := InputEventPanGesture.new()
+	pan.delta = Vector2(20, 0)
+	ix._input(pan)
+	check(absf(cam.yaw - yaw0) > 1e-4, "yaw changed from pan gesture (two-finger)")
