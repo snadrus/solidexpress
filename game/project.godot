@@ -8,6 +8,11 @@ config/name="solidexpress"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.7")
 
+[display]
+
+window/size/viewport_width=1600
+window/size/viewport_height=900
+
 [rendering]
 
 renderer/rendering_method="forward_plus"

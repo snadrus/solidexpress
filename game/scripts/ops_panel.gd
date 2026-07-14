@@ -32,10 +32,21 @@ var _pending: Pending = Pending.NONE
 var _pending_first := ""  # armed source entity (body for boolean, any for measure)
 
 
+var _scroll: ScrollContainer
+var _content: VBoxContainer
+## Cap so the panel never reaches the status bar; content scrolls past this.
+const MAX_HEIGHT := 370.0
+
+
 func _ready() -> void:
 	custom_minimum_size = Vector2(230, 0)
+	_scroll = ScrollContainer.new()
+	_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	add_child(_scroll)
 	var vbox := VBoxContainer.new()
-	add_child(vbox)
+	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_scroll.add_child(vbox)
+	_content = vbox
 	var title := Label.new()
 	title.text = "Modify"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -185,6 +196,17 @@ func _on_selection_changed(body: String, face: String) -> void:
 	if body != "" and face == "":
 		_name_edit.text = view.doc.body_name(body)
 		_color_picker.color = view.doc.get_body_color(body)
+	_clamp_height()
+
+
+func _clamp_height() -> void:
+	# Shrink-to-fit up to MAX_HEIGHT, then scroll.
+	await get_tree().process_frame
+	if _scroll == null or _content == null:
+		return
+	var want := _content.get_combined_minimum_size().y
+	_scroll.custom_minimum_size = Vector2(240, minf(want, MAX_HEIGHT))
+	reset_size()
 
 
 func _on_name_submitted(text: String) -> void:

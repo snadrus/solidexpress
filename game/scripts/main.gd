@@ -8,7 +8,9 @@ var view: DocumentView
 var camera: OrbitCamera
 var interaction: ViewportInteraction
 var card_panel: RichTextLabel
+var card_box: PanelContainer
 var status_label: Label
+var show_variables := false  # View-menu override while the table is empty
 var autosave_timer: Timer
 var sketch_mode: SketchMode
 var sketch_toolbar: PanelContainer
@@ -160,6 +162,19 @@ func _build_ui() -> void:
 	insert_popup.add_item("Datum Point at Origin", 6)
 	insert_popup.id_pressed.connect(_on_insert_menu)
 
+	# View menu: entry points for panels that auto-hide when they have no data.
+	var view_btn := MenuButton.new()
+	view_btn.text = "View"
+	view_btn.flat = false
+	menu_row.add_child(view_btn)
+	var view_popup := view_btn.get_popup()
+	view_popup.add_check_item("Variables Panel", 0)
+	view_popup.id_pressed.connect(func(id: int) -> void:
+		if id == 0:
+			show_variables = not show_variables
+			view_popup.set_item_checked(view_popup.get_item_index(0), show_variables)
+			_update_panel_visibility())
+
 	file_dialog = FileDialog.new()
 	file_dialog.access = FileDialog.ACCESS_FILESYSTEM
 	file_dialog.min_size = Vector2i(700, 460)
@@ -202,15 +217,18 @@ func _build_ui() -> void:
 	hint.modulate = Color(1, 1, 1, 0.6)
 	vbox.add_child(hint)
 
-	# Right: semantic card panel.
-	var card_box := PanelContainer.new()
+	# Right: semantic card panel (auto-hides when nothing is selected).
+	card_box = PanelContainer.new()
 	card_box.name = "CardPanel"
 	card_box.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	card_box.anchor_left = 1.0
 	card_box.offset_left = -320
 	card_box.offset_right = -12
-	card_box.offset_top = 12
+	# Starts below the menu/toolbar row so the centered sketch toolbar can
+	# never collide with it.
+	card_box.offset_top = 52
 	card_box.offset_bottom = 420
+	card_box.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	ui.add_child(card_box)
 	var card_vbox := VBoxContainer.new()
 	card_box.add_child(card_vbox)
@@ -220,7 +238,7 @@ func _build_ui() -> void:
 	card_panel = RichTextLabel.new()
 	card_panel.fit_content = false
 	card_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	card_panel.custom_minimum_size = Vector2(290, 240)
+	card_panel.custom_minimum_size = Vector2(290, 200)
 	card_panel.add_theme_font_size_override("normal_font_size", 12)
 	card_vbox.add_child(card_panel)
 
@@ -238,7 +256,7 @@ func _build_ui() -> void:
 	notes_label.add_theme_font_size_override("font_size", 11)
 	card_vbox.add_child(notes_label)
 	notes_edit = TextEdit.new()
-	notes_edit.custom_minimum_size = Vector2(290, 70)
+	notes_edit.custom_minimum_size = Vector2(290, 60)
 	notes_edit.add_theme_font_size_override("font_size", 11)
 	card_vbox.add_child(notes_edit)
 	var save_card := Button.new()
@@ -255,7 +273,8 @@ func _build_ui() -> void:
 	ops_panel.anchor_right = 1.0
 	ops_panel.offset_left = -320
 	ops_panel.offset_right = -12
-	ops_panel.offset_top = 432
+	ops_panel.offset_top = 480
+	ops_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	ui.add_child(ops_panel)
 	ops_panel.status.connect(_on_status)
 
@@ -302,7 +321,10 @@ func _build_ui() -> void:
 	sketch_toolbar.anchor_right = 0.5
 	sketch_toolbar.offset_left = -260
 	sketch_toolbar.offset_right = 260
-	sketch_toolbar.offset_top = 12
+	sketch_toolbar.offset_top = 8
+	# The toolbar's content is wider than its nominal offsets; grow evenly so
+	# it stays centered instead of spilling off to one side.
+	sketch_toolbar.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	sketch_toolbar.visible = false
 	ui.add_child(sketch_toolbar)
 	var hbox := HBoxContainer.new()
@@ -367,6 +389,7 @@ func _build_ui() -> void:
 
 	view.selection_changed.connect(_on_selection_changed)
 	view.document_changed.connect(_on_document_changed)
+	_update_panel_visibility()
 	interaction.status.connect(_on_status)
 	sketch_mode.status.connect(_on_status)
 	sketch_mode.finished.connect(func(_id: String) -> void: sketch_toolbar.visible = false)
@@ -461,10 +484,24 @@ func _on_selection_changed(_body: String, _face: String) -> void:
 	notes_edit.text = view.doc.get_card_notes(target) if target != "" else ""
 	alias_edit.editable = target != ""
 	notes_edit.editable = target != ""
+	_update_panel_visibility()
 
 
 func _on_document_changed() -> void:
 	_on_selection_changed(view.selected_body, view.selected_face)
+
+
+## Context panels only occupy screen space while they have content: the
+## selection card follows the selection, the timeline appears with the first
+## feature, and the variables table shows once a variable exists (or is
+## forced on from the View menu so there's an entry point to create one).
+func _update_panel_visibility() -> void:
+	card_box.visible = _selected_entity() != ""
+	timeline.visible = view.doc.graph_features().size() > 0
+	variables_panel.visible = show_variables or view.doc.list_variables().size() > 0
+	# Keep the variables table flush against whatever is to its left.
+	variables_panel.offset_left = 280 if timeline.visible else 12
+	variables_panel.offset_right = variables_panel.offset_left + 260
 
 
 func _on_status(text: String) -> void:
