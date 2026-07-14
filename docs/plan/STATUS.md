@@ -102,11 +102,14 @@ Godot suites: integration 97 checks, UI 114 checks, sketch 23 checks.
 
 - [x] Sweep/loft on the timeline from GDScript (graph_add_sweep/graph_add_loft)
 
-## In flight (background agents)
-- Construction toggle + section-plane keys in the viewport
-- Datum storage + bindings + viewport visualization
+- [x] Hole feature kernel command ([hole]: simple/counterbore/countersink with undo)
+- [x] Construction toggle (X) + section view toggle (K) wired into the viewport
+- [x] Datums stored on Document, persisted in .sxp (datums.json), bound to GDScript, drawn in viewport (no cards yet — EntityKind lacks datum kinds)
 
-Landed from round 6 so far: hole feature kernel command ([hole]: simple/counterbore/countersink with undo).
+## In flight (background agents)
+- Hole as a parametric graph feature + ops-panel UI
+- Datum EntityKinds + semantic cards
+- Sketch on a selected planar face
 
 ## Later phases
 Not started. See implementation plan.
