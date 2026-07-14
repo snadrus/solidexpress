@@ -110,10 +110,14 @@ Godot suites: integration 97 checks, UI 114 checks, sketch 23 checks.
 - [x] Datum EntityKinds + auto-registered semantic cards (survive .sxp load)
 - [x] Sketch on selected axis-aligned planar face (outward normal, cut/fuse target kept)
 
+- [x] Variables/equations table ([variables]): "=w*2" expressions in feature params, cycles detected, .sxp-persisted with the graph
+- [x] Sketch snapping: endpoint/midpoint/center + H/V axis, preview marker, toggle
+- [x] Helix/spiral/polyline wire builders ([curves]) — threads/springs groundwork
+
 ## In flight (background agents)
-- Global variables/equations table driving feature params
-- Sketch snapping (endpoint/midpoint/center + axis alignment)
-- Helix/spiral curve builder (threads groundwork)
+- Variables panel UI + bindings
+- Helix sweep as a parametric graph feature
+- Sketch dimension annotations (live constraint values)
 
 ## Later phases
 Not started. See implementation plan.
