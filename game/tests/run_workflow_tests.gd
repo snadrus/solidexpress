@@ -66,6 +66,12 @@ func _init() -> void:
 	workflow_washer()
 	workflow_flanged_cylinder()
 	workflow_funnel()
+	workflow_bolt_blank()
+	workflow_spring()
+	workflow_pipe_elbow()
+	workflow_ribbed_plate()
+	workflow_bearing_block()
+	workflow_pin_and_plate_instance()
 
 	print("\ngesture audit:")
 	for r in _report:
@@ -266,3 +272,250 @@ func workflow_funnel() -> void:
 	check(absf(_volume(body) - expected) < expected * 0.03,
 		"funnel volume ~%.0f (got %.0f)" % [expected, _volume(body)])
 	end_workflow("funnel", 12)
+
+
+func _uuid4() -> String:
+	var b := PackedByteArray()
+	b.resize(16)
+	for i in 16:
+		b[i] = randi() % 256
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	var h := b.hex_encode()
+	return "%s-%s-%s-%s-%s" % [
+		h.substr(0, 8), h.substr(8, 4), h.substr(12, 4), h.substr(16, 4), h.substr(20, 12)]
+
+
+## Write a minimal .sxp whose timeline is a single helix_sweep feature (no BREP
+## bodies). Caller must graph_regenerate() after load to materialize geometry.
+## Needed because SxDocument has no graph_add_helix binding yet.
+func _write_helix_sxp(path: String, profile_r: float, radius: float, pitch: float,
+		turns: float) -> void:
+	var fid := _uuid4()
+	var bid := _uuid4()
+	var features := {
+		"variables": {},
+		"timeline": [{
+			"id": fid,
+			"name": "Spring",
+			"type": "helix_sweep",
+			"suppressed": false,
+			"params": {
+				"profile_radius": profile_r,
+				"axis_point": [0.0, 0.0, 0.0],
+				"axis_dir": [0.0, 0.0, 1.0],
+				"radius": radius,
+				"pitch": pitch,
+				"turns": turns,
+				"left_handed": false,
+			},
+			"output_body": bid,
+		}],
+	}
+	var manifest := {"format": "sxp", "version": 1, "bodies": []}
+	var z := ZIPPacker.new()
+	check(z.open(path) == OK, "helix sxp zip opened")
+	z.start_file("manifest.json")
+	z.write_file(JSON.stringify(manifest, "\t").to_utf8_buffer())
+	z.close_file()
+	z.start_file("features.json")
+	z.write_file(JSON.stringify(features, "\t").to_utf8_buffer())
+	z.close_file()
+	z.start_file("datums.json")
+	z.write_file(JSON.stringify({"planes": [], "axes": [], "points": []}).to_utf8_buffer())
+	z.close_file()
+	z.start_file("instances.json")
+	z.write_file("[]".to_utf8_buffer())
+	z.close_file()
+	z.close()
+
+
+## 7. Bolt blank: cylinder shaft + hex head fused.
+func workflow_bolt_blank() -> void:
+	begin_workflow("bolt blank (shaft + hex head)")
+	var sfid: String = view.doc.graph_add_primitive("cylinder", 5, 30, 0, Vector3.ZERO)
+	view.graph_changed()
+	gesture(2)
+	gap("primitive dimensions not settable at insert (needs property panel)")
+	var shaft := view.body_of_feature(sfid)
+	check(shaft != "", "shaft created")
+
+	sk.begin(Vector3.ZERO, Vector3(0, 0, 1))
+	gesture(1)
+	sk.polygon_sides = 6
+	gesture(1)
+	sk.set_tool(SketchMode.Tool.POLYGON)
+	gesture(1)
+	sk.click(Vector2(0, 0))
+	sk.click(Vector2(8, 0))
+	gesture(2)
+	sk.finish_extrude(6.0, "new")
+	gesture(2)
+	var head := ""
+	for id in view.doc.body_ids():
+		if id != shaft:
+			head = id
+			break
+	check(head != "", "hex head body created")
+
+	view.select_entity(shaft, "")
+	gesture(1)
+	ops._arm_boolean("fuse")
+	gesture(1)
+	view.select_entity(head, "")
+	gesture(1)
+	check(view.doc.body_ids().size() == 1, "fuse consumed the hex head")
+	# hex area = 3*sqrt(3)/2 * R^2 with R=8; overlap = shaft through head height.
+	var hex_area := 3.0 * sqrt(3.0) / 2.0 * 64.0
+	var expected := PI * 25.0 * 30.0 + hex_area * 6.0 - PI * 25.0 * 6.0
+	check(absf(_volume(shaft) - expected) < expected * 0.03,
+		"bolt fused volume ~%.0f (got %.0f)" % [expected, _volume(shaft)])
+	end_workflow("bolt blank", 16)
+
+
+## 8. Spring: helix_sweep profile r=2, helix r=15, pitch=8, 5 turns.
+func workflow_spring() -> void:
+	begin_workflow("spring (helix sweep)")
+	var path := "/tmp/sx_workflow_spring.sxp"
+	var body := ""
+	if view.doc.has_method("graph_add_helix"):
+		var hfid: String = view.doc.call("graph_add_helix", 2.0, 15.0, 8.0, 5.0, false)
+		view.graph_changed()
+		body = view.body_of_feature(hfid)
+		gesture(5)
+		gap("helix_sweep not reachable from UI")
+	else:
+		_write_helix_sxp(path, 2.0, 15.0, 8.0, 5.0)
+		check(view.doc.load(path), "helix sxp loaded")
+		var regen: Dictionary = view.doc.graph_regenerate()
+		check(regen.get("ok", false), "helix regenerated (%s)" % str(regen.get("error", "")))
+		view.refresh()
+		body = _only_body()
+		gesture(5)
+		gap("helix_sweep has no graph_add_helix binding; created via features.json load")
+	check(body != "", "spring body created")
+	# Tube volume along helix length: (pi r^2) * turns * sqrt((2 pi R)^2 + pitch^2)
+	var expected := (PI * 4.0) * (5.0 * sqrt(pow(2.0 * PI * 15.0, 2.0) + 8.0 * 8.0))
+	check(absf(_volume(body) - expected) < expected * 0.10,
+		"spring volume ~%.0f (got %.0f)" % [expected, _volume(body)])
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+	end_workflow("spring", 8)
+
+
+## 9. Pipe elbow: circle swept along an L-path.
+func workflow_pipe_elbow() -> void:
+	begin_workflow("pipe elbow (sweep)")
+	var profile := SxSketch.new()
+	profile.add_circle(0, 0, 5.0)
+	var sk_fid: String = view.doc.graph_add_sketch(profile)
+	gesture(4)  # ideal: sketch + tool + 2 clicks
+	var path := PackedVector3Array()
+	path.append(Vector3(0, 0, 0))
+	path.append(Vector3(0, 0, 40))
+	path.append(Vector3(30, 0, 40))
+	var sw_fid: String = view.doc.graph_add_sweep(sk_fid, path)
+	view.graph_changed()
+	gesture(1)
+	gap("sweep path cannot be drawn in UI")
+	check(sw_fid != "", "sweep feature created")
+	var body := view.body_of_feature(sw_fid)
+	check(body != "", "elbow body exists")
+	var expected := PI * 25.0 * 70.0
+	check(absf(_volume(body) - expected) < expected * 0.10,
+		"elbow volume ~%.0f (got %.0f)" % [expected, _volume(body)])
+	end_workflow("pipe elbow", 8)
+
+
+## 10. Ribbed plate: plate + single rib fused.
+func workflow_ribbed_plate() -> void:
+	begin_workflow("ribbed plate")
+	var pfid: String = view.doc.graph_add_primitive("box", 80, 60, 6, Vector3.ZERO)
+	view.graph_changed()
+	gesture(2)
+	gap("primitive dimensions not settable at insert (needs property panel)")
+	var plate := view.body_of_feature(pfid)
+	check(plate != "", "plate created")
+	var rfid: String = view.doc.graph_add_primitive("box", 4, 60, 18, Vector3(38, 0, 0))
+	view.graph_changed()
+	gesture(2)
+	gap("rib dimensions/position not settable at insert (needs property panel)")
+	var rib := view.body_of_feature(rfid)
+	check(rib != "", "rib created")
+
+	view.select_entity(plate, "")
+	gesture(1)
+	ops._arm_boolean("fuse")
+	gesture(1)
+	view.select_entity(rib, "")
+	gesture(1)
+	check(view.doc.body_ids().size() == 1, "fuse consumed the rib")
+	# Plate 80*60*6; rib above plate top adds 4*60*12 (overlap 4*60*6).
+	var expected := 80.0 * 60.0 * 6.0 + 4.0 * 60.0 * 12.0
+	check(absf(_volume(plate) - expected) < expected * 0.01,
+		"ribbed volume ~%.0f (got %.0f)" % [expected, _volume(plate)])
+	end_workflow("ribbed plate", 10)
+
+
+## 11. Bearing block: box with counterbore through-hole from top face center.
+func workflow_bearing_block() -> void:
+	begin_workflow("bearing block (counterbore)")
+	var bfid: String = view.doc.graph_add_primitive("box", 60, 40, 30, Vector3.ZERO)
+	view.graph_changed()
+	gesture(2)
+	gap("primitive dimensions not settable at insert (needs property panel)")
+	var body := view.body_of_feature(bfid)
+	check(body != "", "block created")
+	var vol0 := _volume(body)
+
+	# Box spans 0..60, 0..40, 0..30 — top-face center is (30, 20, 30).
+	view.select_ray(Vector3(30, 20, 200), Vector3(0, 0, -1))
+	gesture(1)
+	view.select_ray(Vector3(30, 20, 200), Vector3(0, 0, -1))
+	gesture(1)
+	check(view.selected_face != "", "top face selected")
+	ops._hole_type.selected = 1  # Counterbore
+	gesture(1)
+	ops._hole_diameter.value = 10.0
+	gesture(1)
+	ops._hole_depth.value = 0.0  # through
+	gesture(1)
+	check(ops._apply_hole(), "counterbore apply returned true")
+	gesture(1)
+	var drop := vol0 - _volume(body)
+	var through_min := PI * 25.0 * 30.0
+	check(drop >= through_min and drop <= through_min + 3000.0,
+		"counterbore drop in [%.0f, %.0f] (got %.0f)" % [through_min, through_min + 3000.0, drop])
+	end_workflow("bearing block", 12)
+
+
+## 12. Plate + pin, with an instance of the pin at an offset.
+func workflow_pin_and_plate_instance() -> void:
+	begin_workflow("pin and plate instance")
+	var pfid: String = view.doc.graph_add_primitive("box", 60, 60, 8, Vector3.ZERO)
+	view.graph_changed()
+	gesture(2)
+	gap("primitive dimensions not settable at insert (needs property panel)")
+	check(view.body_of_feature(pfid) != "", "plate created")
+	var pin_fid: String = view.doc.graph_add_primitive("cylinder", 4, 20, 0, Vector3(15, 15, 8))
+	view.graph_changed()
+	gesture(2)
+	gap("pin dimensions/position not settable at insert (needs property panel)")
+	var pin := view.body_of_feature(pin_fid)
+	check(pin != "", "pin created")
+
+	view.select_entity(pin, "")
+	gesture(1)
+	ops._inst_ox.value = 30.0
+	gesture(1)
+	ops._inst_oy.value = 0.0
+	gesture(1)
+	ops._inst_oz.value = 0.0
+	gesture(1)
+	ops._place_instance()
+	gesture(1)
+	var listed: Array = view.doc.instance_list()
+	check(listed.size() == 1, "instance_list has 1")
+	var iid: String = listed[0]["id"]
+	check(view.instance_node(iid) != null, "instance node exists")
+	end_workflow("pin and plate instance", 14)
