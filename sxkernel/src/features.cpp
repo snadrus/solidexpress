@@ -161,7 +161,11 @@ bool FeatureGraph::apply(Document& doc, Feature& f, std::string* err) {
                 return true;  // no geometry output
 
             case FeatureType::Primitive: {
-                doc.add_body(build_primitive_feature(f.params), f.name, f.output_body);
+                TopoDS_Shape shape = build_primitive_feature(f.params);
+                // Rebuilding into a live body routes through replace_body_shape,
+                // which runs the naming service so subshape ids survive edits.
+                if (doc.body(f.output_body)) doc.replace_body_shape(f.output_body, shape);
+                else doc.add_body(shape, f.name, f.output_body);
                 return true;
             }
 
@@ -207,7 +211,8 @@ bool FeatureGraph::apply(Document& doc, Feature& f, std::string* err) {
 
                 std::string op = f.params.value("op", "new");
                 if (op == "new") {
-                    doc.add_body(result, f.name, f.output_body);
+                    if (doc.body(f.output_body)) doc.replace_body_shape(f.output_body, result);
+                    else doc.add_body(result, f.name, f.output_body);
                 } else {
                     EntityId target = find_feature_body("target");
                     const Body* tb = doc.body(target);
@@ -281,14 +286,24 @@ bool FeatureGraph::apply(Document& doc, Feature& f, std::string* err) {
 }
 
 bool FeatureGraph::regenerate(Document& doc, std::string* err) {
-    // Remove all bodies owned by this graph (bodies created outside the graph
-    // are untouched). generated_ covers bodies whose features were removed
-    // from the timeline since the last regenerate.
+    // Bodies this pass will rebuild stay in the document so apply() can route
+    // through replace_body_shape and the naming service keeps subshape ids
+    // (and their cards) stable. Bodies whose features are gone or suppressed
+    // are removed up front; generated_ covers features removed from the
+    // timeline since the last regenerate.
+    std::vector<EntityId> rebuilt;
+    for (const auto& f : timeline_)
+        if (!f.suppressed && !f.output_body.is_null()) rebuilt.push_back(f.output_body);
+    auto will_rebuild = [&](const EntityId& id) {
+        for (const auto& r : rebuilt)
+            if (r == id) return true;
+        return false;
+    };
     for (const auto& id : generated_) {
-        if (doc.body(id)) doc.remove_body(id);
+        if (!will_rebuild(id) && doc.body(id)) doc.remove_body(id);
     }
     for (const auto& f : timeline_) {
-        if (!f.output_body.is_null() && doc.body(f.output_body))
+        if (!f.output_body.is_null() && !will_rebuild(f.output_body) && doc.body(f.output_body))
             doc.remove_body(f.output_body);
     }
     generated_.clear();
@@ -296,6 +311,14 @@ bool FeatureGraph::regenerate(Document& doc, std::string* err) {
         if (f.suppressed) continue;
         if (!apply(doc, f, err)) {
             log::error("regenerate stopped at feature " + f.name);
+            // Stale bodies of features after the failure point would show the
+            // previous generation's geometry; drop them.
+            bool past_failure = false;
+            for (const auto& g : timeline_) {
+                if (g.id == f.id) past_failure = true;
+                if (past_failure && !g.output_body.is_null() && doc.body(g.output_body))
+                    doc.remove_body(g.output_body);
+            }
             return false;
         }
         if (!f.output_body.is_null()) generated_.push_back(f.output_body);

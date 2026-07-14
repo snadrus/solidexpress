@@ -7,12 +7,21 @@
 namespace sx {
 
 void GraphSnapshotCommand::restore(Document& doc, const nlohmann::json& snapshot) {
-    // Remove bodies owned by the current graph before swapping it out; the
-    // incoming graph has no memory of bodies it did not create.
+    // Bodies the incoming graph will rebuild stay in place so its regenerate
+    // routes through the naming service (ids/cards survive undo/redo); bodies
+    // only the outgoing graph knows about are removed here since the incoming
+    // graph has no memory of them.
+    FeatureGraph incoming = FeatureGraph::from_json(snapshot);
+    auto incoming_owns = [&](const EntityId& id) {
+        for (const auto& f : incoming.timeline())
+            if (f.output_body == id) return true;
+        return false;
+    };
     for (const auto& f : doc.graph().timeline()) {
-        if (!f.output_body.is_null() && doc.body(f.output_body)) doc.remove_body(f.output_body);
+        if (!f.output_body.is_null() && !incoming_owns(f.output_body) && doc.body(f.output_body))
+            doc.remove_body(f.output_body);
     }
-    doc.set_graph(FeatureGraph::from_json(snapshot));
+    doc.set_graph(std::move(incoming));
     std::string err;
     if (!doc.graph().regenerate(doc, &err))
         log::error("GraphSnapshotCommand: regenerate failed: " + err);

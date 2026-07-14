@@ -56,6 +56,15 @@ Kernel suite now 51 cases / 5492 assertions.
 
 Kernel suite: 72 cases / 5678 assertions.
 
+## Phase 3: parametric timeline
+- [x] 3.1 Feature history graph (data-driven features, JSON params, embedded sketches), regeneration with stable body ids, .sxp persistence ([features], 8 cases)
+- [x] 3.3 Timeline UI: TimelinePanel (rows, suppress, delete, universal JSON param editor), SxDocument graph_* bindings, palette/sketch ops routed through the graph, undoable via whole-graph GraphSnapshotCommand
+- [x] 3.2 Topological naming service ([naming], 5 cases): signature matching (geom type, centroid, size, axis; normalized greedy assignment) in `sx::naming`; replace_body_shape remaps ids, regeneration reuses live bodies, cards/aliases survive parametric edits and undo/redo
+
+## In flight (background agents, round 3)
+- Sweep/loft commands ([sweep])
+- Datum planes/axes/points ([datum])
+
 ## Later phases
 Not started. See implementation plan.
 

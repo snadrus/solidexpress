@@ -5,6 +5,7 @@
 
 #include "sx/cards.hpp"
 #include "sx/features.hpp"
+#include "sx/naming.hpp"
 #include "sx/shape_utils.hpp"
 
 namespace sx {
@@ -54,10 +55,16 @@ void Document::restore_body(Body&& body) {
 void Document::replace_body_shape(const EntityId& body_id, const TopoDS_Shape& shape) {
     Body* b = body_mut(body_id);
     if (!b) return;
-    unregister_body_entities(*b);
+    // Topological naming: geometrically match new subshapes against the old
+    // shape so surviving faces/edges/vertices keep their EntityIds (and
+    // therefore their cards, aliases, and selections).
+    auto match = naming::match_subshapes(b->shape, b->subshape_ids, shape);
+    for (const auto& [kind, ids] : b->subshape_ids)
+        for (const auto& id : ids) subshape_index_.erase(id);
+    for (const auto& id : match.released) cards_->erase(id);
     b->shape = shape;
-    b->subshape_ids.clear();
-    register_subshapes(*b, /*fresh_ids=*/true);
+    b->subshape_ids = std::move(match.ids);
+    register_subshapes(*b, /*fresh_ids=*/false);
     regenerate_cards_for_body(*b);
     bump_revision();
 }
