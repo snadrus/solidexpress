@@ -69,7 +69,7 @@ Kernel suite: 72 cases / 5678 assertions.
 - [x] SxDocument bindings: mirror_body, linear/circular_pattern, rotate_body, shell_body, offset_body, measure_* (distance/bbox/mass/edge/face/angle)
 - [x] OpsPanel (context ops on selection): fillet/chamfer all edges, mirror, patterns, offset, shell-from-face, armed two-click boolean + measure flows
 
-Godot suites: integration 97 checks, UI 114 checks, sketch 23 checks.
+Godot suites (as of round 11): integration 97, UI 223, sketch 38, sketch-tools 105, display 72 — all green. Kernel: 6480+ assertions.
 
 ## Phase 5: workflow depth
 - [x] Sketch select tool + constraint toolbar (H/V/parallel/perpendicular/equal/coincident, driving dims with live PlaneGCS solve)

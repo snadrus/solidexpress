@@ -21,7 +21,7 @@ var alias_edit: LineEdit
 var notes_edit: TextEdit
 var file_dialog: FileDialog
 var current_path := ""
-enum FileAction { NONE, OPEN, SAVE_AS, IMPORT_STEP, EXPORT_STEP, EXPORT_STL }
+enum FileAction { NONE, OPEN, SAVE_AS, IMPORT_STEP, EXPORT_STEP, EXPORT_STL, EXPORT_CONTEXT }
 var _file_action: FileAction = FileAction.NONE
 
 
@@ -116,6 +116,8 @@ func _build_ui() -> void:
 	popup.add_item("Import STEP...", 4)
 	popup.add_item("Export STEP...", 5)
 	popup.add_item("Export STL...", 6)
+	popup.add_separator()
+	popup.add_item("Export AI Context...", 7)
 	popup.id_pressed.connect(_on_file_menu)
 
 	file_dialog = FileDialog.new()
@@ -443,6 +445,8 @@ func _on_file_menu(id: int) -> void:
 			_show_file_dialog(FileAction.EXPORT_STEP, FileDialog.FILE_MODE_SAVE_FILE, "*.step, *.stp ; STEP")
 		6:
 			_show_file_dialog(FileAction.EXPORT_STL, FileDialog.FILE_MODE_SAVE_FILE, "*.stl ; STL")
+		7:
+			_show_file_dialog(FileAction.EXPORT_CONTEXT, FileDialog.FILE_MODE_SAVE_FILE, "*.md ; Markdown")
 
 
 func _show_file_dialog(action: FileAction, mode: FileDialog.FileMode, filter: String) -> void:
@@ -486,6 +490,16 @@ func _on_file_selected(path: String) -> void:
 			_on_status("Exported STEP" if view.doc.export_step(path) else "STEP export failed")
 		FileAction.EXPORT_STL:
 			_on_status("Exported STL" if view.doc.export_stl(path, true) else "STL export failed")
+		FileAction.EXPORT_CONTEXT:
+			if not path.ends_with(".md"):
+				path += ".md"
+			var f := FileAccess.open(path, FileAccess.WRITE)
+			if f:
+				f.store_string(view.doc.export_context())
+				f.close()
+				_on_status("Exported AI context: " + path)
+			else:
+				_on_status("Context export failed: " + path)
 
 
 func _unhandled_input(event: InputEvent) -> void:
