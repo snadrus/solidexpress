@@ -100,8 +100,12 @@ Godot suites: integration 97 checks, UI 114 checks, sketch 23 checks.
 
 - [x] Sketch construction geometry (excluded from profiles, solves normally, JSON-persisted)
 
+- [x] Sweep/loft on the timeline from GDScript (graph_add_sweep/graph_add_loft)
+
 ## In flight (background agents)
-- Sweep/loft timeline bindings (graph_add_sweep/graph_add_loft)
+- Construction toggle + section-plane keys in the viewport
+- Hole feature kernel command (simple/counterbore/countersink)
+- Datum storage + bindings + viewport visualization
 
 ## Later phases
 Not started. See implementation plan.
