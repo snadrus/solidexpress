@@ -126,13 +126,18 @@ Godot suites (as of round 11): integration 97, UI 223, sketch 38, sketch-tools 1
 - [x] ImportStep timeline base feature ([featimport]): path + index + scale, parametric
 - [x] Component instances on Document ([instances]): transform placements, .sxp persisted, cascade on source delete
 
-## In flight (background agents)
-- Instances: bindings + viewport rendering + ops-panel placement
-- Modeled thread graph feature (helix cut)
-- Sketch extend tool + sketch linear pattern
+- [x] Instances end-to-end: GDScript bindings (add/list/remove/set_instance_transform), viewport rendering (lightened source tint), ops-panel placement, cascade cleanup on source delete
+- [x] Modeled Thread graph feature ([featthread]): triangular form swept along a helix, cut or fuse on a cylindrical region
+- [x] Sketch EXTEND + LINEAR PATTERN tools ([sketchtools])
+- [x] AI context export includes variables/datums/instances; File > Export AI Context...; Insert menu for datum planes/axes/points; ortho/perspective toggle (key 5) — run_menu_tests.gd
+
+Round 12 test state: kernel 176 cases / 6571 assertions; Godot: integration 97, UI 240, sketch 38, sketch-tools 105, display 72, menu 15 — all green.
+
+## Phases 13-20 — UX parity plan (current)
+See `.cursor` plan "CAD UX parity plan": 13 quick wins (README, zoom-to-cursor, file hygiene, shortcuts overlay, click-to-place fix), 14 layout hygiene (docks, auto-hide panels, collision test), 15 workflow tests + click audit, 16 selection (multi/box select, hide/isolate, context menu), 17 property panels, 18 sketch feel (inference, DOF colors, editable dims), 19 ViewCube + named views, 20 mates/appearances/threads std/drawings/configs.
 
 ## Later phases
-Not started. See implementation plan.
+See implementation plan.
 
 ## Environment notes
 - System deps installed via apt: ninja-build, zip, libocct-*-dev (7.9.2), libeigen3-dev, libboost-dev
