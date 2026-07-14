@@ -118,10 +118,14 @@ Godot suites: integration 97 checks, UI 114 checks, sketch 23 checks.
 - [x] HelixSweep parametric feature ([feathelix]) — springs, variable-driven
 - [x] Live dimension annotations in sketch mode (Label3D, recomputed from solved geometry)
 
+- [x] Timeline reorder ([featorder], dependency-validated) + inline feature rename
+- [x] Sketch trim tool ([trim]): lines split/shortened at intersections, circles become arcs
+- [x] WorldGizmos: origin triad + XY grid, G toggles (old main.gd grid removed)
+
 ## In flight (background agents)
-- Timeline feature reorder + rename
-- Sketch trim tool (split at intersections)
-- Viewport origin triad + grid toggle
+- Trim tool in sketch mode UI (T key)
+- STEP import as a timeline base feature
+- Kernel component instances (assembly groundwork)
 
 ## Later phases
 Not started. See implementation plan.
