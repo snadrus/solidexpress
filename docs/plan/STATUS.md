@@ -136,6 +136,23 @@ Round 12 test state: kernel 176 cases / 6571 assertions; Godot: integration 97, 
 ## Phases 13-20 — UX parity plan (current)
 See `.cursor` plan "CAD UX parity plan": 13 quick wins (README, zoom-to-cursor, file hygiene, shortcuts overlay, click-to-place fix), 14 layout hygiene (docks, auto-hide panels, collision test), 15 workflow tests + click audit, 16 selection (multi/box select, hide/isolate, context menu), 17 property panels, 18 sketch feel (inference, DOF colors, editable dims), 19 ViewCube + named views, 20 mates/appearances/threads std/drawings/configs.
 
+Round 13 (integrated, committed):
+- [x] 13: README + build docs; zoom-to-cursor; unsaved-changes guard + recent files; F1 shortcut overlay (run_help_tests 112); click-then-place with ghost preview + Esc (run_place_tests 20)
+- [x] 14: context panels auto-hide when empty (selection card, timeline, variables w/ View-menu override); ops panel height clamp + scroll; 1600x900 window; layout-collision regression suite (run_layout_tests 21) — text/panel overlap checks
+- [x] 15: 12-part workflow suite (run_workflow_tests 60): chamfered plate w/ corner holes, L-bracket, shell box, washer, flanged cylinder, funnel loft, bolt blank, spring, pipe elbow, ribbed plate, bearing block, pin+plate instance; gesture counts + gap notes printed per part
+- [x] 16.1: multi-select (Ctrl+click bodies/faces/edges, multi-edge fillet, multi-face shell; run_select_tests 24)
+- [x] 17.1/17.2: schema-driven PropertyPanel with live preview + OK/Cancel + expressions (16 feature types; run_property_tests 17)
+- [x] 18 (partial): H/V + coincident inference, DOF green coloring, editable dimensions (run_infer_tests 18)
+- [x] 20.1 (kernel): fixed/plane-coincident/concentric mates + solve, .sxp persisted ([mates]; run_mate_tests 15)
+- [x] 20.2: material table (21 materials) w/ density-driven mass_g in measure_mass, .sxp persisted, ops-panel picker + Mass properties readout ([materials])
+- [x] 20.3: ISO/UNC thread standards table ([threadstd])
+- [x] 20.4: drawings MVP — HLR projections, hidden dashed lines, three-view SVG export via File menu ([drawings])
+- [x] 20.5: configurations — named variable-table snapshots, activate regenerates, .sxp persisted, variables-panel switcher ([configurations])
+
+In flight (round 14 agents): box select + hide/isolate, ViewCube + named views, assembly panel UI, sketch drag-to-edit.
+
+Round 13 test state: kernel 199 cases / 6955 assertions; Godot: integration 97, UI 240, sketch 38, sketch-tools 105, display 72, menu 50, workflow 60, select 24, property 17, infer 18, mate 15, camera 21, help 112, place 20, layout 21 — all green.
+
 ## Later phases
 See implementation plan.
 
