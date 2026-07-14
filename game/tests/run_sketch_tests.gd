@@ -22,6 +22,16 @@ func _init() -> void:
 	test_extrude()
 	test_revolve()
 	test_conflict_reporting()
+	test_derive_face_plane()
+
+	# Face-plane sketch finish needs DocumentView / SketchMode wiring from main.
+	var main_scene: PackedScene = load("res://scenes/main.tscn")
+	var main = main_scene.instantiate()
+	root.add_child(main)
+	await process_frame
+	await process_frame
+	test_sketch_on_face_extrude(main)
+
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
 
@@ -127,3 +137,64 @@ func test_conflict_reporting() -> void:
 	var res: Dictionary = sk.solve()
 	check(res["status"] == "failed", "conflicting dims fail")
 	check((res["conflicting"] as PackedStringArray).size() > 0 or true, "diagnostics returned")
+
+
+func _find_top_face(doc: SxDocument, body: String) -> String:
+	var best := ""
+	var best_z := -INF
+	for fid in doc.get_face_ids(body):
+		var bb: Dictionary = doc.measure_bbox(fid)
+		if bb.is_empty():
+			continue
+		var mn: Vector3 = bb["min"]
+		var mx: Vector3 = bb["max"]
+		if mx.z - mn.z < 1e-6 and mx.z > best_z:
+			best_z = mx.z
+			best = fid
+	return best
+
+
+func test_derive_face_plane() -> void:
+	print("- derive face plane (bbox heuristic)")
+	var doc := SxDocument.new()
+	var feat: String = doc.graph_add_primitive("box", 40, 40, 30, Vector3.ZERO)
+	check(feat != "", "graph box for plane derive")
+	var body: String = doc.graph_features()[0]["output_body"]
+	var top: String = _find_top_face(doc, body)
+	check(top != "", "found top face (degenerate Z at max-Z)")
+	var plane: Dictionary = SketchMode.derive_face_plane(doc, top, body)
+	check(plane["ok"], "top face is axis-aligned planar")
+	check(absf(plane["origin"].z - 30.0) < 1e-3, "plane origin z ≈ box top (%.3f)" % plane["origin"].z)
+	check(plane["normal"].distance_to(Vector3(0, 0, 1)) < 1e-4, "plane normal ≈ +Z")
+
+
+func test_sketch_on_face_extrude(main) -> void:
+	print("- sketch on face then fuse extrude")
+	var view: DocumentView = main.view
+	var sm: SketchMode = main.sketch_mode
+	view.new_document()
+	var feat: String = view.doc.graph_add_primitive("box", 40, 40, 30, Vector3.ZERO)
+	view.graph_changed()
+	check(feat != "", "graph box created")
+	var body: String = view.body_of_feature(feat)
+	check(body != "", "box has output body")
+	var top: String = _find_top_face(view.doc, body)
+	check(top != "", "top face id found")
+	var bb0: Dictionary = view.doc.measure_bbox(body)
+	var z0: float = bb0["max"].z
+
+	view.select_entity(body, top)
+	check(view.selected_face == top, "top face selected")
+	main._start_sketch()
+	check(sm.active, "sketch mode active")
+	check(sm.target_fid == feat, "cut/fuse target is the box feature")
+	check(absf(sm.plane_origin.z - 30.0) < 1e-3, "sketch plane origin on box top")
+	check(sm.plane_normal().distance_to(Vector3(0, 0, 1)) < 1e-4, "sketch plane normal +Z")
+
+	sm.set_tool(SketchMode.Tool.CIRCLE)
+	sm.click(Vector2(0, 0))
+	sm.click(Vector2(8, 0))
+	sm.finish_extrude(15.0, "fuse")
+	check(not sm.active, "sketch finished")
+	var bb1: Dictionary = view.doc.measure_bbox(body)
+	check(bb1["max"].z > z0 + 10.0, "fused body taller (max z %.1f > %.1f)" % [bb1["max"].z, z0])

@@ -391,25 +391,25 @@ func _autosave() -> void:
 
 
 func _start_sketch() -> void:
-	# Sketch on the selected planar face if there is one, else the ground plane.
+	# Sketch on the selected axis-aligned planar face if there is one, else ground.
 	if sketch_mode.active:
 		return
 	var origin := Vector3.ZERO
 	var normal := Vector3(0, 0, 1)
+	var plane_msg := "Sketch on ground (XY)"
 	sketch_mode.target_fid = ""
 	if view.selected_face != "":
+		# Keep cut/fuse target even when the face is not axis-aligned (ground fallback).
 		sketch_mode.target_fid = view.feature_of_body(view.selected_body)
-		var n := view.selected_face_normal()
-		if n != Vector3.ZERO:
-			normal = n
-			# Anchor the plane at a point on the face: cast a ray at the face
-			# from outside along -normal through the body center.
-			var center := view.body_center(view.selected_body)
-			var hit: Dictionary = view.pick_info(center + n * 10000.0, -n)
-			if not hit.is_empty():
-				origin = hit["point"]
+		var plane: Dictionary = SketchMode.derive_face_plane(
+			view.doc, view.selected_face, view.selected_body)
+		plane_msg = plane["message"]
+		if plane["ok"]:
+			origin = plane["origin"]
+			normal = plane["normal"]
 	sketch_mode.begin(origin, normal)
 	sketch_toolbar.visible = true
+	_on_status(plane_msg)
 
 
 func _selected_entity() -> String:

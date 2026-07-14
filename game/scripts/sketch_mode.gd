@@ -70,14 +70,75 @@ func _ready() -> void:
 	add_child(_selected_node)
 
 
+## Derive a sketch plane from an axis-aligned planar face via bbox heuristics.
+## Returns {ok, origin, normal, message}. ok=false → caller should fall back to
+## ground (v1: non-axis-aligned faces are not supported).
+static func derive_face_plane(doc: SxDocument, face_id: String, body_id: String) -> Dictionary:
+	var ground := {
+		"ok": false,
+		"origin": Vector3.ZERO,
+		"normal": Vector3(0, 0, 1),
+		"message": "Sketch on ground (XY)",
+	}
+	if face_id == "" or body_id == "":
+		return ground
+	var face_bb: Dictionary = doc.measure_bbox(face_id)
+	if face_bb.is_empty():
+		ground["message"] = "Could not measure face — sketching on ground"
+		return ground
+	var fmn: Vector3 = face_bb["min"]
+	var fmx: Vector3 = face_bb["max"]
+	var extent := fmx - fmn
+	var origin := (fmn + fmx) * 0.5
+	const EPS := 1e-6
+	var axis := -1
+	if extent.x < EPS:
+		axis = 0
+	elif extent.y < EPS:
+		axis = 1
+	elif extent.z < EPS:
+		axis = 2
+	else:
+		ground["message"] = "Face not axis-aligned — sketching on ground (v1 limitation)"
+		return ground
+	var normal := Vector3.ZERO
+	normal[axis] = 1.0
+	var body_bb: Dictionary = doc.measure_bbox(body_id)
+	if not body_bb.is_empty():
+		var body_center: Vector3 = (body_bb["min"] + body_bb["max"]) * 0.5
+		# Outward: pointing away from the body bbox center.
+		if (origin - body_center).dot(normal) < 0.0:
+			normal = -normal
+	var axis_name: String
+	if normal[axis] > 0.0:
+		axis_name = ["+X", "+Y", "+Z"][axis]
+	else:
+		axis_name = ["-X", "-Y", "-Z"][axis]
+	return {
+		"ok": true,
+		"origin": origin,
+		"normal": normal,
+		"message": "Sketch on face (plane %s @ origin %.1f,%.1f,%.1f)" % [
+			axis_name, origin.x, origin.y, origin.z],
+	}
+
+
+## Unit normal of the current sketch plane (model space).
+func plane_normal() -> Vector3:
+	return plane_x.cross(plane_y).normalized()
+
+
 ## Begin a sketch on the model-space plane (origin + normal). x_hint picks the
-## in-plane X direction; pass ZERO for an automatic perpendicular.
+## in-plane X direction; pass ZERO for an automatic perpendicular (n × world-Z,
+## or world-X when the normal is parallel to Z). Extrude follows this normal.
 func begin(origin: Vector3, normal: Vector3, x_hint: Vector3 = Vector3.ZERO) -> void:
 	plane_origin = origin
 	var n := normal.normalized()
 	var x := x_hint
 	if x == Vector3.ZERO or absf(x.dot(n)) > 0.99:
-		x = Vector3.RIGHT if absf(n.dot(Vector3.RIGHT)) < 0.9 else Vector3(0, 1, 0)
+		x = n.cross(Vector3(0, 0, 1))
+		if x.length_squared() < 1e-12:
+			x = Vector3.RIGHT
 	plane_x = (x - n * x.dot(n)).normalized()
 	plane_y = n.cross(plane_x).normalized()
 	sketch = SxSketch.new()
