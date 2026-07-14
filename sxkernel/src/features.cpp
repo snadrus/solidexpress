@@ -171,9 +171,11 @@ shape::Placement placement_from(const json& p) {
     return pl;
 }
 
-TopoDS_Shape build_primitive_feature(const json& p) {
+TopoDS_Shape build_primitive_feature(const json& p,
+                                      const std::map<std::string, double>& env) {
     std::string kind = p.value("kind", "box");
-    double a = p.value("a", 10.0), b = p.value("b", 10.0), c = p.value("c", 10.0);
+    double a = num_param(p, "a", 10.0, env), b = num_param(p, "b", 10.0, env),
+           c = num_param(p, "c", 10.0, env);
     auto pl = placement_from(p);
     if (kind == "box") return shape::make_box(a, b, c, pl);
     if (kind == "cylinder") return shape::make_cylinder(a, b, pl);
@@ -312,24 +314,30 @@ TopoDS_Shape sweep_along_polyline(const TopoDS_Shape& face, const json& path) {
 }
 }  // namespace
 
-bool FeatureGraph::apply(Document& doc, Feature& f, std::string* err) {
+bool FeatureGraph::apply(Document& doc, Feature& f,
+                         const std::map<std::string, double>& env, std::string* err) {
     auto fail = [&](const std::string& msg) {
         if (err) *err = f.name + ": " + msg;
         return false;
     };
-    auto find_feature_body = [&](const std::string& key) -> EntityId {
-        if (!f.params.contains(key)) return {};
-        const Feature* ref = feature(EntityId::from_string(f.params[key].get<std::string>()));
-        return ref ? ref->output_body : EntityId{};
-    };
 
     try {
+        // Resolve "=expr" string params to numbers so every double read below
+        // (including nested origin/position arrays) sees concrete values.
+        const json params = resolve_params(f.params, env);
+        auto find_feature_body = [&](const std::string& key) -> EntityId {
+            if (!params.contains(key)) return {};
+            const Feature* ref =
+                feature(EntityId::from_string(params[key].get<std::string>()));
+            return ref ? ref->output_body : EntityId{};
+        };
+
         switch (f.type) {
             case FeatureType::Sketch:
                 return true;  // no geometry output
 
             case FeatureType::Primitive: {
-                TopoDS_Shape shape = build_primitive_feature(f.params);
+                TopoDS_Shape shape = build_primitive_feature(params, env);
                 // Rebuilding into a live body routes through replace_body_shape,
                 // which runs the naming service so subshape ids survive edits.
                 put_body(doc, f.output_body, shape, f.name);
@@ -338,7 +346,7 @@ bool FeatureGraph::apply(Document& doc, Feature& f, std::string* err) {
 
             case FeatureType::Extrude:
             case FeatureType::Revolve: {
-                EntityId sketch_fid = EntityId::from_string(f.params.at("sketch").get<std::string>());
+                EntityId sketch_fid = EntityId::from_string(params.at("sketch").get<std::string>());
                 const Feature* skf = feature(sketch_fid);
                 if (!skf || !skf->sketch) return fail("missing sketch feature");
                 std::string perr;
@@ -350,9 +358,9 @@ bool FeatureGraph::apply(Document& doc, Feature& f, std::string* err) {
                     auto n = skf->sketch->plane().normal();
                     gp_Vec dir(n[0], n[1], n[2]);
                     dir.Normalize();
-                    double dist = f.params.value("distance", 10.0);
+                    double dist = num_param(params, "distance", 10.0, env);
                     TopoDS_Shape profile = face;
-                    if (f.params.value("symmetric", false)) {
+                    if (params.value("symmetric", false)) {
                         gp_Trsf t;
                         t.SetTranslation(dir * (-dist / 2.0));
                         profile = BRepBuilderAPI_Transform(face, t, true).Shape();
@@ -365,18 +373,18 @@ bool FeatureGraph::apply(Document& doc, Feature& f, std::string* err) {
                                       pl.origin[1] + pl.x_dir[1] * u + pl.y_dir[1] * v,
                                       pl.origin[2] + pl.x_dir[2] * u + pl.y_dir[2] * v);
                     };
-                    auto ap = f.params.at("axis_point");
-                    auto ad = f.params.at("axis_dir");
+                    auto ap = params.at("axis_point");
+                    auto ad = params.at("axis_dir");
                     gp_Pnt p0 = at(ap[0].get<double>(), ap[1].get<double>());
                     gp_Pnt p1 = at(ap[0].get<double>() + ad[0].get<double>(),
                                    ap[1].get<double>() + ad[1].get<double>());
                     result = BRepPrimAPI_MakeRevol(face, gp_Ax1(p0, gp_Dir(gp_Vec(p0, p1))),
-                                                   f.params.value("angle", 6.283185307179586))
+                                                   num_param(params, "angle", 6.283185307179586, env))
                                  .Shape();
                 }
                 if (result.IsNull()) return fail("geometry generation failed");
 
-                std::string op = f.params.value("op", "new");
+                std::string op = params.value("op", "new");
                 if (op == "new") {
                     put_body(doc, f.output_body, result, f.name);
                 } else {
@@ -398,7 +406,7 @@ bool FeatureGraph::apply(Document& doc, Feature& f, std::string* err) {
                 const Body* tb = doc.body(target);
                 const Body* ob = doc.body(tool);
                 if (!tb || !ob) return fail("missing boolean operand body");
-                std::string op = f.params.value("op", "fuse");
+                std::string op = params.value("op", "fuse");
                 TopoDS_Shape result;
                 if (op == "fuse") result = BRepAlgoAPI_Fuse(tb->shape, ob->shape).Shape();
                 else if (op == "cut") result = BRepAlgoAPI_Cut(tb->shape, ob->shape).Shape();
@@ -416,12 +424,14 @@ bool FeatureGraph::apply(Document& doc, Feature& f, std::string* err) {
                 if (!tb) return fail("missing target body");
                 TopTools_IndexedMapOfShape edges;
                 TopExp::MapShapes(tb->shape, TopAbs_EDGE, edges);
-                double v = f.params.value(f.type == FeatureType::Fillet ? "radius" : "distance", 1.0);
+                double v = num_param(params,
+                                     f.type == FeatureType::Fillet ? "radius" : "distance", 1.0,
+                                     env);
 
                 TopoDS_Shape result;
                 if (f.type == FeatureType::Fillet) {
                     BRepFilletAPI_MakeFillet mk(tb->shape);
-                    for (const auto& je : f.params.at("edges")) {
+                    for (const auto& je : params.at("edges")) {
                         int idx = je.get<int>();
                         if (idx < 1 || idx > edges.Extent()) return fail("edge index out of range");
                         mk.Add(v, TopoDS::Edge(edges(idx)));
@@ -431,7 +441,7 @@ bool FeatureGraph::apply(Document& doc, Feature& f, std::string* err) {
                     result = mk.Shape();
                 } else {
                     BRepFilletAPI_MakeChamfer mk(tb->shape);
-                    for (const auto& je : f.params.at("edges")) {
+                    for (const auto& je : params.at("edges")) {
                         int idx = je.get<int>();
                         if (idx < 1 || idx > edges.Extent()) return fail("edge index out of range");
                         mk.Add(v, TopoDS::Edge(edges(idx)));
@@ -449,16 +459,17 @@ bool FeatureGraph::apply(Document& doc, Feature& f, std::string* err) {
                 EntityId target = find_feature_body("target");
                 const Body* tb = doc.body(target);
                 if (!tb) return fail("missing target body");
-                double diameter = f.params.value("diameter", 0.0);
+                double diameter = num_param(params, "diameter", 0.0, env);
                 if (diameter <= 0.0) return fail("invalid diameter");
-                double depth_param = f.params.value("depth", 0.0);
+                double depth_param = num_param(params, "depth", 0.0, env);
                 double depth = depth_param > 0.0 ? depth_param : k_hole_through;
-                std::string htype = f.params.value("type", "simple");
+                std::string htype = params.value("type", "simple");
                 TopoDS_Shape tool = build_feature_hole_tool(
-                    pnt_from(f.params.at("position")), dir_from(f.params.at("direction")),
-                    diameter, depth, htype, f.params.value("cb_diameter", 0.0),
-                    f.params.value("cb_depth", 0.0), f.params.value("cs_diameter", 0.0),
-                    f.params.value("cs_angle_deg", 90.0));
+                    pnt_from(params.at("position")), dir_from(params.at("direction")),
+                    diameter, depth, htype, num_param(params, "cb_diameter", 0.0, env),
+                    num_param(params, "cb_depth", 0.0, env),
+                    num_param(params, "cs_diameter", 0.0, env),
+                    num_param(params, "cs_angle_deg", 90.0, env));
                 if (tool.IsNull() || !shape::is_valid(tool)) return fail("hole tool failed");
                 BRepAlgoAPI_Cut cut(tb->shape, tool);
                 if (!cut.IsDone()) return fail("hole cut failed");
@@ -475,8 +486,8 @@ bool FeatureGraph::apply(Document& doc, Feature& f, std::string* err) {
                 const Body* tb = doc.body(target);
                 if (!tb) return fail("missing target body");
                 gp_Trsf t;
-                t.SetMirror(gp_Ax2(pnt_from(f.params.at("plane_point")),
-                                   dir_from(f.params.at("plane_normal"))));
+                t.SetMirror(gp_Ax2(pnt_from(params.at("plane_point")),
+                                   dir_from(params.at("plane_normal"))));
                 TopoDS_Shape mirrored =
                     BRepBuilderAPI_Transform(tb->shape, t, /*copy=*/true).Shape();
                 if (mirrored.IsNull() || !shape::is_valid(mirrored))
@@ -489,10 +500,10 @@ bool FeatureGraph::apply(Document& doc, Feature& f, std::string* err) {
                 EntityId target = find_feature_body("target");
                 const Body* tb = doc.body(target);
                 if (!tb) return fail("missing target body");
-                int count = f.params.value("count", 0);
-                double spacing = f.params.value("spacing", 0.0);
+                int count = params.value("count", 0);
+                double spacing = num_param(params, "spacing", 0.0, env);
                 ensure_pattern_slots(f, count, doc);
-                gp_Dir dir = dir_from(f.params.at("direction"));
+                gp_Dir dir = dir_from(params.at("direction"));
                 for (int i = 1; i < count; ++i) {
                     gp_Trsf t;
                     t.SetTranslation(gp_Vec(dir.XYZ() * (spacing * i)));
@@ -510,11 +521,11 @@ bool FeatureGraph::apply(Document& doc, Feature& f, std::string* err) {
                 EntityId target = find_feature_body("target");
                 const Body* tb = doc.body(target);
                 if (!tb) return fail("missing target body");
-                int count = f.params.value("count", 0);
+                int count = params.value("count", 0);
                 ensure_pattern_slots(f, count, doc);
-                gp_Ax1 axis(pnt_from(f.params.at("axis_point")),
-                           dir_from(f.params.at("axis_dir")));
-                double total = f.params.value("total_angle", 2.0 * M_PI);
+                gp_Ax1 axis(pnt_from(params.at("axis_point")),
+                           dir_from(params.at("axis_dir")));
+                double total = num_param(params, "total_angle", 2.0 * M_PI, env);
                 double step = total / static_cast<double>(count);
                 for (int i = 1; i < count; ++i) {
                     gp_Trsf t;
@@ -536,13 +547,13 @@ bool FeatureGraph::apply(Document& doc, Feature& f, std::string* err) {
                 TopTools_IndexedMapOfShape faces;
                 TopExp::MapShapes(tb->shape, TopAbs_FACE, faces);
                 TopTools_ListOfShape remove_faces;
-                for (const auto& jf : f.params.at("faces")) {
+                for (const auto& jf : params.at("faces")) {
                     int idx = jf.get<int>();
                     if (idx < 1 || idx > faces.Extent()) return fail("face index out of range");
                     remove_faces.Append(faces(idx));
                 }
                 if (remove_faces.IsEmpty()) return fail("no faces to remove");
-                double thickness = f.params.value("thickness", 1.0);
+                double thickness = num_param(params, "thickness", 1.0, env);
                 BRepOffsetAPI_MakeThickSolid mk;
                 mk.MakeThickSolidByJoin(tb->shape, remove_faces, -thickness, 1e-3);
                 if (!mk.IsDone()) return fail("shell failed");
@@ -557,7 +568,7 @@ bool FeatureGraph::apply(Document& doc, Feature& f, std::string* err) {
                 EntityId target = find_feature_body("target");
                 const Body* tb = doc.body(target);
                 if (!tb) return fail("missing target body");
-                double offset = f.params.value("offset", 0.0);
+                double offset = num_param(params, "offset", 0.0, env);
                 BRepOffsetAPI_MakeOffsetShape mk;
                 mk.PerformByJoin(tb->shape, offset, 1e-3);
                 if (!mk.IsDone()) return fail("offset failed");
@@ -570,7 +581,7 @@ bool FeatureGraph::apply(Document& doc, Feature& f, std::string* err) {
 
             case FeatureType::Sweep: {
                 EntityId sketch_fid =
-                    EntityId::from_string(f.params.at("sketch").get<std::string>());
+                    EntityId::from_string(params.at("sketch").get<std::string>());
                 const Feature* skf = feature(sketch_fid);
                 if (!skf || !skf->sketch) return fail("missing sketch feature");
                 std::string perr;
@@ -578,7 +589,7 @@ bool FeatureGraph::apply(Document& doc, Feature& f, std::string* err) {
                 if (face.IsNull()) return fail("profile: " + perr);
                 TopoDS_Shape result;
                 try {
-                    result = sweep_along_polyline(face, f.params.at("path"));
+                    result = sweep_along_polyline(face, params.at("path"));
                 } catch (const Standard_Failure& e) {
                     return fail(std::string("sweep failed: ") + e.GetMessageString());
                 } catch (const std::runtime_error& e) {
@@ -592,13 +603,13 @@ bool FeatureGraph::apply(Document& doc, Feature& f, std::string* err) {
             }
 
             case FeatureType::Loft: {
-                if (!f.params.contains("sketches") || !f.params["sketches"].is_array() ||
-                    f.params["sketches"].size() < 2)
+                if (!params.contains("sketches") || !params["sketches"].is_array() ||
+                    params["sketches"].size() < 2)
                     return fail("need at least two sketch features");
-                bool ruled = f.params.value("ruled", false);
+                bool ruled = params.value("ruled", false);
                 BRepOffsetAPI_ThruSections loft(/*isSolid=*/Standard_True, ruled);
                 size_t i = 0;
-                for (const auto& js : f.params["sketches"]) {
+                for (const auto& js : params["sketches"]) {
                     EntityId sketch_fid = EntityId::from_string(js.get<std::string>());
                     const Feature* skf = feature(sketch_fid);
                     if (!skf || !skf->sketch)
@@ -640,6 +651,13 @@ bool FeatureGraph::regenerate(Document& doc, std::string* err) {
     // (and their cards) stable. Bodies whose features are gone or suppressed
     // are removed up front; generated_ covers features removed from the
     // timeline since the last regenerate.
+    std::map<std::string, double> env;
+    try {
+        env = variables_.evaluate();
+    } catch (const std::exception& e) {
+        if (err) *err = e.what();
+        return false;
+    }
     std::vector<EntityId> rebuilt;
     for (const auto& f : timeline_) {
         if (f.suppressed) continue;
@@ -664,7 +682,7 @@ bool FeatureGraph::regenerate(Document& doc, std::string* err) {
     generated_.clear();
     for (auto& f : timeline_) {
         if (f.suppressed) continue;
-        if (!apply(doc, f, err)) {
+        if (!apply(doc, f, env, err)) {
             log::error("regenerate stopped at feature " + f.name);
             // Stale bodies of features after the failure point would show the
             // previous generation's geometry; drop them.
@@ -690,6 +708,7 @@ bool FeatureGraph::regenerate(Document& doc, std::string* err) {
 
 json FeatureGraph::to_json() const {
     json j;
+    j["variables"] = variables_.to_json();
     j["timeline"] = json::array();
     for (const auto& f : timeline_) {
         json jf;
@@ -711,6 +730,7 @@ json FeatureGraph::to_json() const {
 
 FeatureGraph FeatureGraph::from_json(const json& j) {
     FeatureGraph g;
+    if (j.contains("variables")) g.variables_ = VariableTable::from_json(j["variables"]);
     for (const auto& jf : j.at("timeline")) {
         Feature f;
         f.id = EntityId::from_string(jf.at("id").get<std::string>());

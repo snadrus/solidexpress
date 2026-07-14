@@ -11,12 +11,14 @@
 
 #include <nlohmann/json.hpp>
 
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "sx/ids.hpp"
 #include "sx/sketch.hpp"
+#include "sx/variables.hpp"
 
 namespace sx {
 
@@ -77,6 +79,9 @@ public:
     const Feature* feature(const EntityId& id) const;
     const std::vector<Feature>& timeline() const { return timeline_; }
 
+    VariableTable& variables() { return variables_; }
+    const VariableTable& variables() const { return variables_; }
+
     // True if any later feature references `id` in its params.
     bool has_dependents(const EntityId& id) const;
 
@@ -89,8 +94,10 @@ public:
     static FeatureGraph from_json(const nlohmann::json& j);
 
 private:
-    bool apply(Document& doc, Feature& f, std::string* err);
+    bool apply(Document& doc, Feature& f, const std::map<std::string, double>& env,
+               std::string* err);
     std::vector<Feature> timeline_;
+    VariableTable variables_;
     // Body ids created by the last regenerate. Needed so bodies belonging to
     // features that were since removed from the timeline still get cleaned up.
     std::vector<EntityId> generated_;
