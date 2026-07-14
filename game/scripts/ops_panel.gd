@@ -20,6 +20,7 @@ var _pattern_count: SpinBox
 var _pattern_spacing: SpinBox
 var _offset_spin: SpinBox
 var _thickness_spin: SpinBox
+var _draft_angle_spin: SpinBox
 var _boolean_op := "fuse"
 var _pending: Pending = Pending.NONE
 var _pending_first := ""  # armed source entity (body for boolean, any for measure)
@@ -133,6 +134,9 @@ func _build_body_ops() -> void:
 func _build_face_ops() -> void:
 	_thickness_spin = _labeled_spin(_face_ops, "Thickness", 0.1, 50.0, 0.5, 2.0)
 	_op_button(_face_ops, "Shell (open here)", _shell)
+	_face_ops.add_child(HSeparator.new())
+	_draft_angle_spin = _labeled_spin(_face_ops, "Draft °", 0.1, 45.0, 0.5, 3.0)
+	_op_button(_face_ops, "Apply draft", _draft)
 	_op_button(_face_ops, "Face area", func() -> void:
 		status.emit("Area: %.2f mm^2" % view.doc.measure_face_area(view.selected_face)))
 
@@ -263,6 +267,29 @@ func _shell() -> void:
 		status.emit("Shelled, wall %.1f mm" % _thickness_spin.value)
 	else:
 		status.emit("Shell failed (thickness too large?)")
+
+
+func _draft() -> bool:
+	var face := view.selected_face
+	var body := view.selected_body
+	if face == "" or body == "":
+		return false
+	var bb: Dictionary = view.doc.measure_bbox(body)
+	if bb.is_empty():
+		status.emit("Draft failed (no bbox)")
+		return false
+	var mn: Vector3 = bb["min"]
+	var mx: Vector3 = bb["max"]
+	# Neutral plane at the body's bounding-box bottom; pull along +Z.
+	var neutral_point := Vector3((mn.x + mx.x) * 0.5, (mn.y + mx.y) * 0.5, mn.z)
+	var angle: float = _draft_angle_spin.value
+	if view.doc.draft_faces(PackedStringArray([face]), angle, Vector3(0, 0, 1),
+			neutral_point, Vector3(0, 0, 1)):
+		view.graph_changed()
+		status.emit("Draft %.1f° applied" % angle)
+		return true
+	status.emit("Draft failed")
+	return false
 
 
 # --- two-target ops: arm, then click the second entity ---

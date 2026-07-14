@@ -65,9 +65,15 @@ public:
     bool rotate_body(const godot::String& body_id, const godot::Vector3& axis_point,
                      const godot::Vector3& axis_dir, double angle);
 
-    // --- shell / offset ---
+    // --- shell / offset / draft ---
     bool shell_body(const godot::PackedStringArray& faces_to_remove, double thickness);
     bool offset_body(const godot::String& body_id, double offset);
+    // angle_deg is converted to radians for the kernel. Pull direction and
+    // neutral plane are in model space. Returns false without stacking on
+    // invalid input or OCCT failure.
+    bool draft_faces(const godot::PackedStringArray& face_ids, double angle_deg,
+                     const godot::Vector3& pull_dir, const godot::Vector3& neutral_point,
+                     const godot::Vector3& neutral_normal);
 
     // --- measurement ---
     // {distance: float, point_a: Vector3, point_b: Vector3} or {} on failure.

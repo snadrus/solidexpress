@@ -3,11 +3,16 @@
 #include <godot_cpp/core/class_db.hpp>
 
 #include "sx/commands_boolean.hpp"
+#include "sx/commands_draft.hpp"
 #include "sx/commands_dress.hpp"
 #include "sx/commands_graph.hpp"
 #include "sx/commands_hollow.hpp"
 #include "sx/commands_sketch.hpp"
 #include "sx/commands_transform.hpp"
+#include <cmath>
+#include <gp_Dir.hxx>
+#include <gp_Pln.hxx>
+#include <gp_Pnt.hxx>
 #include "sx/measure.hpp"
 #include "sx/features.hpp"
 #include "sx/interop.hpp"
@@ -285,6 +290,36 @@ bool SxDocument::offset_body(const String& body_id, double offset) {
         stack_.push(*doc_, std::make_unique<sx::OffsetBodyCommand>(parse_id(body_id), offset));
     } catch (const std::exception& e) {
         sx::log::error(std::string("offset_body failed: ") + e.what());
+        return false;
+    }
+    return true;
+}
+
+bool SxDocument::draft_faces(const PackedStringArray& face_ids, double angle_deg,
+                             const Vector3& pull_dir, const Vector3& neutral_point,
+                             const Vector3& neutral_normal) {
+    auto faces = parse_ids(face_ids);
+    if (faces.empty()) return false;
+    auto owner = doc_->owning_body(faces.front());
+    if (!owner) return false;
+
+    const double angle = angle_deg * M_PI / 180.0;
+    const gp_Dir pull(pull_dir.x, pull_dir.y, pull_dir.z);
+    const gp_Pln neutral(gp_Pnt(neutral_point.x, neutral_point.y, neutral_point.z),
+                         gp_Dir(neutral_normal.x, neutral_normal.y, neutral_normal.z));
+
+    auto cmd = std::make_unique<sx::DraftCommand>(*owner, std::move(faces), angle, pull,
+                                                  neutral);
+    // Fallible: only adopt into the undo stack when the algorithm succeeds.
+    // try_execute mutates the doc; undo restores it so stack_.push can
+    // re-execute cleanly (face ids are preserved by topological naming, so a
+    // second try_execute without undo would clobber the undo snapshots).
+    if (!cmd->try_execute(*doc_)) return false;
+    cmd->undo(*doc_);
+    try {
+        stack_.push(*doc_, std::move(cmd));
+    } catch (const std::exception& e) {
+        sx::log::error(std::string("draft_faces failed: ") + e.what());
         return false;
     }
     return true;
@@ -705,6 +740,9 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("rotate_body", "body_id", "axis_point", "axis_dir", "angle"), &SxDocument::rotate_body);
     ClassDB::bind_method(D_METHOD("shell_body", "faces_to_remove", "thickness"), &SxDocument::shell_body);
     ClassDB::bind_method(D_METHOD("offset_body", "body_id", "offset"), &SxDocument::offset_body);
+    ClassDB::bind_method(D_METHOD("draft_faces", "face_ids", "angle_deg", "pull_dir", "neutral_point",
+                                  "neutral_normal"),
+                         &SxDocument::draft_faces);
     ClassDB::bind_method(D_METHOD("measure_distance", "a", "b"), &SxDocument::measure_distance);
     ClassDB::bind_method(D_METHOD("measure_bbox", "id"), &SxDocument::measure_bbox);
     ClassDB::bind_method(D_METHOD("measure_mass", "body_id"), &SxDocument::measure_mass);

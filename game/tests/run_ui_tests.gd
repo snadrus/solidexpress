@@ -40,6 +40,7 @@ func _init() -> void:
 	test_file_actions(main)
 	test_camera_views(main)
 	test_body_props(main)
+	test_draft(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -275,6 +276,29 @@ func test_body_props(main) -> void:
 	check(absf(loaded.r - tint.r) < 1e-4 and absf(loaded.g - tint.g) < 1e-4
 			and absf(loaded.b - tint.b) < 1e-4, "color survived save/load")
 	DirAccess.remove_absolute(path)
+
+
+func test_draft(main) -> void:
+	print("- draft face via ops panel")
+	var view: DocumentView = main.view
+	var ops: OpsPanel = main.ops_panel
+	view.new_document()
+	# Box centered at (-900,-900), spans -925..-875 in x/y, 0..50 in z.
+	var id: String = view.insert_primitive("box", Vector3(-900, -900, 0))
+	view.select_entity(id, "")
+	# Ray from +X onto the side face.
+	view.select_ray(Vector3(-870, -900, 25), Vector3(-1, 0, 0))
+	check(view.selected_face != "" and ops._face_ops.visible, "side face selected for draft")
+	var n := view.selected_face_normal()
+	check(n.distance_to(Vector3(1, 0, 0)) < 0.01, "selected +X side face")
+
+	var vol0: float = view.doc.body_volume(id)
+	ops._draft_angle_spin.value = 5.0
+	check(ops._draft(), "draft apply returned true")
+	var vol1: float = view.doc.body_volume(id)
+	check(absf(vol1 - vol0) > 1.0, "draft changed volume (%.0f -> %.0f)" % [vol0, vol1])
+	check(view.doc.undo(), "undo draft")
+	check(absf(view.doc.body_volume(id) - vol0) < 1e-6, "undo restored original volume")
 
 
 func test_file_actions(main) -> void:
