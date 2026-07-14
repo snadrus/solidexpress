@@ -46,6 +46,7 @@ func _init() -> void:
 	test_hole(main)
 	test_variables(main)
 	test_graph_move_rename(main)
+	test_graph_import_step(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -797,3 +798,31 @@ func test_graph_move_rename(main) -> void:
 	feats = view.doc.graph_features()
 	check(feats[0]["id"] == a and feats[1]["id"] == b, "undo restored order")
 	check(feats[0]["name"] == name_a and feats[1]["name"] == name_b, "names intact after undo move")
+
+
+func test_graph_import_step(main) -> void:
+	print("- graph import_step + undo")
+	var view: DocumentView = main.view
+	view.new_document()
+	var box_fid: String = view.doc.graph_add_primitive("box", 10.0, 20.0, 30.0, Vector3.ZERO)
+	check(box_fid != "", "source box feature added")
+	var step_path := "/tmp/sx_ui_import_step.step"
+	check(view.doc.export_step(step_path), "export_step wrote box")
+	check(FileAccess.file_exists(step_path), "step file exists")
+
+	view.new_document()
+	var bodies0: int = view.doc.body_ids().size()
+	var imp_fid: String = view.doc.graph_add_import_step(step_path, 1.0)
+	check(imp_fid != "", "graph_add_import_step returned id")
+	var feats: Array = view.doc.graph_features()
+	check(feats.size() == 1, "timeline has one feature")
+	check(feats[0]["type"] == "import_step", "feature type is import_step")
+	var body: String = feats[0]["output_body"]
+	check(body != "", "import_step has output_body")
+	check(view.doc.body_ids().size() == bodies0 + 1, "import created a body")
+	check(absf(view.doc.body_volume(body) - 6000.0) < 1.0, "imported box volume ~6000")
+
+	check(view.undo(), "undo import_step")
+	check(view.doc.graph_features().is_empty(), "timeline empty after undo")
+	check(view.doc.body_ids().size() == bodies0, "body gone after undo")
+	DirAccess.remove_absolute(step_path)

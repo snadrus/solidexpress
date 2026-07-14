@@ -37,6 +37,7 @@
 
 #include "sx/curves.hpp"
 #include "sx/document.hpp"
+#include "sx/interop.hpp"
 #include "sx/log.hpp"
 #include "sx/shape_utils.hpp"
 #include "sx/sketch_json.hpp"
@@ -63,6 +64,7 @@ const char* to_string(FeatureType t) {
         case FeatureType::Sweep: return "sweep";
         case FeatureType::Loft: return "loft";
         case FeatureType::HelixSweep: return "helix_sweep";
+        case FeatureType::ImportStep: return "import_step";
     }
     return "unknown";
 }
@@ -84,13 +86,14 @@ FeatureType feature_type_from_string(const std::string& s) {
     if (s == "sweep") return FeatureType::Sweep;
     if (s == "loft") return FeatureType::Loft;
     if (s == "helix_sweep") return FeatureType::HelixSweep;
+    if (s == "import_step") return FeatureType::ImportStep;
     throw std::invalid_argument("unknown feature type: " + s);
 }
 
 static bool creates_body(const Feature& f) {
-    if (f.type == FeatureType::Primitive || f.type == FeatureType::Mirror ||
-        f.type == FeatureType::Sweep || f.type == FeatureType::Loft ||
-        f.type == FeatureType::HelixSweep)
+    if (f.type == FeatureType::Primitive || f.type == FeatureType::ImportStep ||
+        f.type == FeatureType::Mirror || f.type == FeatureType::Sweep ||
+        f.type == FeatureType::Loft || f.type == FeatureType::HelixSweep)
         return true;
     if (f.type == FeatureType::Extrude || f.type == FeatureType::Revolve)
         return f.params.value("op", "new") == "new";
@@ -761,6 +764,38 @@ bool FeatureGraph::apply(Document& doc, Feature& f,
                     return fail("helix sweep result invalid");
                 if (shape::count(result).solids < 1)
                     return fail("helix sweep result is not a solid");
+                put_body(doc, f.output_body, result, f.name);
+                return true;
+            }
+
+            case FeatureType::ImportStep: {
+                // File is re-read on every regenerate; path is an external
+                // document dependency (acceptable for this BASE feature).
+                if (!params.contains("path") || !params["path"].is_string())
+                    return fail("missing path");
+                const std::string path = params["path"].get<std::string>();
+                const int index = params.value("index", 0);
+                const double scale = num_param(params, "scale", 1.0, env);
+
+                Document tmp;
+                std::string ierr;
+                auto ids = interop::import_step(tmp, path, &ierr);
+                if (ids.empty())
+                    return fail(ierr.empty() ? "STEP import failed" : ierr);
+                if (index < 0 || static_cast<size_t>(index) >= ids.size())
+                    return fail("shape index out of range");
+                const Body* src = tmp.body(ids[static_cast<size_t>(index)]);
+                if (!src || src->shape.IsNull()) return fail("imported shape is null");
+
+                TopoDS_Shape result = src->shape;
+                if (std::abs(scale - 1.0) > 1e-15) {
+                    if (scale <= 0.0) return fail("scale must be positive");
+                    gp_Trsf t;
+                    t.SetScale(gp_Pnt(0, 0, 0), scale);
+                    result = BRepBuilderAPI_Transform(result, t, /*copy=*/true).Shape();
+                    if (result.IsNull() || !shape::is_valid(result))
+                        return fail("scale transform failed");
+                }
                 put_body(doc, f.output_body, result, f.name);
                 return true;
             }

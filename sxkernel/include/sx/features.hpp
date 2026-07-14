@@ -47,6 +47,9 @@ enum class FeatureType {
     HelixSweep, // params: {profile_radius (default 1), axis_point: [x,y,z],
                 //          axis_dir: [x,y,z], radius, pitch, turns,
                 //          left_handed: bool}
+    ImportStep, // params: {path: string, index: int (default 0),
+                //          scale: double (default 1.0, uniform via gp_Trsf)}
+                // BASE feature: file is re-read on regenerate (document dep).
 };
 
 const char* to_string(FeatureType t);
@@ -59,9 +62,9 @@ struct Feature {
     bool suppressed = false;
     nlohmann::json params;
     std::shared_ptr<Sketch> sketch;  // only for FeatureType::Sketch
-    // Stable id of the body this feature creates (Primitive, new-body
-    // Extrude/Revolve, Mirror, Sweep, Loft, HelixSweep). Null for sketches and
-    // modifying features.
+    // Stable id of the body this feature creates (Primitive, ImportStep,
+    // new-body Extrude/Revolve, Mirror, Sweep, Loft, HelixSweep). Null for
+    // sketches and modifying features.
     EntityId output_body;
     // Stable ids of additional bodies created by pattern features
     // (count-1 copies). Empty for all other types.

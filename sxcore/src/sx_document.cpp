@@ -738,6 +738,21 @@ String SxDocument::graph_add_hole(const String& target_fid, const String& type,
     return ok ? to_gd(fid.str()) : String();
 }
 
+String SxDocument::graph_add_import_step(const String& path, float scale) {
+    if (path.is_empty()) return {};
+    sx::EntityId fid;
+    bool ok = apply_graph_edit("import step", [&] {
+        sx::Feature f;
+        f.type = sx::FeatureType::ImportStep;
+        f.params = {{"path", to_std(path)},
+                    {"index", 0},
+                    {"scale", static_cast<double>(scale)}};
+        fid = doc_->graph().add(std::move(f));
+        return true;
+    });
+    return ok ? to_gd(fid.str()) : String();
+}
+
 bool SxDocument::graph_set_params(const String& fid, const String& params_json) {
     nlohmann::json p;
     try {
@@ -969,6 +984,8 @@ void SxDocument::_bind_methods() {
                                   "diameter", "depth", "cb_diameter", "cb_depth", "cs_diameter",
                                   "cs_angle_deg"),
                          &SxDocument::graph_add_hole);
+    ClassDB::bind_method(D_METHOD("graph_add_import_step", "path", "scale"),
+                         &SxDocument::graph_add_import_step);
     ClassDB::bind_method(D_METHOD("graph_set_params", "fid", "params_json"), &SxDocument::graph_set_params);
     ClassDB::bind_method(D_METHOD("graph_set_suppressed", "fid", "suppressed"), &SxDocument::graph_set_suppressed);
     ClassDB::bind_method(D_METHOD("graph_remove", "fid"), &SxDocument::graph_remove);

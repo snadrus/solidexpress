@@ -164,6 +164,8 @@ public:
                                  const godot::Vector3& position, const godot::Vector3& direction,
                                  float diameter, float depth, float cb_diameter, float cb_depth,
                                  float cs_diameter, float cs_angle_deg);
+    // Import a STEP solid as a timeline BASE feature (index 0, uniform scale).
+    godot::String graph_add_import_step(const godot::String& path, float scale);
     bool graph_set_params(const godot::String& fid, const godot::String& params_json);
     bool graph_set_suppressed(const godot::String& fid, bool suppressed);
     bool graph_remove(const godot::String& fid);
