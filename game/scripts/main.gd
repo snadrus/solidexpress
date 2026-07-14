@@ -78,42 +78,9 @@ func _build_world() -> void:
 	sketch_mode.view = view
 	model_space.add_child(sketch_mode)
 
-	model_space.add_child(_make_grid())
+	# Grid + origin triad now come from WorldGizmos (mounted by ViewportInteraction).
 	camera.view = view
 	camera.model_space = model_space
-
-
-func _make_grid() -> MeshInstance3D:
-	# 1000x1000 mm grid on the model XY plane, 50 mm pitch, brighter axes.
-	var im := ImmediateMesh.new()
-	im.surface_begin(Mesh.PRIMITIVE_LINES)
-	var half := 500.0
-	var step := 50.0
-	var i := -half
-	while i <= half:
-		im.surface_set_color(Color(0.3, 0.3, 0.34))
-		im.surface_add_vertex(Vector3(i, -half, 0))
-		im.surface_add_vertex(Vector3(i, half, 0))
-		im.surface_add_vertex(Vector3(-half, i, 0))
-		im.surface_add_vertex(Vector3(half, i, 0))
-		i += step
-	# Axes: X red, Y green.
-	im.surface_set_color(Color(0.8, 0.3, 0.3))
-	im.surface_add_vertex(Vector3.ZERO)
-	im.surface_add_vertex(Vector3(half, 0, 0))
-	im.surface_set_color(Color(0.3, 0.8, 0.3))
-	im.surface_add_vertex(Vector3.ZERO)
-	im.surface_add_vertex(Vector3(0, half, 0))
-	im.surface_end()
-
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.vertex_color_use_as_albedo = true
-	var node := MeshInstance3D.new()
-	node.name = "Grid"
-	node.mesh = im
-	node.material_override = mat
-	return node
 
 
 func _build_ui() -> void:

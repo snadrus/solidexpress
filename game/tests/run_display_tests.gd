@@ -27,6 +27,7 @@ func _init() -> void:
 	test_cycle_wraps(view)
 	test_wireframe_selection(view)
 	test_section_plane(view)
+	await test_world_gizmos()
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -155,3 +156,42 @@ func test_section_plane(view: DocumentView) -> void:
 			_surface_mat(view, id) is StandardMaterial3D,
 			"final clear restores StandardMaterial3D on " + id.left(8)
 		)
+
+
+func test_world_gizmos() -> void:
+	print("- world gizmos (origin triad + XY grid)")
+	var gizmos := WorldGizmos.new()
+	gizmos.name = "WorldGizmos"
+	root.add_child(gizmos)
+	await process_frame
+
+	var triad := gizmos.get_node_or_null("Triad") as Node3D
+	var grid := gizmos.get_node_or_null("Grid") as MeshInstance3D
+	check(triad != null, "Triad child exists")
+	check(grid != null, "Grid child exists")
+	check(triad != null and triad.get_child_count() == 3, "Triad has 3 axis children")
+	check(gizmos.get_child_count() == 2, "WorldGizmos has Triad + Grid")
+	check(gizmos.gizmos_visible, "gizmos visible by default")
+	check(triad != null and triad.visible, "Triad visible by default")
+	check(grid != null and grid.visible, "Grid visible by default")
+
+	if triad != null:
+		check(triad.get_node_or_null("AxisX") != null, "AxisX exists")
+		check(triad.get_node_or_null("AxisY") != null, "AxisY exists")
+		check(triad.get_node_or_null("AxisZ") != null, "AxisZ exists")
+
+	# Grid lies on the model XY ground plane (thickness along Z ≈ 0).
+	if grid != null and grid.mesh != null:
+		var aabb: AABB = grid.get_aabb()
+		check(absf(aabb.size.z) < 1e-4, "grid AABB thickness along Z ≈ 0 (XY plane)")
+		check(aabb.size.x > 100.0 and aabb.size.y > 100.0, "grid spans XY extent")
+	else:
+		check(false, "grid has mesh for AABB check")
+
+	gizmos.set_gizmos_visible(false)
+	check(not gizmos.gizmos_visible, "set_gizmos_visible(false) updates flag")
+	check(triad != null and not triad.visible, "set_gizmos_visible(false) hides Triad")
+	check(grid != null and not grid.visible, "set_gizmos_visible(false) hides Grid")
+
+	gizmos.set_gizmos_visible(true)
+	check(gizmos.gizmos_visible and triad.visible and grid.visible, "set_gizmos_visible(true) restores")

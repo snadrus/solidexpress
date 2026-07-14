@@ -9,6 +9,7 @@ var view: DocumentView
 var camera: OrbitCamera
 var model_space: Node3D  # kernel Z-up frame
 var sketch_mode: SketchMode  # optional; when active, input goes to sketching
+var world_gizmos: WorldGizmos
 
 enum DragMode { NONE, MOVE_BODY, PUSH_PULL }
 var _drag_mode := DragMode.NONE
@@ -27,6 +28,19 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	set_anchors_preset(Control.PRESET_FULL_RECT)
 	focus_mode = Control.FOCUS_ALL
+	_mount_world_gizmos()
+
+
+## Origin triad + ground grid as a sibling of DocumentView under ModelSpace.
+func _mount_world_gizmos() -> void:
+	if model_space == null:
+		return
+	if model_space.get_node_or_null("WorldGizmos") != null:
+		world_gizmos = model_space.get_node("WorldGizmos") as WorldGizmos
+		return
+	world_gizmos = WorldGizmos.new()
+	world_gizmos.name = "WorldGizmos"
+	model_space.add_child(world_gizmos)
 
 
 func _model_ray(screen_pos: Vector2) -> Array:
@@ -237,6 +251,11 @@ func _gui_key(event: InputEventKey) -> bool:
 		KEY_K:
 			if not event.ctrl_pressed:
 				toggle_section()
+				return true
+		KEY_G:
+			if not event.ctrl_pressed and world_gizmos != null:
+				world_gizmos.set_gizmos_visible(not world_gizmos.gizmos_visible)
+				status.emit("Gizmos " + ("on" if world_gizmos.gizmos_visible else "off"))
 				return true
 	return false
 
