@@ -104,8 +104,9 @@ Godot suites: integration 97 checks, UI 114 checks, sketch 23 checks.
 
 ## In flight (background agents)
 - Construction toggle + section-plane keys in the viewport
-- Hole feature kernel command (simple/counterbore/countersink)
 - Datum storage + bindings + viewport visualization
+
+Landed from round 6 so far: hole feature kernel command ([hole]: simple/counterbore/countersink with undo).
 
 ## Later phases
 Not started. See implementation plan.
