@@ -38,6 +38,10 @@ func _init() -> void:
 	test_snap_circle_center(main)
 	test_snap_axis_horizontal(main)
 	test_snap_disabled(main)
+	test_dimension_distance_label(main)
+	test_dimension_radius_label(main)
+	test_dimensions_visible_toggle(main)
+	test_dimension_labels_cleared_on_exit(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -370,3 +374,82 @@ func test_snap_disabled(main) -> void:
 	check(info["start"].distance_to(Vector2(40, 0)) > 1e-3, "did not snap to endpoint")
 	sm.set_snap(true)
 	sm.cancel()
+
+
+func _dimension_label_texts(sm: SketchMode) -> Array[String]:
+	var texts: Array[String] = []
+	if sm._dimension_labels == null:
+		return texts
+	for child in sm._dimension_labels.get_children():
+		if child is Label3D:
+			texts.append((child as Label3D).text)
+	return texts
+
+
+func test_dimension_distance_label(main) -> void:
+	print("- distance dimension creates Label3D")
+	var sm: SketchMode = main.sketch_mode
+	main.view.clear_selection()
+	main._start_sketch()
+	sm.set_tool(SketchMode.Tool.SELECT)
+	var lid: String = sm.sketch.add_line(0, 0, 40, 0)
+	sm._set_selected([lid])
+	check(sm.constrain("distance", 50.0) == "success", "distance constraint solves")
+	check(sm.dimensions.size() == 1, "dimensions array has one entry")
+	check(sm.dimensions[0]["type"] == "distance", "stored type is distance")
+	var texts := _dimension_label_texts(sm)
+	check(texts.size() == 1, "one Label3D under dimension labels")
+	var expected := sm._format_dimension(50.0)
+	check(texts[0] == expected, "distance label text is '%s' (got '%s')" % [expected, texts[0]])
+	sm.cancel()
+
+
+func test_dimension_radius_label(main) -> void:
+	print("- radius dimension creates Label3D")
+	var sm: SketchMode = main.sketch_mode
+	main.view.clear_selection()
+	main._start_sketch()
+	sm.set_tool(SketchMode.Tool.SELECT)
+	var cid: String = sm.sketch.add_circle(0, 0, 10)
+	sm._set_selected([cid])
+	check(sm.constrain("radius", 15.0) == "success", "radius constraint solves")
+	check(sm.dimensions.size() == 1, "dimensions array has one radius entry")
+	var texts := _dimension_label_texts(sm)
+	check(texts.size() == 1, "one Label3D for radius dimension")
+	var expected := sm._format_dimension(15.0)
+	check(texts[0] == expected, "radius label text is '%s' (got '%s')" % [expected, texts[0]])
+	sm.cancel()
+
+
+func test_dimensions_visible_toggle(main) -> void:
+	print("- set_dimensions_visible hides label container")
+	var sm: SketchMode = main.sketch_mode
+	main.view.clear_selection()
+	main._start_sketch()
+	sm.set_tool(SketchMode.Tool.SELECT)
+	var lid: String = sm.sketch.add_line(0, 0, 20, 0)
+	sm._set_selected([lid])
+	sm.constrain("distance", 25.0)
+	check(sm._dimension_labels.visible, "dimension labels visible by default")
+	sm.set_dimensions_visible(false)
+	check(not sm.dimensions_visible, "dimensions_visible flag false")
+	check(not sm._dimension_labels.visible, "label container hidden")
+	sm.set_dimensions_visible(true)
+	check(sm._dimension_labels.visible, "label container shown again")
+	sm.cancel()
+
+
+func test_dimension_labels_cleared_on_exit(main) -> void:
+	print("- leaving sketch mode frees dimension labels")
+	var sm: SketchMode = main.sketch_mode
+	main.view.clear_selection()
+	main._start_sketch()
+	sm.set_tool(SketchMode.Tool.SELECT)
+	var lid: String = sm.sketch.add_line(0, 0, 30, 0)
+	sm._set_selected([lid])
+	sm.constrain("distance", 30.0)
+	check(_dimension_label_texts(sm).size() == 1, "label present before exit")
+	check(sm.dimensions.size() == 1, "dimensions stored before exit")
+	sm.cancel()
+	check(sm.dimensions.is_empty(), "dimensions cleared on cancel")
+	check(sm._dimension_labels.get_child_count() == 0, "label nodes freed on cancel")

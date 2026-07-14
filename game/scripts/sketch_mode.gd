@@ -37,9 +37,15 @@ var plane_y := Vector3.UP  # model-space Y (kernel), set on begin()
 ## Selected entity ids (SELECT tool), most recent last, max 2.
 var selected: Array[String] = []
 
+## Applied dimensional constraints: {type, ids, value}. Rebuilt into Label3Ds.
+var dimensions: Array = []
+## When false, dimension label container is hidden (labels still rebuilt).
+var dimensions_visible := true
+
 var _draw_node: MeshInstance3D
 var _preview_node: MeshInstance3D
 var _selected_node: MeshInstance3D
+var _dimension_labels: Node3D
 var _selected_material: StandardMaterial3D
 var _tool_points: Array[Vector2] = []  # committed anchor points of current tool
 var _hover: Vector2 = Vector2.ZERO
@@ -48,7 +54,7 @@ var _snap_marker: Variant = null  # Vector2 | null
 var _line_material: StandardMaterial3D
 var _preview_material: StandardMaterial3D
 
-
+const DIM_LABEL_OFFSET := 4.0  # sketch-plane units perpendicular to a distance dim
 const COLOR_ENTITY := Color(0.95, 0.95, 1.0)
 const COLOR_CONSTRUCTION := Color(0.45, 0.45, 0.48)  # dimmer/desaturated
 
@@ -73,6 +79,9 @@ func _ready() -> void:
 	_selected_node = MeshInstance3D.new()
 	_selected_node.material_override = _selected_material
 	add_child(_selected_node)
+	_dimension_labels = Node3D.new()
+	_dimension_labels.name = "DimensionLabels"
+	add_child(_dimension_labels)
 
 
 ## Derive a sketch plane from an axis-aligned planar face via bbox heuristics.
@@ -151,6 +160,8 @@ func begin(origin: Vector3, normal: Vector3, x_hint: Vector3 = Vector3.ZERO) -> 
 	active = true
 	tool = Tool.LINE
 	_tool_points.clear()
+	dimensions.clear()
+	_clear_dimension_labels()
 	_redraw()
 	status.emit("Sketch: L line · R rect · C circle · Enter finish+extrude · Esc cancel")
 
@@ -161,6 +172,12 @@ func cancel() -> void:
 	_snap_marker = null
 	_clear_meshes()
 	cancelled.emit()
+
+
+func set_dimensions_visible(on: bool) -> void:
+	dimensions_visible = on
+	if _dimension_labels != null:
+		_dimension_labels.visible = on
 
 
 ## Finish the sketch and extrude by `distance` (model units). Routed through
@@ -379,20 +396,24 @@ func _point_segment_distance(p: Vector2, a: Vector2, b: Vector2) -> float:
 	return p.distance_to(a + ab * t)
 
 
-## Length of the selected line / radius of the selected circle, for pre-filling
-## the dimension input. 0 when not applicable.
-func measured_value() -> float:
-	if selected.size() == 1:
-		var info: Dictionary = sketch.entity_info(selected[0])
+## Length of a line / radius of a circle/arc / distance between two entities.
+## Uses `ids` when non-empty; otherwise the current selection. 0 when N/A.
+func measured_value(ids: Array = []) -> float:
+	if sketch == null:
+		return 0.0
+	var sel: Array = ids if not ids.is_empty() else selected
+	if sel.size() == 1:
+		var info: Dictionary = sketch.entity_info(str(sel[0]))
 		match info.get("type", ""):
 			"line":
 				return (info["end"] - info["start"]).length()
 			"circle", "arc":
 				return info["radius"]
-	elif selected.size() == 2:
-		var pair := _closest_endpoints(selected[0], selected[1])
+	elif sel.size() == 2:
+		var pair := _closest_endpoints(str(sel[0]), str(sel[1]))
 		if pair.size() == 2:
-			return _endpoint_pos(selected[0], pair[0]).distance_to(_endpoint_pos(selected[1], pair[1]))
+			return _endpoint_pos(str(sel[0]), pair[0]).distance_to(
+				_endpoint_pos(str(sel[1]), pair[1]))
 	return 0.0
 
 
@@ -446,10 +467,34 @@ func constrain(type: String, value: float = 0.0) -> String:
 					added = true
 	if not added:
 		return ""
+	# Record dimensional constraints (distance/radius, or any with a numeric value).
+	if type == "distance" or type == "radius" or absf(value) > 0.0:
+		_record_dimension(type, selected.duplicate(), value)
 	var res: Dictionary = sketch.solve()
 	_redraw()
 	_redraw_selected()
 	return res["status"]
+
+
+func _record_dimension(type: String, ids: Array, value: float) -> void:
+	var id_list: Array = []
+	for id in ids:
+		id_list.append(str(id))
+	for i in range(dimensions.size()):
+		var d: Dictionary = dimensions[i]
+		if d.get("type", "") != type:
+			continue
+		var existing: Array = d.get("ids", [])
+		if existing.size() == id_list.size():
+			var same := true
+			for j in range(id_list.size()):
+				if str(existing[j]) != id_list[j]:
+					same = false
+					break
+			if same:
+				dimensions[i] = {"type": type, "ids": id_list, "value": value}
+				return
+	dimensions.append({"type": type, "ids": id_list, "value": value})
 
 
 ## Fillet the corner shared by two selected lines. Requires exactly two selected
@@ -653,10 +698,105 @@ func _clear_meshes() -> void:
 	_preview_node.mesh = null
 	_selected_node.mesh = null
 	selected = []
+	dimensions.clear()
+	_clear_dimension_labels()
+
+
+func _clear_dimension_labels() -> void:
+	if _dimension_labels == null:
+		return
+	while _dimension_labels.get_child_count() > 0:
+		var child := _dimension_labels.get_child(0)
+		_dimension_labels.remove_child(child)
+		child.free()
 
 
 func _entity_draw_color(info: Dictionary) -> Color:
 	return COLOR_CONSTRUCTION if info.get("construction", false) else COLOR_ENTITY
+
+
+func _dimension_display_value(dim: Dictionary) -> float:
+	var ids: Array = dim.get("ids", [])
+	var measured := measured_value(ids)
+	if measured > 1e-12:
+		return measured
+	return float(dim.get("value", 0.0))
+
+
+func _dimension_label_pos2(dim: Dictionary) -> Variant:
+	## Sketch-plane 2D position for a dimension label, or null if unresolvable.
+	var ids: Array = dim.get("ids", [])
+	var type: String = dim.get("type", "")
+	if ids.is_empty() or sketch == null:
+		return null
+	if type == "radius" or (ids.size() == 1 and sketch.entity_info(str(ids[0])).get("type", "") in ["circle", "arc"]):
+		var info: Dictionary = sketch.entity_info(str(ids[0]))
+		if info.get("type", "") != "circle" and info.get("type", "") != "arc":
+			return null
+		var c: Vector2 = info["center"]
+		var r: float = info["radius"]
+		return c + Vector2(r * 0.7071, r * 0.7071)
+	# Distance (or other): midpoint of the two reference points, offset perpendicular.
+	var a: Vector2
+	var b: Vector2
+	if ids.size() == 1:
+		var li: Dictionary = sketch.entity_info(str(ids[0]))
+		if li.get("type", "") != "line":
+			return null
+		a = li["start"]
+		b = li["end"]
+	elif ids.size() >= 2:
+		var pair := _closest_endpoints(str(ids[0]), str(ids[1]))
+		if pair.size() != 2:
+			return null
+		a = _endpoint_pos(str(ids[0]), pair[0])
+		b = _endpoint_pos(str(ids[1]), pair[1])
+	else:
+		return null
+	var mid := (a + b) * 0.5
+	var ab := b - a
+	var perp := Vector2(-ab.y, ab.x)
+	if perp.length_squared() < 1e-12:
+		perp = Vector2(0, 1)
+	else:
+		perp = perp.normalized()
+	return mid + perp * DIM_LABEL_OFFSET
+
+
+func _rebuild_dimension_labels() -> void:
+	_clear_dimension_labels()
+	if _dimension_labels == null or sketch == null:
+		return
+	_dimension_labels.visible = dimensions_visible
+	for dim in dimensions:
+		if typeof(dim) != TYPE_DICTIONARY:
+			continue
+		var pos2: Variant = _dimension_label_pos2(dim)
+		if pos2 == null:
+			continue
+		var label := Label3D.new()
+		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		label.fixed_size = true
+		label.pixel_size = 0.004
+		label.font_size = 28
+		label.text = _format_dimension(_dimension_display_value(dim))
+		label.position = _to3(pos2)
+		_dimension_labels.add_child(label)
+
+
+## Approximate "%.4g" (GDScript's % operator has no g specifier).
+func _format_dimension(v: float) -> String:
+	if not is_finite(v):
+		return str(v)
+	if absf(v) < 1e-12:
+		return "0"
+	var s := "%.6f" % v
+	if s.contains("."):
+		while s.ends_with("0"):
+			s = s.substr(0, s.length() - 1)
+		if s.ends_with("."):
+			s = s.substr(0, s.length() - 1)
+	return s
 
 
 func _redraw() -> void:
@@ -710,6 +850,7 @@ func _redraw() -> void:
 		_draw_node.mesh = im
 	else:
 		_draw_node.mesh = null
+	_rebuild_dimension_labels()
 
 
 func _update_preview() -> void:
