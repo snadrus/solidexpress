@@ -95,10 +95,18 @@ func test_rotate_stretch_and_pull_handles(main) -> void:
 	stretch = ix._pick_resize_handle(ix._model_to_screen(out_pt))
 	check(not stretch.is_empty(), "stretch grip pickable outside silhouette")
 	var z_grip: Dictionary = ix._z_move_grip_anchor()
-	check(not z_grip.is_empty(), "ΔZ leave/approach grip present")
+	check(not z_grip.is_empty(), "lift grip present")
 	if not z_grip.is_empty():
 		check(not ix._pick_z_move_grip(ix._model_to_screen(z_grip["point"])).is_empty(),
-			"ΔZ grip pickable at tip")
+			"lift grip pickable at tip")
+		# Tip must stay within ~10% of viewport height (vertical grip).
+		var zb: Vector2 = ix._model_to_screen(z_grip["base"])
+		var zt: Vector2 = ix._model_to_screen(z_grip["point"])
+		var max_len := ix.get_viewport().get_visible_rect().size.y * ViewportInteraction.GRIP_SCREEN_FRAC
+		if max_len < 8.0:
+			max_len = ix.size.y * ViewportInteraction.GRIP_SCREEN_FRAC
+		check(zb.distance_to(zt) <= max_len + 2.0,
+			"lift grip screen length ≤ 10%% height (got %.1f, max %.1f)" % [zb.distance_to(zt), max_len])
 	var faces: PackedStringArray = view.doc.get_face_ids(id)
 	if faces.size() > 0:
 		view.select_entity(id, faces[0])

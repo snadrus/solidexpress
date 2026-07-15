@@ -9,14 +9,14 @@ Goal: place a box, see what a click will hit, then reshape and move it with on-c
 3. Click the body to select it. You should see:
    - Blue AABB / corner brackets
    - RGB **rotate arcs** (grab a tick on the ring to rotate about that axis)
-   - Blue **stretch arrows** pointing outward from each face (primitives)
-   - A yellow **ΔZ** double-arrow above the solid (leave / approach the ground plane — all bodies)
+   - Blue **stretch arrows** (single outward chevron on each face — primitives)
+   - A yellow **lift** grip above the solid (double-headed arrow with a mid plane bar — leave / approach the ground)
    - A thin **Fillet / Sketch / Look at / Hide / Delete** strip at the top (Sketch / Look at appear when a face is selected; **Join / Subtract / Intersect** appear for multi-body selection and apply instantly)
-4. **Drag the solid itself** (after a short move past the click slop) to move it on the horizontal plane. Tiny clicks still refine selection instead of nudging. While dragging you see the **old** and **new** center marks plus an editable **Δ** row. Drag the **ΔZ** grip (or tap **Z** mid-drag) for vertical motion; tap **X** / **Y** to lock planar axes.
+4. **Drag the solid itself** (after a short move past the click slop) to move it on the horizontal plane. Tiny clicks still refine selection instead of nudging. While dragging you see the **old** and **new** center marks plus an editable **Δ** row. Drag the yellow **lift** grip (or tap **Z** mid-drag) for vertical motion; tap **X** / **Y** to lock planar axes.
 5. Click a face again to select the face. An orange **Pull** arrow appears. Drag the arrow — a live mm badge shows the distance; release commits. Use **Look at** (strip or RMB) for a SolidWorks-style normal-to view.
 6. **Right-click** for a context menu. **Right-drag** orbits instead (menu only on click without drag).
 7. **Space** opens an orientation panel (Front / Right / Top / Iso / Fit / Ortho / restore “User”). ViewHud **Save view** stores “User”.
-8. Use **Shade / Section / Fit** and **Nav: SX / SW / Fusion** beside the ViewCube. Fusion users: choose **Nav: Fusion** so middle-drag pans.
+8. Use **Shade / Section / Fit** and **Nav: SX / SW / Fusion** in the top-right ViewHud. Fusion users: choose **Nav: Fusion** so middle-drag pans. Snap views with **Space** or **1 / 2 / 3 / 7**.
 9. **Component instances** (Assembly panel → Place instance) are draggable too: click one to select it (slim strip with Delete), drag to move it on the ground plane. If it is mated, releasing the drag re-solves the mates and the instance snaps back into position — the SolidWorks “drag it, constraints pull it home” feel.
 
 ## What “good” looks like

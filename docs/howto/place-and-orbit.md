@@ -20,7 +20,7 @@ Goal: drop one solid that sits on the ground plane, keep it selected, and orbit 
    - **Shift + click** → add / toggle multi-select (Shift+empty keeps selection)
    - **Empty click** → clear selection
    - **F** frames the **selection** (or all if none); **Shift+F** always frames all; **Space** opens the orientation panel; **1 / 2 / 3 / 7** jump to front / right / top / isometric
-5. Drag on the solid to **move** it on the horizontal plane (old/new centers + editable Δ). Grab the yellow **ΔZ** arrow above the solid to leave / approach the plane. Tap **X**/**Y**/**Z** mid-drag to lock that axis. Blue **stretch arrows** on each face (primitives) or a **rotate arc** reshape / rotate — Enter refines the focused Δ / Δ°.
+5. Drag on the solid to **move** it on the horizontal plane (old/new centers + editable Δ). Grab the yellow **lift** grip above the solid to leave / approach the plane. Tap **X**/**Y**/**Z** mid-drag to lock that axis. Blue **stretch arrows** (single outward chevron) on each face or a **rotate arc** reshape / rotate — Enter refines the focused Δ / Δ°.
 6. To cancel a place before committing, press **Esc** (or right-click without dragging). Click empty space to deselect and bring **Primitives** back.
 
 ## What “good” looks like

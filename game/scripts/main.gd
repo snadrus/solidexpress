@@ -21,7 +21,6 @@ var voice_executor: VoiceExecutor
 var variables_panel: VariablesPanel
 var ops_panel: OpsPanel
 var assembly_panel: AssemblyPanel
-var view_widget: ViewWidget
 var view_hud: ViewHud
 var palette: PanelContainer
 var dim_value: SpinBox
@@ -325,27 +324,15 @@ func _build_ui() -> void:
 			camera._update_transform()
 			_on_status("Instance focused"))
 
-	# Top-right corner: clickable view widget (left of the card panel).
-	view_widget = ViewWidget.new()
-	view_widget.name = "ViewWidget"
-	view_widget.camera = camera
-	view_widget.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	view_widget.anchor_left = 1.0
-	view_widget.anchor_right = 1.0
-	view_widget.offset_left = -436
-	view_widget.offset_right = -344
-	view_widget.offset_top = 52
-	view_widget.offset_bottom = 144
-	view_widget.tooltip_text = "Click a face, edge, or corner to set the camera view"
-	ui.add_child(view_widget)
-
+	# Top-right: display / section / fit / nav preset (Space + number keys cover
+	# snapped views — the old ViewCube widget was retired as redundant).
 	view_hud = ViewHud.new()
 	view_hud.name = "ViewHud"
 	view_hud.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	view_hud.anchor_left = 1.0
 	view_hud.anchor_right = 1.0
-	view_hud.offset_left = -528
-	view_hud.offset_right = -444
+	view_hud.offset_left = -436
+	view_hud.offset_right = -344
 	view_hud.offset_top = 52
 	view_hud.offset_bottom = 160
 	ui.add_child(view_hud)
@@ -406,14 +393,13 @@ func _build_ui() -> void:
 	status_bar.add_child(status_label)
 
 	# Sketch toolbar (visible only in sketch mode). Two stacked rows so it
-	# stays clear of the file menu (left) and the ViewHud / ViewCube (right).
+	# stays clear of the file menu (left) and the ViewHud (right).
 	sketch_toolbar = PanelContainer.new()
 	sketch_toolbar.name = "SketchToolbar"
 	sketch_toolbar.set_anchors_preset(Control.PRESET_CENTER_TOP)
 	sketch_toolbar.anchor_left = 0.5
 	sketch_toolbar.anchor_right = 0.5
-	# Biased slightly left of center so the grown content clears the
-	# ViewHud / ViewCube column on the right.
+	# Biased slightly left of center so the grown content clears the ViewHud.
 	sketch_toolbar.offset_left = -340
 	sketch_toolbar.offset_right = 180
 	sketch_toolbar.offset_top = 8

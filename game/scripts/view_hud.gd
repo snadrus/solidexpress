@@ -1,7 +1,7 @@
 class_name ViewHud
 extends PanelContainer
-## Compact view controls beside the ViewWidget: display mode, section, fit,
-## and a CAD mouse-navigation preset (SolidWorks / Fusion / SolidExpress).
+## Compact view controls: display mode, section, fit, and CAD nav preset
+## (SolidWorks / Fusion / SolidExpress). Snapped views use Space / number keys.
 
 signal display_cycle_requested
 signal section_toggle_requested

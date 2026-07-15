@@ -132,6 +132,8 @@ const ORBIT_CLICK_SLOP := 22.0
 const HANDLE_PX := 22.0
 const AXIS_HANDLE_PX := 26.0
 const AXIS_LEN_FRAC := 0.35
+## Grip arrows cap at this fraction of screen width (horizontal) or height (vertical).
+const GRIP_SCREEN_FRAC := 0.10
 const GHOST_NAME := "PlaceGhost"
 ## Kernel primitive sizes used for sit-on-plane ghost offsets (half-heights).
 const PLACE_HALF_Z := {
@@ -1288,6 +1290,24 @@ func _gui_key(event: InputEventKey) -> bool:
 			if view.delete_selected():
 				status.emit("Deleted body")
 			return true
+		KEY_C:
+			if event.ctrl_pressed:
+				var n := view.copy_selection()
+				if n > 0:
+					status.emit("Copied %d" % n if n > 1 else "Copied")
+				else:
+					status.emit("Nothing to copy")
+				return true
+		KEY_V:
+			if event.ctrl_pressed:
+				var made: Array = view.paste_clipboard()
+				if made.is_empty():
+					status.emit("Clipboard empty")
+				else:
+					status.emit("Pasted %d" % made.size() if made.size() > 1 else "Pasted")
+				_refresh_transform_hud()
+				_refresh_selection_strip()
+				return true
 		KEY_Z:
 			if event.ctrl_pressed:
 				if event.shift_pressed:
@@ -1560,7 +1580,8 @@ func _pick_resize_handle(screen_pos: Vector2) -> Dictionary:
 	]
 	for h in face_handles:
 		var signs: Vector3 = h["signs"]
-		var pick_pt: Vector3 = h["point"] + signs * pad
+		var tip_guess: Vector3 = h["point"] + signs * maxf(pad * 3.0, 8.0)
+		var pick_pt: Vector3 = _screen_capped_tip(h["point"], tip_guess)
 		var d: float = _model_to_screen(pick_pt).distance_to(screen_pos)
 		if d < best_d:
 			best_d = d
@@ -1573,6 +1594,7 @@ func _pick_resize_handle(screen_pos: Vector2) -> Dictionary:
 
 
 ## Tall +Z tip: leave / approach the ground plane (all bodies).
+## Tip length is screen-capped so the grip never dwarfs the selection.
 func _z_move_grip_anchor() -> Dictionary:
 	if view == null or view.selected_body == "" or view.selection_size() != 1:
 		return {}
@@ -1583,18 +1605,44 @@ func _z_move_grip_anchor() -> Dictionary:
 		return {}
 	var c: Vector3 = bb["center"]
 	var half_z: float = float(bb["size"].z) * 0.5
-	var tip_len := maxf(_axis_len() * 0.9, 18.0)
-	var tip := Vector3(c.x, c.y, c.z + half_z + tip_len)
-	return {"point": tip, "center": c, "base": Vector3(c.x, c.y, c.z + half_z)}
+	var base := Vector3(c.x, c.y, c.z + half_z)
+	var tip_guess := base + Vector3(0, 0, maxf(_axis_len() * 0.9, 18.0))
+	var tip := _screen_capped_tip(base, tip_guess)
+	return {"point": tip, "center": c, "base": base}
 
 
 func _pick_z_move_grip(screen_pos: Vector2) -> Dictionary:
 	var h := _z_move_grip_anchor()
 	if h.is_empty():
 		return {}
-	if _model_to_screen(h["point"]).distance_to(screen_pos) > AXIS_HANDLE_PX:
+	# Prefer tip, but also accept the mid “lift” plate so a short grip is easy.
+	var tip_d: float = _model_to_screen(h["point"]).distance_to(screen_pos)
+	var mid: Vector3 = (h["base"] as Vector3).lerp(h["point"], 0.55)
+	var mid_d: float = _model_to_screen(mid).distance_to(screen_pos)
+	if minf(tip_d, mid_d) > AXIS_HANDLE_PX:
 		return {}
 	return h
+
+
+## Shorten `tip` along base→tip so screen length ≤ GRIP_SCREEN_FRAC of the
+## viewport dimension matching the arrow's dominant screen direction.
+func _screen_capped_tip(base_m: Vector3, tip_m: Vector3) -> Vector3:
+	if camera == null or model_space == null:
+		return tip_m
+	var base_s := _model_to_screen(base_m)
+	var tip_s := _model_to_screen(tip_m)
+	var delta_s := tip_s - base_s
+	var len_s := delta_s.length()
+	if len_s < 1.0:
+		return tip_m
+	var vp := get_viewport().get_visible_rect().size
+	if vp.x < 2.0 or vp.y < 2.0:
+		vp = size if size.x > 2.0 else Vector2(1280, 720)
+	# Direction they point: vertical → screen height; horizontal → screen width.
+	var limit := GRIP_SCREEN_FRAC * (vp.y if absf(delta_s.y) >= absf(delta_s.x) else vp.x)
+	if len_s <= limit:
+		return tip_m
+	return base_m.lerp(tip_m, limit / len_s)
 
 
 func _update_resize_drag(screen_pos: Vector2) -> void:
@@ -2070,7 +2118,7 @@ func _face_pull_anchor() -> Dictionary:
 		n.x * half.x if absf(n.x) > 0.5 else 0.0,
 		n.y * half.y if absf(n.y) > 0.5 else 0.0,
 		n.z * half.z if absf(n.z) > 0.5 else 0.0)
-	var tip := anchor + n * maxf(_axis_len() * 0.8, 20.0)
+	var tip := _screen_capped_tip(anchor, anchor + n * maxf(_axis_len() * 0.8, 20.0))
 	return {"point": tip, "anchor": anchor, "normal": n}
 
 
@@ -2088,7 +2136,7 @@ func _draw_selection_gizmos() -> void:
 		return
 	if camera == null or model_space == null:
 		return
-	# Face stretch arrows (primitives only) — pointing outward from each face.
+	# Face stretch arrows (primitives only) — short outward single chevrons.
 	if view.is_primitive_body(view.selected_body) and view.selection_size() == 1:
 		var bb := view.selection_bbox()
 		if not bb.is_empty():
@@ -2103,22 +2151,14 @@ func _draw_selection_gizmos() -> void:
 				{"p": Vector3((mn.x + mx.x) * 0.5, (mn.y + mx.y) * 0.5, mx.z), "n": Vector3(0, 0, 1)},
 				{"p": Vector3((mn.x + mx.x) * 0.5, (mn.y + mx.y) * 0.5, mn.z), "n": Vector3(0, 0, -1)},
 			]
+			var stretch_col := Color(0.25, 0.75, 1.0, 0.95)
 			for f in faces:
-				var tip_m: Vector3 = f["p"] + f["n"] * pad
-				var base_s := _model_to_screen(f["p"])
-				var tip_s := _model_to_screen(tip_m)
-				_draw_outward_arrow(base_s, tip_s, Color(0.2, 0.65, 1.0, 0.95))
-	# Leave/approach-plane Z move grip (all bodies).
+				var tip_m := _screen_capped_tip(f["p"], f["p"] + f["n"] * maxf(pad * 3.0, 8.0))
+				_draw_stretch_arrow(_model_to_screen(f["p"]), _model_to_screen(tip_m), stretch_col)
+	# Leave/approach-plane lift grip — distinct “elevator” symbol (not a stretch arrow).
 	var z_grip := _z_move_grip_anchor()
 	if not z_grip.is_empty():
-		var zb: Vector2 = _model_to_screen(z_grip["base"])
-		var zt: Vector2 = _model_to_screen(z_grip["point"])
-		var zcol := Color(1.0, 0.78, 0.2, 0.95)
-		# Double-headed arrow along Z.
-		_draw_outward_arrow(zb, zt, zcol)
-		_draw_outward_arrow(zt, zb, zcol)
-		draw_string(ThemeDB.fallback_font, zt + Vector2(8, -6), "ΔZ",
-				HORIZONTAL_ALIGNMENT_LEFT, -1, 11, zcol)
+		_draw_lift_grip(_model_to_screen(z_grip["base"]), _model_to_screen(z_grip["point"]))
 	# Rotate arcs (body mesh itself is the XY move grip).
 	for g in _rotate_grips():
 		_draw_rotate_arc(g)
@@ -2136,34 +2176,57 @@ func _draw_selection_gizmos() -> void:
 					HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1.0, 0.75, 0.15))
 		if _move_axis_lock >= 0:
 			_draw_move_lock_axis()
-	# Face push/pull arrow.
+	# Face push/pull arrow (also screen-capped via _face_pull_anchor).
 	var pull := _face_pull_anchor()
 	if not pull.is_empty():
 		var a: Vector2 = _model_to_screen(pull["anchor"])
 		var t: Vector2 = _model_to_screen(pull["point"])
 		var col2 := Color(1.0, 0.62, 0.15, 0.95)
-		draw_line(a, t, col2, 3.0)
-		draw_circle(t, 6.0, col2)
+		_draw_stretch_arrow(a, t, col2)
 		draw_string(ThemeDB.fallback_font, t + Vector2(8, -8), "Pull", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, col2)
 
 
-## Arrow from `base` to `tip` in screen space (shaft + filled head).
-func _draw_outward_arrow(base: Vector2, tip: Vector2, color: Color) -> void:
+## Stretch / pull: single chevron pointing away from the face.
+func _draw_stretch_arrow(base: Vector2, tip: Vector2, color: Color) -> void:
 	var delta := tip - base
-	if delta.length_squared() < 4.0:
-		# Degenerate projection — still show a tip marker.
-		draw_circle(tip, 5.0, color)
+	if delta.length_squared() < 9.0:
+		draw_circle(tip, 4.0, color)
 		return
 	var dir := delta.normalized()
-	var shaft_end := tip - dir * 8.0
-	draw_line(base, shaft_end, color, 2.5)
+	var shaft_end := tip - dir * 7.0
+	draw_line(base, shaft_end, color, 2.0)
 	var perp := Vector2(-dir.y, dir.x)
-	var head := PackedVector2Array([
-		tip,
-		shaft_end + perp * 5.0,
-		shaft_end - perp * 5.0,
-	])
-	draw_colored_polygon(head, color)
+	draw_colored_polygon(PackedVector2Array([
+		tip, tip - dir * 8.0 + perp * 5.0, tip - dir * 8.0 - perp * 5.0,
+	]), color)
+
+
+## Lift / approach plane: double-headed vertical with a mid “floor plate”.
+## Visually distinct from stretch chevrons.
+func _draw_lift_grip(base: Vector2, tip: Vector2) -> void:
+	var col := Color(1.0, 0.82, 0.2, 0.95)
+	var delta := tip - base
+	if delta.length_squared() < 16.0:
+		tip = base + Vector2(0, -28)
+		delta = tip - base
+	var dir := delta.normalized()
+	var perp := Vector2(-dir.y, dir.x)
+	var mid := base.lerp(tip, 0.55)
+	# Shaft
+	draw_line(base + dir * 6.0, tip - dir * 6.0, col, 2.5)
+	# Up and down heads
+	draw_colored_polygon(PackedVector2Array([
+		tip, tip - dir * 9.0 + perp * 5.5, tip - dir * 9.0 - perp * 5.5,
+	]), col)
+	draw_colored_polygon(PackedVector2Array([
+		base, base + dir * 9.0 + perp * 5.5, base + dir * 9.0 - perp * 5.5,
+	]), col)
+	# Mid plate = “ground plane” cue (horizontal bar + small square).
+	var plate := 9.0
+	draw_line(mid - perp * plate, mid + perp * plate, Color(0.95, 0.95, 0.98, 0.95), 2.5)
+	draw_rect(Rect2(mid - Vector2(4, 4), Vector2(8, 8)), col, false, 1.5)
+	draw_string(ThemeDB.fallback_font, tip + perp * 8.0 + Vector2(2, -4), "lift",
+			HORIZONTAL_ALIGNMENT_LEFT, -1, 11, col)
 
 
 func _draw_center_mark(screen: Vector2, color: Color) -> void:
