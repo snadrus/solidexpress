@@ -33,15 +33,15 @@ func test_registry() -> void:
 		check(entry.has("desc") and str(entry["desc"]) != "", "entry has non-empty desc")
 
 	var grouped := Shortcuts.by_context()
-	var expected := ["View", "Model", "Sketch", "File"]
-	check(grouped.size() == 4, "by_context() has exactly 4 contexts")
+	var expected := ["View", "Model", "Sketch", "Timeline", "File"]
+	check(grouped.size() == expected.size(), "by_context() has exactly %d contexts" % expected.size())
 	for ctx in expected:
 		check(grouped.has(ctx), "by_context() has " + ctx)
 		check(grouped[ctx] is Array and (grouped[ctx] as Array).size() > 0, ctx + " has entries")
 
 	# No unexpected contexts.
 	for ctx in grouped.keys():
-		check(ctx in expected, "context is one of the four: " + str(ctx))
+		check(ctx in expected, "context is expected: " + str(ctx))
 
 	var fit_desc := Shortcuts.describe("F")
 	check(fit_desc != "", "describe(F) known")

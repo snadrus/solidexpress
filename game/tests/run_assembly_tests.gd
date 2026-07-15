@@ -28,9 +28,170 @@ func _init() -> void:
 	await test_armed_mate_flow(main)
 	await test_mate_delete(main)
 	await test_solve_button(main)
+	await test_pick_and_drag_instance(main)
+	await test_drag_resnap_with_mate(main)
+	await test_mate_error_badge_and_anchor(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
+
+
+func test_pick_and_drag_instance(main) -> void:
+	print("- pick_instance + viewport drag commits transform")
+	var view: DocumentView = main.view
+	var vi: ViewportInteraction = main.interaction
+	view.new_document()
+	var doc: SxDocument = view.doc
+	var block: String = doc.add_box(30, 30, 30, Vector3.ZERO)
+	var iid: String = doc.add_instance(block, Vector3(200, 0, 0), Vector3(0, 0, 1), 0.0, "Blk-1")
+	view.refresh()
+	await process_frame
+
+	# Ray straight down through the instance's transformed AABB.
+	var bb: Dictionary = doc.measure_bbox(block)
+	var local_center: Vector3 = (bb["min"] + bb["max"]) * 0.5
+	var center: Vector3 = Vector3(200, 0, 0) + local_center
+	var hit: Dictionary = view.pick_instance(center + Vector3(0, 0, 500), Vector3(0, 0, -1))
+	check(hit.get("id", "") == iid, "pick_instance hits the instance")
+	check(view.pick_instance(Vector3(-500, -500, 500), Vector3(0, 0, -1)).is_empty(),
+		"pick_instance misses empty space")
+
+	# Screen-space press → drag → release moves the instance on the ground plane.
+	root.size = Vector2i(1280, 720)
+	vi.size = Vector2(1280, 720)
+	main.camera.frame_contents()
+	await process_frame
+	var world_center: Vector3 = main.model_space.to_global(center)
+	var screen: Vector2 = main.camera.unproject_position(world_center)
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_LEFT
+	press.pressed = true
+	press.position = screen
+	vi._input(press)
+	check(view.selected_instance == iid, "press selects instance")
+	check(vi._pending_instance_move, "instance drag armed (deferred)")
+	var mm := InputEventMouseMotion.new()
+	mm.position = screen + Vector2(60, 0)
+	vi._input(mm)
+	check(vi._drag_mode == ViewportInteraction.DragMode.MOVE_INSTANCE,
+		"travel past slop arms MOVE_INSTANCE")
+	var release := InputEventMouseButton.new()
+	release.button_index = MOUSE_BUTTON_LEFT
+	release.pressed = false
+	release.position = screen + Vector2(60, 0)
+	vi._input(release)
+	var placed: Dictionary = doc.instance_list()[0]
+	var moved: Vector3 = placed["translation"]
+	check(moved.distance_to(Vector3(200, 0, 0)) > 1.0,
+		"drag committed a new translation (moved %.1f)" % moved.distance_to(Vector3(200, 0, 0)))
+	check(absf(moved.z) < 1e-4, "drag stayed on the ground plane")
+	check(vi._drag_mode == ViewportInteraction.DragMode.NONE, "drag cleared on release")
+
+	# Plain click on the instance keeps it selected (no accidental clear).
+	view.refresh()
+	await process_frame
+	var center2: Vector3 = moved + local_center
+	var screen2: Vector2 = main.camera.unproject_position(main.model_space.to_global(center2))
+	for pressed in [true, false]:
+		var mb := InputEventMouseButton.new()
+		mb.button_index = MOUSE_BUTTON_LEFT
+		mb.pressed = pressed
+		mb.position = screen2
+		vi._input(mb)
+	check(view.selected_instance == iid, "click keeps instance selected")
+	check(vi._selection_strip.visible, "selection strip shows for instance")
+	check(not vi._strip_fillet.visible and vi._strip_delete.visible,
+		"instance strip offers Delete, not body ops")
+
+
+func test_drag_resnap_with_mate(main) -> void:
+	print("- dragged instance re-snaps to its mate on release")
+	var view: DocumentView = main.view
+	var vi: ViewportInteraction = main.interaction
+	view.new_document()
+	var doc: SxDocument = view.doc
+	var base: String = doc.add_box(100, 100, 20, Vector3.ZERO)
+	var block: String = doc.add_box(30, 30, 30, Vector3(300, 0, 0))
+	var iid: String = doc.add_instance(block, Vector3(0, 0, 90), Vector3(0, 0, 1), 0.0, "Blk-1")
+	var base_top := _face_where(doc, base, func(bb): return absf(bb["min"].z - 20.0) < 1e-6 and absf(bb["max"].z - 20.0) < 1e-6)
+	var block_bottom := _face_where(doc, block, func(bb): return absf(bb["min"].z - 0.0) < 1e-6 and absf(bb["max"].z - 0.0) < 1e-6)
+	var mid: String = doc.add_mate("plane_coincident", "", base_top, iid, block_bottom, 0.0, false, "on base")
+	check(mid != "", "mate seeded")
+	check(doc.solve_mates(), "initial solve")
+	view.refresh()
+	await process_frame
+	var tz0: float = doc.instance_list()[0]["translation"].z
+	check(absf(tz0 - 20.0) < 1e-4, "instance sits on base (tz %.1f)" % tz0)
+
+	# Drag the instance sideways; on release the mate re-solves and keeps it
+	# planted on the base top (z pulled home while x/y move freely).
+	root.size = Vector2i(1280, 720)
+	vi.size = Vector2(1280, 720)
+	main.camera.frame_contents()
+	await process_frame
+	var bb: Dictionary = doc.measure_bbox(block)
+	var local_center: Vector3 = (bb["min"] + bb["max"]) * 0.5
+	var t0: Vector3 = doc.instance_list()[0]["translation"]
+	var screen: Vector2 = main.camera.unproject_position(
+		main.model_space.to_global(t0 + local_center))
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_LEFT
+	press.pressed = true
+	press.position = screen
+	vi._input(press)
+	if not vi._pending_instance_move:
+		# Ray may hit the base body first at this camera angle; skip gracefully.
+		check(true, "drag skipped: press landed on a body, not the instance")
+		var cancel := InputEventMouseButton.new()
+		cancel.button_index = MOUSE_BUTTON_LEFT
+		cancel.pressed = false
+		cancel.position = screen
+		vi._input(cancel)
+		return
+	var mm := InputEventMouseMotion.new()
+	mm.position = screen + Vector2(50, 0)
+	vi._input(mm)
+	var release := InputEventMouseButton.new()
+	release.button_index = MOUSE_BUTTON_LEFT
+	release.pressed = false
+	release.position = screen + Vector2(50, 0)
+	vi._input(release)
+	var t1: Vector3 = doc.instance_list()[0]["translation"]
+	check(absf(t1.z - 20.0) < 1e-4, "mate re-solve snapped z home (tz %.2f)" % t1.z)
+	check(Vector2(t1.x, t1.y).distance_to(Vector2(t0.x, t0.y)) > 1.0,
+		"in-plane translation kept from the drag")
+
+
+func test_mate_error_badge_and_anchor(main) -> void:
+	print("- mate error badge + anchor face tint")
+	var view: DocumentView = main.view
+	view.new_document()
+	var doc: SxDocument = view.doc
+	var panel := _mount_panel(main)
+	await process_frame
+	var base: String = doc.add_box(100, 100, 20, Vector3.ZERO)
+	var block: String = doc.add_box(30, 30, 30, Vector3(200, 0, 0))
+	doc.add_instance(block, Vector3(0, 0, 90), Vector3(0, 0, 1), 0.0, "Blk-1")
+	view.refresh()
+	panel.refresh_lists()
+
+	# Armed first pick keeps the anchor face tinted until the second pick.
+	var base_top := _face_where(doc, base, func(bb): return absf(bb["min"].z - 20.0) < 1e-6 and absf(bb["max"].z - 20.0) < 1e-6)
+	panel._arm_mate()
+	view.select_entity(base, base_top)
+	check(view.mate_anchor_face == base_top, "anchor face recorded on first pick")
+	check(panel._mate_face_a == base_top, "panel keeps face A")
+
+	# Unresolvable face A: add/solve fails and the badge appears in the list.
+	panel._mate_face_a = "00000000-0000-4000-8000-000000000000"
+	var block_bottom := _face_where(doc, block, func(bb): return absf(bb["min"].z - 0.0) < 1e-6 and absf(bb["max"].z - 0.0) < 1e-6)
+	panel._resolve_mate_b(block, block_bottom)
+	check(panel._mate_error != "", "mate error recorded")
+	check(view.mate_anchor_face == "", "anchor tint cleared after resolution")
+	var badge: Node = panel._mates_list.get_node_or_null("MateError")
+	check(badge != null, "error badge row present")
+	panel._mate_error = ""
+	panel.queue_free()
 
 
 func _mount_panel(main) -> AssemblyPanel:

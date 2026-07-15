@@ -11,6 +11,9 @@ signal selection_changed(body_id: String, face_id: String)
 const BODY_COLOR := Color(0.72, 0.74, 0.78)
 const SELECTED_BODY_COLOR := Color(0.55, 0.68, 0.9)
 const SELECTED_FACE_COLOR := Color(1.0, 0.62, 0.15)
+const HOVER_BODY_COLOR := Color(0.78, 0.84, 0.92)
+const HOVER_FACE_COLOR := Color(0.95, 0.82, 0.45)
+const MATE_ANCHOR_COLOR := Color(0.35, 0.85, 0.45)
 const EDGE_COLOR := Color(0.12, 0.13, 0.16)
 const DATUM_PLANE_COLOR := Color(0.35, 0.55, 0.85, 0.22)
 const DATUM_AXIS_COLOR := Color(0.85, 0.35, 0.2)
@@ -28,6 +31,12 @@ var selected_edge := ""
 var selected_bodies: Array[String] = []
 var selected_faces: Array[String] = []
 var selected_edges: Array[String] = []
+## Selected component instance (viewport click on an instance mesh).
+var selected_instance := ""
+## Pre-selection hover (distinct from selected materials).
+var hovered_body := ""
+var hovered_face := ""
+var hovered_edge := ""
 var display_mode := DisplayMode.SHADED_EDGES
 ## True while a section (clipping) plane is active on body meshes.
 ## Edge overlay lines are not clipped in v1.
@@ -44,35 +53,58 @@ var _body_nodes := {}  # body_id -> MeshInstance3D
 var _datum_nodes := {}  # datum_id -> Node3D
 var _instance_nodes := {}  # instance_id -> MeshInstance3D
 var _face_ids := {}    # body_id -> PackedStringArray
-var _body_materials := {}  # body_id -> StandardMaterial3D (tinted by body color)
-var _instance_materials := {}  # instance_id -> StandardMaterial3D (lightened source tint)
+var _body_materials := {}  # body_id -> ShaderMaterial (tinted by body color)
+var _instance_materials := {}  # instance_id -> Material
 var _edge_highlight: MeshInstance3D
-var _base_material: StandardMaterial3D
-var _selected_body_material: StandardMaterial3D
-var _selected_face_material: StandardMaterial3D
+var _selection_corners: MeshInstance3D
+var _base_material: ShaderMaterial
+var _selected_body_material: ShaderMaterial
+var _selected_face_material: ShaderMaterial
+var _hover_body_material: ShaderMaterial
+var _hover_face_material: ShaderMaterial
+var _mate_anchor_material: ShaderMaterial
+## First face of an armed mate pick — stays tinted green until the second
+## pick so users can see the anchor (AssemblyPanel sets/clears this).
+var mate_anchor_face := "":
+	set(v):
+		mate_anchor_face = v
+		_apply_selection_materials()
 var _edge_material: StandardMaterial3D
 var _selected_edge_material: StandardMaterial3D
+var _hover_edge_material: StandardMaterial3D
+var _selected_edge_overlay: StandardMaterial3D
 var _wireframe_hidden_material: StandardMaterial3D
 var _datum_plane_material: StandardMaterial3D
 var _datum_axis_material: StandardMaterial3D
 var _datum_point_material: StandardMaterial3D
+var _body_shader: Shader
 var _section_shader: Shader
 var _section_point := Vector3.ZERO
 var _section_normal := Vector3.RIGHT
 
 
 func _ready() -> void:
+	_body_shader = _make_body_shader()
 	_base_material = _make_material(BODY_COLOR)
 	_selected_body_material = _make_material(SELECTED_BODY_COLOR)
-	_selected_face_material = _make_material(SELECTED_FACE_COLOR)
-	_selected_face_material.emission_enabled = true
-	_selected_face_material.emission = SELECTED_FACE_COLOR * 0.35
+	_selected_face_material = _make_material(SELECTED_FACE_COLOR, 0.45)
+	_hover_body_material = _make_material(HOVER_BODY_COLOR)
+	_hover_face_material = _make_material(HOVER_FACE_COLOR, 0.2)
+	_mate_anchor_material = _make_material(MATE_ANCHOR_COLOR, 0.45)
 	_edge_material = StandardMaterial3D.new()
 	_edge_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_edge_material.albedo_color = EDGE_COLOR
 	_selected_edge_material = StandardMaterial3D.new()
 	_selected_edge_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_selected_edge_material.albedo_color = SELECTED_BODY_COLOR
+	_hover_edge_material = StandardMaterial3D.new()
+	_hover_edge_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_hover_edge_material.albedo_color = HOVER_FACE_COLOR
+	_hover_edge_material.no_depth_test = true
+	_selected_edge_overlay = StandardMaterial3D.new()
+	_selected_edge_overlay.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_selected_edge_overlay.albedo_color = SELECTED_FACE_COLOR
+	_selected_edge_overlay.no_depth_test = true
 	_wireframe_hidden_material = StandardMaterial3D.new()
 	_wireframe_hidden_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	_wireframe_hidden_material.albedo_color = Color(0, 0, 0, 0)
@@ -88,22 +120,57 @@ func _ready() -> void:
 	_datum_point_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_datum_point_material.albedo_color = DATUM_POINT_COLOR
 	_section_shader = _make_section_shader()
-	var hl_mat := StandardMaterial3D.new()
-	hl_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	hl_mat.albedo_color = SELECTED_FACE_COLOR
-	hl_mat.no_depth_test = true
 	_edge_highlight = MeshInstance3D.new()
 	_edge_highlight.name = "EdgeHighlight"
-	_edge_highlight.material_override = hl_mat
+	_edge_highlight.material_override = _selected_edge_overlay
 	add_child(_edge_highlight)
+	var corner_mat := StandardMaterial3D.new()
+	corner_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	corner_mat.albedo_color = Color(0.15, 0.55, 1.0)
+	corner_mat.no_depth_test = true
+	_selection_corners = MeshInstance3D.new()
+	_selection_corners.name = "SelectionCorners"
+	_selection_corners.material_override = corner_mat
+	add_child(_selection_corners)
 	refresh()
 
 
-func _make_material(color: Color) -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	m.albedo_color = color
-	m.metallic = 0.1
-	m.roughness = 0.55
+## Front faces opaque; back faces translucent so shells / holes read correctly.
+func _make_body_shader() -> Shader:
+	var s := Shader.new()
+	s.code = """
+shader_type spatial;
+render_mode blend_mix, depth_prepass_alpha, cull_disabled, diffuse_lambert, specular_schlick_ggx;
+
+uniform vec4 albedo_color : source_color = vec4(0.72, 0.74, 0.78, 1.0);
+uniform float metallic : hint_range(0.0, 1.0) = 0.1;
+uniform float roughness : hint_range(0.0, 1.0) = 0.55;
+uniform float emission_energy : hint_range(0.0, 2.0) = 0.0;
+uniform float backface_alpha : hint_range(0.0, 1.0) = 0.18;
+
+void fragment() {
+	bool back = !FRONT_FACING;
+	ALBEDO = albedo_color.rgb * (back ? 0.55 : 1.0);
+	METALLIC = metallic;
+	ROUGHNESS = roughness;
+	EMISSION = albedo_color.rgb * emission_energy;
+	ALPHA = back ? backface_alpha : albedo_color.a;
+	if (albedo_color.a < 0.01) {
+		ALPHA = 0.0;
+	}
+}
+"""
+	return s
+
+
+func _make_material(color: Color, emission_energy: float = 0.0) -> ShaderMaterial:
+	var m := ShaderMaterial.new()
+	m.shader = _body_shader
+	m.set_shader_parameter("albedo_color", color)
+	m.set_shader_parameter("metallic", 0.1)
+	m.set_shader_parameter("roughness", 0.55)
+	m.set_shader_parameter("emission_energy", emission_energy)
+	m.set_shader_parameter("backface_alpha", 0.18)
 	return m
 
 
@@ -111,7 +178,7 @@ func _make_section_shader() -> Shader:
 	var s := Shader.new()
 	s.code = """
 shader_type spatial;
-render_mode cull_back, diffuse_lambert, specular_schlick_ggx;
+render_mode blend_mix, depth_prepass_alpha, cull_disabled, diffuse_lambert, specular_schlick_ggx;
 
 uniform vec4 albedo_color : source_color = vec4(0.72, 0.74, 0.78, 1.0);
 uniform vec3 section_point = vec3(0.0);
@@ -136,10 +203,12 @@ void fragment() {
 	if (albedo_color.a < 0.01) {
 		discard;
 	}
-	ALBEDO = albedo_color.rgb;
+	bool back = !FRONT_FACING;
+	ALBEDO = albedo_color.rgb * (back ? 0.55 : 1.0);
 	METALLIC = metallic;
 	ROUGHNESS = roughness;
 	EMISSION = emission_color.rgb * emission_energy;
+	ALPHA = back ? 0.18 : 1.0;
 }
 """
 	return s
@@ -168,7 +237,7 @@ func set_section_plane(point: Vector3, normal: Vector3) -> void:
 	_apply_selection_materials()
 
 
-## Disable section-view clipping and restore StandardMaterial3D body materials.
+## Disable section-view clipping and restore body ShaderMaterials.
 func clear_section_plane() -> void:
 	section_enabled = false
 	_apply_selection_materials()
@@ -186,23 +255,50 @@ func cycle_display_mode() -> int:
 
 # --- creation (palette drop / click-to-place) ---
 
+## Default edge length (mm) for palette primitives — sized for the close 0.1 mm grid view.
+const DEFAULT_PRIMITIVE_MM := 10.0
+
+
+## Default footprint/height used when the place HUD has not overridden sizes.
+static func default_primitive_size(kind: String) -> Vector3:
+	var s := DEFAULT_PRIMITIVE_MM
+	match kind:
+		"box":
+			return Vector3(s, s, s)
+		"cylinder":
+			return Vector3(s, s, s)  # W=H=diameter, D=height
+		"sphere":
+			return Vector3(s, s, s)  # diameter
+		"cone":
+			return Vector3(s, s * 0.4, s)  # bottom Ø, top Ø, height
+		"torus":
+			return Vector3(s * 1.2, s * 0.32, s * 0.32)  # major Ø, tube Ø
+		_:
+			return Vector3(s, s, s)
+
+
 ## Insert a palette primitive sitting on a horizontal floor through `world_point`.
 ## `world_point` is model (kernel Z-up) space: x/y = footprint center, z = floor
 ## height (0 = ground plane; top of another body = stack).
-func insert_primitive(kind: String, world_point: Vector3) -> String:
+## Optional `size` (W,H,D mm) overrides the default footprint; see
+## `default_primitive_size` for per-kind mapping onto kernel a/b/c.
+func insert_primitive(kind: String, world_point: Vector3, size := Vector3.ZERO) -> String:
 	var p := world_point
+	var s := size if size.x > 0.0 else default_primitive_size(kind)
 	var fid := ""
 	match kind:
 		"box":
-			fid = doc.graph_add_primitive("box", 50, 50, 50, p - Vector3(25, 25, 0))
+			fid = doc.graph_add_primitive("box", s.x, s.y, s.z, p - Vector3(s.x * 0.5, s.y * 0.5, 0))
 		"cylinder":
-			fid = doc.graph_add_primitive("cylinder", 25, 50, 0, p)
+			# a=radius, b=height — HUD W/H are diameter; D is height.
+			fid = doc.graph_add_primitive("cylinder", s.x * 0.5, s.z, 0, p)
 		"sphere":
-			fid = doc.graph_add_primitive("sphere", 25, 0, 0, p + Vector3(0, 0, 25))
+			fid = doc.graph_add_primitive("sphere", s.x * 0.5, 0, 0, p + Vector3(0, 0, s.x * 0.5))
 		"cone":
-			fid = doc.graph_add_primitive("cone", 25, 10, 50, p)
+			# a=bottom radius, b=top radius, c=height
+			fid = doc.graph_add_primitive("cone", s.x * 0.5, s.y * 0.5, s.z, p)
 		"torus":
-			fid = doc.graph_add_primitive("torus", 30, 8, 0, p + Vector3(0, 0, 8))
+			fid = doc.graph_add_primitive("torus", s.x * 0.5, s.y * 0.5, 0, p + Vector3(0, 0, s.y * 0.5))
 		_:
 			push_error("unknown primitive kind: " + kind)
 			return ""
@@ -231,6 +327,104 @@ func feature_of_body(body_id: String) -> String:
 	return ""
 
 
+## Feature dict for the body, or {} when it is not a timeline feature.
+func feature_info(body_id: String) -> Dictionary:
+	var fid := feature_of_body(body_id)
+	if fid == "":
+		return {}
+	for f in doc.graph_features():
+		if f["id"] == fid:
+			return f
+	return {}
+
+
+## Parsed params of a body's owning feature, or {}.
+func feature_params(body_id: String) -> Dictionary:
+	var info := feature_info(body_id)
+	if info.is_empty():
+		return {}
+	var parsed = JSON.parse_string(info.get("params", "{}"))
+	return parsed if typeof(parsed) == TYPE_DICTIONARY else {}
+
+
+## True when the body is a resizable timeline primitive.
+func is_primitive_body(body_id: String) -> bool:
+	var info := feature_info(body_id)
+	return not info.is_empty() and str(info.get("type", "")) == "primitive"
+
+
+## Combined selection AABB in model space: {min, max, size, center} or {}.
+func selection_bbox() -> Dictionary:
+	var ids: Array[String] = []
+	for b in selected_bodies:
+		ids.append(b)
+	if ids.is_empty() and selected_body != "":
+		ids.append(selected_body)
+	if ids.is_empty():
+		return {}
+	var mn := Vector3(1e12, 1e12, 1e12)
+	var mx := Vector3(-1e12, -1e12, -1e12)
+	var any := false
+	for id in ids:
+		var bb: Dictionary = doc.measure_bbox(id)
+		if bb.is_empty():
+			continue
+		any = true
+		mn = mn.min(bb["min"])
+		mx = mx.max(bb["max"])
+	if not any:
+		return {}
+	return {"min": mn, "max": mx, "size": mx - mn, "center": (mn + mx) * 0.5}
+
+
+## Resize a primitive body so its AABB becomes `new_min`..`new_max`.
+## Returns false when the body is not a primitive or the edit fails.
+func resize_primitive_aabb(body_id: String, new_min: Vector3, new_max: Vector3) -> bool:
+	if not is_primitive_body(body_id):
+		return false
+	var info := feature_info(body_id)
+	var params := feature_params(body_id)
+	if params.is_empty():
+		return false
+	var size := new_max - new_min
+	if size.x < 0.1 or size.y < 0.1 or size.z < 0.1:
+		return false
+	var kind := str(params.get("kind", "box"))
+	match kind:
+		"box":
+			params["a"] = size.x
+			params["b"] = size.y
+			params["c"] = size.z
+			params["origin"] = [new_min.x, new_min.y, new_min.z]
+		"cylinder":
+			var r := minf(size.x, size.y) * 0.5
+			params["a"] = r
+			params["b"] = size.z
+			params["origin"] = [new_min.x + r, new_min.y + r, new_min.z]
+		"sphere":
+			var r2 := minf(size.x, minf(size.y, size.z)) * 0.5
+			params["a"] = r2
+			params["origin"] = [new_min.x + r2, new_min.y + r2, new_min.z + r2]
+		"cone":
+			params["a"] = size.x * 0.5
+			params["b"] = float(params.get("b", size.x * 0.1))
+			params["c"] = size.z
+			params["origin"] = [new_min.x + size.x * 0.5, new_min.y + size.y * 0.5, new_min.z]
+		"torus":
+			params["a"] = size.x * 0.5
+			params["b"] = size.z * 0.5
+			params["origin"] = [new_min.x + size.x * 0.5, new_min.y + size.y * 0.5,
+					new_min.z + size.z * 0.5]
+		_:
+			return false
+	var keep := body_id
+	if not doc.graph_set_params(info["id"], JSON.stringify(params)):
+		return false
+	_after_mutation()
+	select_entity(keep, "")
+	return true
+
+
 func graph_changed() -> void:
 	clear_selection()
 	_after_mutation()
@@ -238,7 +432,7 @@ func graph_changed() -> void:
 
 # --- selection ---
 
-## Ray in model space. Returns true on hit. With `additive` (Ctrl+click) the
+## Ray in model space. Returns true on hit. With `additive` (Shift/Ctrl+click) the
 ## hit entity is toggled into the multi-select sets instead of replacing the
 ## selection: a face (or edge) when the hit body is already selected, else
 ## the whole body. Hidden bodies are skipped (pick-through).
@@ -483,13 +677,100 @@ func select_entity(body_id: String, face_id: String) -> void:
 	selected_bodies.assign([body_id] if body_id != "" and face_id == "" else [])
 	selected_faces.assign([face_id] if face_id != "" else [])
 	selected_edges.clear()
+	if selected_instance != "":
+		selected_instance = ""
+		_apply_instance_highlight()
 	_apply_selection_materials()
 	_highlight_edge()
 	selection_changed.emit(selected_body, selected_face)
 
 
+## Select a component instance (clears body/face/edge selection).
+func select_instance(instance_id: String) -> void:
+	select_entity("", "")
+	selected_instance = instance_id
+	_apply_instance_highlight()
+	selection_changed.emit("", "")
+
+
+func _apply_instance_highlight() -> void:
+	for id in _instance_nodes:
+		var node: MeshInstance3D = _instance_nodes[id]
+		if node == null:
+			continue
+		if str(id) == selected_instance:
+			node.material_override = _make_material(SELECTED_BODY_COLOR)
+		else:
+			node.material_override = _instance_materials.get(id)
+
+
+## First component instance whose transformed mesh AABB the ray hits.
+## Returns {} or {id, point, distance}. Instances have no kernel B-rep of
+## their own, so this is a view-side AABB test (good enough for drag).
+func pick_instance(origin: Vector3, direction: Vector3) -> Dictionary:
+	var best := {}
+	var best_t := INF
+	var d := direction.normalized() if direction.length_squared() > 1e-12 else direction
+	for id in _instance_nodes:
+		var node: MeshInstance3D = _instance_nodes[id]
+		if node == null or node.mesh == null or not node.visible:
+			continue
+		var inv := node.transform.affine_inverse()
+		var t := _ray_aabb_t(inv * origin, (inv.basis * d).normalized(), node.mesh.get_aabb())
+		if t >= 0.0 and t < best_t:
+			best_t = t
+			best = {
+				"id": str(id),
+				"point": origin + d * t,
+				"distance": t,
+			}
+	return best
+
+
+## Slab-test ray/AABB intersection distance, or -1.0 on miss.
+static func _ray_aabb_t(origin: Vector3, dir: Vector3, aabb: AABB) -> float:
+	var t_min := 0.0
+	var t_max := INF
+	for axis in 3:
+		var o := origin[axis]
+		var d := dir[axis]
+		var lo: float = aabb.position[axis]
+		var hi: float = aabb.position[axis] + aabb.size[axis]
+		if absf(d) < 1e-12:
+			if o < lo or o > hi:
+				return -1.0
+			continue
+		var t0 := (lo - o) / d
+		var t1 := (hi - o) / d
+		if t0 > t1:
+			var tmp := t0
+			t0 = t1
+			t1 = tmp
+		t_min = maxf(t_min, t0)
+		t_max = minf(t_max, t1)
+		if t_min > t_max:
+			return -1.0
+	return t_min
+
+
 func clear_selection() -> void:
 	select_entity("", "")
+
+
+## Pre-highlight under the pointer. Distinct from selection colors.
+## Pass empty strings to clear. No-op when the hover target is unchanged.
+func set_hover(body_id: String, face_id: String = "", edge_id: String = "") -> void:
+	if body_id == hovered_body and face_id == hovered_face and edge_id == hovered_edge:
+		return
+	hovered_body = body_id
+	hovered_face = face_id
+	hovered_edge = edge_id
+	_apply_selection_materials()
+	_highlight_edge()
+
+
+func clear_hover() -> void:
+	set_hover("", "", "")
 
 
 ## Card markdown of the innermost selected entity ("" if nothing selected).
@@ -534,6 +815,15 @@ func move_selected(delta: Vector3) -> bool:
 	if selected_body == "":
 		return false
 	var ok := doc.translate_body(selected_body, delta)
+	_after_mutation()
+	return ok
+
+
+## Rotate the selected body about `axis_point` along `axis_dir` by `angle` (rad).
+func rotate_selected(axis_point: Vector3, axis_dir: Vector3, angle: float) -> bool:
+	if selected_body == "":
+		return false
+	var ok := doc.rotate_body(selected_body, axis_point, axis_dir, angle)
 	_after_mutation()
 	return ok
 
@@ -742,6 +1032,8 @@ func _refresh_instances() -> void:
 			_instance_nodes[id].queue_free()
 			_instance_nodes.erase(id)
 			_instance_materials.erase(id)
+			if selected_instance == str(id):
+				selected_instance = ""
 
 
 func _rebuild_instance(inst: Dictionary) -> void:
@@ -768,7 +1060,8 @@ func _rebuild_instance(inst: Dictionary) -> void:
 	node.transform = Transform3D(basis, translation)
 	var tint: Color = doc.get_body_color(source).lightened(0.28)
 	_instance_materials[id] = _make_material(tint)
-	node.material_override = _instance_materials[id]
+	node.material_override = _make_material(SELECTED_BODY_COLOR) \
+			if id == selected_instance else _instance_materials[id]
 	# WIREFRAME: hide solid mesh (no instance edge overlay in v1).
 	node.visible = display_mode != DisplayMode.WIREFRAME
 
@@ -823,10 +1116,13 @@ func _rebuild_edges(edge_node: MeshInstance3D, body_id: String) -> void:
 
 
 func _highlight_edge() -> void:
-	# Highlight all selected edges (multi-select) in one overlay mesh.
+	# Selected edges win; otherwise show the hovered edge.
 	var targets: Array[String] = selected_edges.duplicate()
 	if targets.is_empty() and selected_edge != "":
 		targets.append(selected_edge)
+	var use_hover := targets.is_empty() and hovered_edge != ""
+	if use_hover:
+		targets.append(hovered_edge)
 	if targets.is_empty():
 		_edge_highlight.mesh = null
 		return
@@ -849,6 +1145,8 @@ func _highlight_edge() -> void:
 	if have_any:
 		im.surface_end()
 		_edge_highlight.mesh = im
+		_edge_highlight.material_override = _hover_edge_material if use_hover \
+				else _selected_edge_overlay
 	else:
 		_edge_highlight.mesh = null
 
@@ -860,7 +1158,7 @@ func _apply_selection_materials() -> void:
 		var body_selected: bool = body_id == selected_body or selected_bodies.has(body_id)
 		var whole_body_selected: bool = selected_bodies.has(body_id) \
 			or (body_id == selected_body and selected_face == "" and selected_edge == "")
-		var base: StandardMaterial3D = _body_materials.get(body_id, _base_material)
+		var base: ShaderMaterial = _body_materials.get(body_id, _base_material)
 		var body_shown := not hidden_bodies.has(body_id)
 		node.visible = body_shown
 		var edges: MeshInstance3D = node.get_node_or_null("Edges") as MeshInstance3D
@@ -874,6 +1172,10 @@ func _apply_selection_materials() -> void:
 			var face_here := faces[i] if i < faces.size() else ""
 			var face_selected: bool = face_here != "" \
 				and (face_here == selected_face or selected_faces.has(face_here))
+			var face_hovered: bool = face_here != "" and face_here == hovered_face \
+				and not face_selected
+			var body_hovered: bool = body_id == hovered_body and hovered_face == "" \
+				and hovered_edge == "" and not whole_body_selected and not face_selected
 			var mat: Material
 			if display_mode == DisplayMode.WIREFRAME:
 				if section_enabled:
@@ -887,14 +1189,27 @@ func _apply_selection_materials() -> void:
 					)
 				else:
 					mat = _selected_face_material
+			elif face_here != "" and face_here == mate_anchor_face:
+				mat = _mate_anchor_material
 			elif whole_body_selected:
 				if section_enabled:
 					mat = _make_section_material(SELECTED_BODY_COLOR)
 				else:
 					mat = _selected_body_material
+			elif face_hovered:
+				if section_enabled:
+					mat = _make_section_material(HOVER_FACE_COLOR)
+				else:
+					mat = _hover_face_material
+			elif body_hovered:
+				if section_enabled:
+					mat = _make_section_material(HOVER_BODY_COLOR)
+				else:
+					mat = _hover_body_material
 			else:
 				if section_enabled:
-					mat = _make_section_material(base.albedo_color)
+					var c: Color = base.get_shader_parameter("albedo_color")
+					mat = _make_section_material(c)
 				else:
 					mat = base
 			node.set_surface_override_material(i, mat)
@@ -904,3 +1219,67 @@ func _apply_selection_materials() -> void:
 		inode.visible = display_mode != DisplayMode.WIREFRAME
 		if _instance_materials.has(iid):
 			inode.material_override = _instance_materials[iid]
+	_rebuild_selection_corners()
+
+
+## Draw an AABB frame + corner brackets around the current selection.
+func _rebuild_selection_corners() -> void:
+	if _selection_corners == null:
+		return
+	var ids: Array[String] = []
+	for b in selected_bodies:
+		ids.append(b)
+	if ids.is_empty() and selected_body != "":
+		ids.append(selected_body)
+	if ids.is_empty():
+		_selection_corners.mesh = null
+		return
+	var mn := Vector3(1e12, 1e12, 1e12)
+	var mx := Vector3(-1e12, -1e12, -1e12)
+	var any := false
+	for id in ids:
+		var bb: Dictionary = doc.measure_bbox(id)
+		if bb.is_empty():
+			continue
+		any = true
+		mn = mn.min(bb["min"])
+		mx = mx.max(bb["max"])
+	if not any:
+		_selection_corners.mesh = null
+		return
+	# Slight pad so brackets sit outside the solid.
+	var pad := (mx - mn).length() * 0.02 + 0.5
+	mn -= Vector3(pad, pad, pad)
+	mx += Vector3(pad, pad, pad)
+	var im := ImmediateMesh.new()
+	im.surface_begin(Mesh.PRIMITIVE_LINES)
+	var corners: Array[Vector3] = [
+		Vector3(mn.x, mn.y, mn.z), Vector3(mx.x, mn.y, mn.z),
+		Vector3(mx.x, mx.y, mn.z), Vector3(mn.x, mx.y, mn.z),
+		Vector3(mn.x, mn.y, mx.z), Vector3(mx.x, mn.y, mx.z),
+		Vector3(mx.x, mx.y, mx.z), Vector3(mn.x, mx.y, mx.z),
+	]
+	# Full wire AABB
+	var edges := [
+		[0, 1], [1, 2], [2, 3], [3, 0],
+		[4, 5], [5, 6], [6, 7], [7, 4],
+		[0, 4], [1, 5], [2, 6], [3, 7],
+	]
+	for e in edges:
+		im.surface_add_vertex(corners[e[0]])
+		im.surface_add_vertex(corners[e[1]])
+	# Corner brackets: short ticks along each axis from every corner.
+	var tick := (mx - mn) * 0.12
+	tick = Vector3(maxf(tick.x, 2.0), maxf(tick.y, 2.0), maxf(tick.z, 2.0))
+	for c in corners:
+		var sx := 1.0 if c.x > (mn.x + mx.x) * 0.5 else -1.0
+		var sy := 1.0 if c.y > (mn.y + mx.y) * 0.5 else -1.0
+		var sz := 1.0 if c.z > (mn.z + mx.z) * 0.5 else -1.0
+		im.surface_add_vertex(c)
+		im.surface_add_vertex(c + Vector3(-sx * tick.x, 0, 0))
+		im.surface_add_vertex(c)
+		im.surface_add_vertex(c + Vector3(0, -sy * tick.y, 0))
+		im.surface_add_vertex(c)
+		im.surface_add_vertex(c + Vector3(0, 0, -sz * tick.z))
+	im.surface_end()
+	_selection_corners.mesh = im

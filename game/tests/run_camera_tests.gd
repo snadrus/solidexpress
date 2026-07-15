@@ -23,6 +23,8 @@ func _init() -> void:
 	root.add_child(cam)
 	await process_frame
 	await process_frame
+	check(is_equal_approx(cam.distance, OrbitCamera.DEFAULT_DISTANCE),
+		"empty scene starts at DEFAULT_DISTANCE (%.1f mm)" % OrbitCamera.DEFAULT_DISTANCE)
 
 	test_zoom_at_center(cam)
 	test_zoom_off_center_moves_pivot(cam)
@@ -30,6 +32,8 @@ func _init() -> void:
 	test_distance_clamp(cam)
 	test_orthographic_zoom(cam)
 	test_zero_viewport_guard()
+	test_scroll_gestures_gated(cam)
+	test_nav_presets_and_fit(cam)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -143,3 +147,70 @@ func test_zero_viewport_guard() -> void:
 	check(orphan.pivot.is_equal_approx(pivot_before), "no pivot shift without viewport")
 	check(is_equal_approx(orphan.distance, 400.0 * 0.9), "distance still scales without viewport")
 	orphan.free()
+
+
+func test_scroll_gestures_gated(cam: OrbitCamera) -> void:
+	print("- wheel / pan ignored when allow_scroll_gestures=false")
+	_reset_cam(cam)
+	var yaw0 := cam.yaw
+	var dist0 := cam.distance
+	var pan := InputEventPanGesture.new()
+	pan.delta = Vector2(25, 0)
+	check(not cam.is_nav_event(pan, false), "pan gesture not nav over scroll UI")
+	check(not cam.handle_input(pan, false), "pan gesture not handled over scroll UI")
+	check(is_equal_approx(cam.yaw, yaw0), "yaw unchanged after blocked pan")
+
+	var wheel := InputEventMouseButton.new()
+	wheel.button_index = MOUSE_BUTTON_WHEEL_UP
+	wheel.pressed = true
+	wheel.position = Vector2(100, 100)
+	check(not cam.is_nav_event(wheel, false), "wheel not nav over scroll UI")
+	check(not cam.handle_input(wheel, false), "wheel not handled over scroll UI")
+	check(is_equal_approx(cam.distance, dist0), "distance unchanged after blocked wheel")
+
+	check(cam.is_nav_event(pan, true), "pan gesture is nav when scroll allowed")
+	check(cam.handle_input(pan, true), "pan gesture handled when scroll allowed")
+	check(absf(cam.yaw - yaw0) > 1e-4, "yaw changes when pan allowed")
+
+	# Pinch-zoom must keep working even when pan/wheel are gated for docks.
+	_reset_cam(cam)
+	dist0 = cam.distance
+	var pinch := InputEventMagnifyGesture.new()
+	pinch.factor = 1.1  # pinch out → zoom in
+	check(cam.is_nav_event(pinch, false), "magnify is nav even over scroll UI")
+	check(cam.handle_input(pinch, false), "magnify handled even over scroll UI")
+	check(cam.distance < dist0, "pinch-out zooms in (distance %.1f → %.1f)" % [dist0, cam.distance])
+
+	# Ctrl+pan is a Linux fallback when MagnifyGesture is absent (XWayland).
+	_reset_cam(cam)
+	dist0 = cam.distance
+	var ctrl_pan := InputEventPanGesture.new()
+	ctrl_pan.ctrl_pressed = true
+	ctrl_pan.delta = Vector2(0, -40)  # drag up → zoom in
+	check(cam.is_nav_event(ctrl_pan, false), "ctrl+pan is nav even over scroll UI")
+	check(cam.handle_input(ctrl_pan, false), "ctrl+pan zoom handled")
+	check(cam.distance < dist0, "ctrl+pan zooms in (distance %.1f → %.1f)" % [dist0, cam.distance])
+
+
+func test_nav_presets_and_fit(cam: OrbitCamera) -> void:
+	print("- nav presets + selection fit helpers")
+	check(cam._want_pan(false) == false, "SX: middle without shift = orbit")
+	check(cam._want_pan(true) == true, "SX: Shift+middle = pan")
+	cam.nav_preset = OrbitCamera.NavPreset.FUSION
+	check(cam._want_pan(false) == true, "Fusion: middle without shift = pan")
+	check(cam._want_pan(true) == false, "Fusion: Shift+middle = orbit")
+	cam.nav_preset = OrbitCamera.NavPreset.SOLIDWORKS
+	check(cam._want_pan(false) == false, "SW: middle = orbit")
+	cam.nav_preset = OrbitCamera.NavPreset.SOLIDEXPRESS
+
+	# Double-middle is claimed as a nav event.
+	var dbl := InputEventMouseButton.new()
+	dbl.button_index = MOUSE_BUTTON_MIDDLE
+	dbl.pressed = true
+	dbl.double_click = true
+	dbl.position = Vector2(100, 100)
+	check(cam.is_nav_event(dbl, true), "double-middle is a nav event")
+	check(cam.handle_input(dbl, true), "double-middle handled (empty scene fit)")
+
+	# frame_selection returns false without a selection/view.
+	check(not cam.frame_selection(), "frame_selection false without selection")

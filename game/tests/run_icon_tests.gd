@@ -114,6 +114,8 @@ func test_key_buttons_have_icons(main) -> void:
 	for b in toolbar_buttons:
 		if b is OptionButton:
 			continue  # dropdowns carry their selection as text
+		if b is CheckBox:
+			continue  # toggles carry a check indicator + label
 		if b.icon == null:
 			no_icon += 1
 			printerr("    toolbar button without icon: " + str(b.get_path()))

@@ -64,6 +64,10 @@ func howto_place_and_orbit(main) -> void:
 	await process_frame
 	check(view.doc.body_ids().size() == 1, "one body placed")
 	check(view.selected_body != "", "body stays selected")
+	main._update_panel_visibility()
+	check(not main.palette.visible, "primitives hidden after select")
+	check(main.ops_panel.offset_left == 12.0, "modify tools in left rail")
+	check(ix.transform_hud.visible, "transform HUD after place")
 	var id: String = view.doc.body_ids()[0]
 	var bb: Dictionary = view.doc.measure_bbox(id)
 	check(absf(float(bb["min"].z)) < 1e-2, "box sits on ground (z=0)")
@@ -84,10 +88,11 @@ func howto_stack_three_blocks(main) -> void:
 	var view: DocumentView = main.view
 	view.new_document()
 
-	# Place first on ground, then each next on prior top (z = 50, 100).
+	var s := DocumentView.DEFAULT_PRIMITIVE_MM
+	# Place first on ground, then each next on prior top.
 	var a: String = view.insert_primitive("box", Vector3(0, 0, 0))
-	var b: String = view.insert_primitive("box", Vector3(0, 0, 50))
-	var c: String = view.insert_primitive("box", Vector3(0, 0, 100))
+	var b: String = view.insert_primitive("box", Vector3(0, 0, s))
+	var c: String = view.insert_primitive("box", Vector3(0, 0, s * 2.0))
 	check(a != "" and b != "" and c != "", "three boxes placed")
 	check(view.doc.body_ids().size() == 3, "document has 3 bodies")
 
@@ -98,13 +103,11 @@ func howto_stack_three_blocks(main) -> void:
 		mn = minf(mn, float(bb["min"].z))
 		mx = maxf(mx, float(bb["max"].z))
 	check(absf(mn) < 1e-2, "stack starts at ground")
-	check(absf(mx - 150.0) < 1e-2, "stack total height 150 (got %s)" % mx)
+	check(absf(mx - s * 3.0) < 1e-2, "stack total height %.0f (got %s)" % [s * 3.0, mx])
 
-	# UI path: place-mode targeting prior top via _place_target stack snap.
 	var ix: ViewportInteraction = main.interaction
 	ix.insert_at_center("box")
-	# Commit as if clicking the top of C (use insert after face floor resolution).
-	view.insert_primitive("box", Vector3(0, 0, 150))
+	view.insert_primitive("box", Vector3(0, 0, s * 3.0))
 	ix._disarm_place(false)
 	await process_frame
 	check(view.doc.body_ids().size() == 4, "optional fourth via same rule")

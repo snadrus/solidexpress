@@ -22,8 +22,11 @@ var variables_panel: VariablesPanel
 var ops_panel: OpsPanel
 var assembly_panel: AssemblyPanel
 var view_widget: ViewWidget
+var view_hud: ViewHud
+var palette: PanelContainer
 var dim_value: SpinBox
 var finish_op: OptionButton
+var dof_label: Label
 var alias_edit: LineEdit
 var notes_edit: TextEdit
 var file_dialog: FileDialog
@@ -37,6 +40,9 @@ var _recent_menu: PopupMenu
 var _recent: Array = []  # paths, most recent first (max 8)
 const _RECENT_CLEAR_ID := 100
 const _RECENT_CFG := "user://recent.cfg"
+## Ops panel docks into the left palette slot while a body is selected.
+const _OPS_LEFT := {"offset_left": 12.0, "offset_right": 252.0, "offset_top": 56.0}
+const _OPS_RIGHT := {"offset_left": -320.0, "offset_right": -12.0, "offset_top": 480.0}
 
 
 func _finish_op_name() -> String:
@@ -205,8 +211,8 @@ func _build_ui() -> void:
 	confirm_dialog.confirmed.connect(_on_discard_confirmed)
 	ui.add_child(confirm_dialog)
 
-	# Left: primitive palette.
-	var palette := PanelContainer.new()
+	# Left: primitive palette (swaps for Modify tools when something is selected).
+	palette = PanelContainer.new()
 	palette.name = "Palette"
 	palette.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	palette.position = Vector2(12, 56)
@@ -297,6 +303,7 @@ func _build_ui() -> void:
 	ops_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	ui.add_child(ops_panel)
 	ops_panel.status.connect(_on_status)
+	interaction.ops_panel = ops_panel
 
 	# Right, second column: assembly browser (auto-hides when no instances).
 	assembly_panel = AssemblyPanel.new()
@@ -329,8 +336,38 @@ func _build_ui() -> void:
 	view_widget.offset_right = -344
 	view_widget.offset_top = 52
 	view_widget.offset_bottom = 144
-	view_widget.tooltip_text = "Click a face, edge, or corner to snap the view"
+	view_widget.tooltip_text = "Click a face, edge, or corner to set the camera view"
 	ui.add_child(view_widget)
+
+	view_hud = ViewHud.new()
+	view_hud.name = "ViewHud"
+	view_hud.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	view_hud.anchor_left = 1.0
+	view_hud.anchor_right = 1.0
+	view_hud.offset_left = -528
+	view_hud.offset_right = -444
+	view_hud.offset_top = 52
+	view_hud.offset_bottom = 160
+	ui.add_child(view_hud)
+	view_hud.display_cycle_requested.connect(func() -> void:
+		var mode: int = view.cycle_display_mode()
+		_on_status("Display: " + ["Shaded", "Shaded + Edges", "Wireframe"][mode])
+		view_hud.sync_from_view(view))
+	view_hud.section_toggle_requested.connect(func() -> void:
+		interaction.toggle_section()
+		view_hud.sync_from_view(view))
+	view_hud.fit_requested.connect(func() -> void:
+		camera.frame_selection_or_all(false)
+		_on_status("Fit selection" if view.selected_body != "" else "Fit all"))
+	view_hud.nav_preset_changed.connect(func(preset: int) -> void:
+		camera.nav_preset = preset as OrbitCamera.NavPreset
+		var names := ["SolidExpress", "SolidWorks", "Fusion"]
+		_on_status("Nav preset: " + names[clampi(preset, 0, 2)]))
+	view_hud.save_view_requested.connect(func() -> void:
+		camera.save_named_view("User")
+		_on_status("Saved named view “User” — restore via Space orientation panel"))
+	view_hud.sync_from_view(view)
+	view_hud.sync_nav_preset(int(camera.nav_preset))
 
 	# Left, below palette: feature timeline + variables.
 	timeline = TimelinePanel.new()
@@ -352,7 +389,8 @@ func _build_ui() -> void:
 	variables_panel.offset_left = 280
 	variables_panel.offset_right = 540
 	variables_panel.offset_top = -420
-	variables_panel.offset_bottom = -42
+	# Ends above the bottom-center TransformHud band (-130..-16 when lifted).
+	variables_panel.offset_bottom = -140
 	ui.add_child(variables_panel)
 	variables_panel.status.connect(_on_status)
 
@@ -363,26 +401,33 @@ func _build_ui() -> void:
 	status_bar.offset_top = -30
 	ui.add_child(status_bar)
 	status_label = Label.new()
-	status_label.text = "middle-drag orbit · shift+middle pan · wheel zoom · F fit · 1/2/3/7 views · click select (again for face/edge) · drag to move · drag face to push/pull · Del delete · Ctrl+Z/Y undo · Ctrl+S save"
+	status_label.text = "empty-drag / Alt-drag / middle-drag orbit · shift+pan · wheel zoom · F fit · 1/2/3/7 views · click select · drag to move · drag face to push/pull · Del delete · Ctrl+Z/Y undo · Ctrl+S save"
 	status_label.add_theme_font_size_override("font_size", 12)
 	status_bar.add_child(status_label)
 
-	# Sketch toolbar (visible only in sketch mode): tools + extrude distance.
+	# Sketch toolbar (visible only in sketch mode). Two stacked rows so it
+	# stays clear of the file menu (left) and the ViewHud / ViewCube (right).
 	sketch_toolbar = PanelContainer.new()
 	sketch_toolbar.name = "SketchToolbar"
 	sketch_toolbar.set_anchors_preset(Control.PRESET_CENTER_TOP)
 	sketch_toolbar.anchor_left = 0.5
 	sketch_toolbar.anchor_right = 0.5
-	sketch_toolbar.offset_left = -260
-	sketch_toolbar.offset_right = 260
+	# Biased slightly left of center so the grown content clears the
+	# ViewHud / ViewCube column on the right.
+	sketch_toolbar.offset_left = -340
+	sketch_toolbar.offset_right = 180
 	sketch_toolbar.offset_top = 8
 	# The toolbar's content is wider than its nominal offsets; grow evenly so
 	# it stays centered instead of spilling off to one side.
 	sketch_toolbar.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	sketch_toolbar.visible = false
 	ui.add_child(sketch_toolbar)
+	var rows := VBoxContainer.new()
+	sketch_toolbar.add_child(rows)
+	# Row 1: draw tools, constraints, DOF chip, snap/infer toggles.
 	var hbox := HBoxContainer.new()
-	sketch_toolbar.add_child(hbox)
+	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	rows.add_child(hbox)
 	for entry in [[SketchMode.Tool.SELECT, "select", "Select tool (S)"],
 			[SketchMode.Tool.LINE, "line", "Line tool (L)"],
 			[SketchMode.Tool.RECT, "rect", "Rectangle tool (R)"],
@@ -401,54 +446,93 @@ func _build_ui() -> void:
 		var cb := UIIcons.button(entry[0], "", entry[1])
 		cb.pressed.connect(_apply_constraint.bind(entry[0], 0.0))
 		hbox.add_child(cb)
+	hbox.add_child(VSeparator.new())
+	# DOF chip: remaining degrees of freedom / fully constrained / conflicts.
+	dof_label = Label.new()
+	dof_label.text = "— DOF"
+	dof_label.tooltip_text = "Sketch degrees of freedom (0 = fully constrained)"
+	hbox.add_child(dof_label)
+	var snap_toggle := CheckBox.new()
+	snap_toggle.text = "Snap"
+	snap_toggle.button_pressed = sketch_mode.snap_enabled
+	snap_toggle.tooltip_text = "Snap to endpoints / midpoints / axis alignment"
+	snap_toggle.toggled.connect(sketch_mode.set_snap)
+	hbox.add_child(snap_toggle)
+	var infer_toggle := CheckBox.new()
+	infer_toggle.text = "Infer"
+	infer_toggle.button_pressed = sketch_mode.infer_enabled
+	infer_toggle.tooltip_text = "Automatic H/V + coincident relations while drawing"
+	infer_toggle.toggled.connect(sketch_mode.set_infer)
+	hbox.add_child(infer_toggle)
+	# Row 2: dimension entry + finish (extrude / revolve / cancel).
+	var row2 := HBoxContainer.new()
+	row2.alignment = BoxContainer.ALIGNMENT_CENTER
+	rows.add_child(row2)
 	dim_value = SpinBox.new()
 	dim_value.min_value = 0.01
 	dim_value.max_value = 10000
 	dim_value.step = 0.5
 	dim_value.value = 10
-	hbox.add_child(dim_value)
+	row2.add_child(dim_value)
 	var dim_btn := UIIcons.button("dimension", "",
 		"Apply dimension: distance (line/two points) or radius (circle)")
 	dim_btn.pressed.connect(_apply_dimension)
-	hbox.add_child(dim_btn)
-	hbox.add_child(VSeparator.new())
+	row2.add_child(dim_btn)
+	row2.add_child(VSeparator.new())
 	var dist_label := Label.new()
 	dist_label.text = "Extrude:"
-	hbox.add_child(dist_label)
+	row2.add_child(dist_label)
 	extrude_distance = SpinBox.new()
 	extrude_distance.min_value = -1000
 	extrude_distance.max_value = 1000
 	extrude_distance.step = 1
 	extrude_distance.value = 20
 	extrude_distance.suffix = "mm"
-	hbox.add_child(extrude_distance)
+	row2.add_child(extrude_distance)
 	finish_op = OptionButton.new()
 	for op_name in ["New", "Cut", "Fuse"]:
 		finish_op.add_item(op_name)
 	finish_op.tooltip_text = "How the result combines with the body sketched on"
-	hbox.add_child(finish_op)
+	row2.add_child(finish_op)
 	var finish_btn := UIIcons.button("extrude", "Extrude",
 		"Extrude the sketch profile by the distance")
 	finish_btn.pressed.connect(func() -> void:
 		sketch_mode.finish_extrude(extrude_distance.value, _finish_op_name()))
-	hbox.add_child(finish_btn)
+	row2.add_child(finish_btn)
 	var revolve_btn := UIIcons.button("revolve", "Revolve",
 		"Full revolve around the selected line (or sketch Y axis)")
 	revolve_btn.pressed.connect(func() -> void:
 		sketch_mode.finish_revolve(TAU, _finish_op_name()))
-	hbox.add_child(revolve_btn)
+	row2.add_child(revolve_btn)
 	var cancel_btn := UIIcons.button("cancel", "", "Cancel sketch (Esc)")
 	cancel_btn.pressed.connect(sketch_mode.cancel)
-	hbox.add_child(cancel_btn)
+	row2.add_child(cancel_btn)
 
 	view.selection_changed.connect(_on_selection_changed)
 	view.document_changed.connect(_on_document_changed)
+	interaction.place_changed.connect(func(_active: bool) -> void: _update_left_rail())
+	interaction.sketch_requested.connect(_start_sketch)
 	_update_panel_visibility()
 	interaction.status.connect(_on_status)
 	sketch_mode.status.connect(_on_status)
 	sketch_mode.finished.connect(func(_id: String) -> void: sketch_toolbar.visible = false)
 	sketch_mode.cancelled.connect(func() -> void: sketch_toolbar.visible = false)
 	sketch_mode.selection_changed.connect(_on_sketch_selection)
+	sketch_mode.solve_updated.connect(_on_sketch_solve)
+
+
+func _on_sketch_solve(dofs: int, solve_status: String, conflicts: int) -> void:
+	if dof_label == null:
+		return
+	if conflicts > 0 or solve_status == "failed":
+		dof_label.text = "Over-constrained"
+		dof_label.add_theme_color_override("font_color", Color(0.95, 0.3, 0.25))
+	elif dofs == 0:
+		dof_label.text = "Fully constrained"
+		dof_label.add_theme_color_override("font_color", Color(0.35, 0.85, 0.45))
+	else:
+		dof_label.text = "%d DOF" % dofs
+		dof_label.add_theme_color_override("font_color", Color(0.55, 0.75, 1.0))
 
 
 func _apply_constraint(type: String, value: float) -> void:
@@ -513,6 +597,10 @@ func _start_sketch() -> void:
 			normal = plane["normal"]
 	sketch_mode.begin(origin, normal)
 	sketch_toolbar.visible = true
+	interaction.refresh_selection_chrome()
+	if dof_label != null:
+		dof_label.text = "— DOF"
+		dof_label.remove_theme_color_override("font_color")
 	_on_status(plane_msg)
 
 
@@ -539,6 +627,8 @@ func _on_selection_changed(_body: String, _face: String) -> void:
 	alias_edit.editable = target != ""
 	notes_edit.editable = target != ""
 	_update_panel_visibility()
+	if view_hud != null:
+		view_hud.sync_from_view(view)
 
 
 func _on_document_changed() -> void:
@@ -549,6 +639,8 @@ func _on_document_changed() -> void:
 ## selection card follows the selection, the timeline appears with the first
 ## feature, and the variables table shows once a variable exists (or is
 ## forced on from the View menu so there's an entry point to create one).
+## The left rail swaps Primitives ↔ Modify tools so create chrome hides while
+## a body is selected (place mode keeps the palette so you can still create).
 func _update_panel_visibility() -> void:
 	card_box.visible = _selected_entity() != ""
 	timeline.visible = view.doc.graph_features().size() > 0
@@ -556,6 +648,43 @@ func _update_panel_visibility() -> void:
 	# Keep the variables table flush against whatever is to its left.
 	variables_panel.offset_left = 280 if timeline.visible else 12
 	variables_panel.offset_right = variables_panel.offset_left + 260
+	_update_left_rail()
+
+
+func _update_left_rail() -> void:
+	if palette == null or ops_panel == null:
+		return
+	var placing := interaction != null and interaction.is_placing()
+	var has_body := view.selected_body != ""
+	# Selected body → Modify tools occupy the left palette slot.
+	# Idle / place-armed → Primitives palette; OpsPanel stays on the right
+	# (and hides itself when there is no selection).
+	if has_body and not placing:
+		palette.visible = false
+		_dock_ops_left()
+	else:
+		palette.visible = true
+		_dock_ops_right()
+
+
+func _dock_ops_left() -> void:
+	ops_panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	ops_panel.anchor_left = 0.0
+	ops_panel.anchor_right = 0.0
+	ops_panel.offset_left = _OPS_LEFT.offset_left
+	ops_panel.offset_right = _OPS_LEFT.offset_right
+	ops_panel.offset_top = _OPS_LEFT.offset_top
+	ops_panel.grow_horizontal = Control.GROW_DIRECTION_END
+
+
+func _dock_ops_right() -> void:
+	ops_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	ops_panel.anchor_left = 1.0
+	ops_panel.anchor_right = 1.0
+	ops_panel.offset_left = _OPS_RIGHT.offset_left
+	ops_panel.offset_right = _OPS_RIGHT.offset_right
+	ops_panel.offset_top = _OPS_RIGHT.offset_top
+	ops_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 
 
 func _on_status(text: String) -> void:

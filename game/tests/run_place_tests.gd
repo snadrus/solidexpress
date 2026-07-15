@@ -32,6 +32,9 @@ func _init() -> void:
 	test_drop_unchanged(main)
 	await test_stack_on_face(main)
 	await test_orbit_over_ops_panel(main)
+	await test_empty_drag_orbits(main)
+	test_place_snap_ui_and_coords(main)
+	await test_transform_hud_and_resize(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -88,18 +91,23 @@ func test_ghost_follows(main) -> void:
 	var gp = ix.ground_point(center)
 	check(gp != null, "ground point at center is valid")
 	if gp != null:
-		var expect: Vector3 = gp + Vector3(0, 0, 25)
+		var half_z := DocumentView.DEFAULT_PRIMITIVE_MM * 0.5
+		var expect: Vector3 = gp + Vector3(0, 0, half_z)
 		check(ghost.position.distance_to(expect) < 1e-2,
 			"ghost center is half-height above floor (got %s want %s)" % [ghost.position, expect])
 	check(ix.has_focus(), "Interaction grabbed focus on arm (Esc works)")
 	# Offset motion — ghost must track, not stay stuck at arm position.
 	var off := center + Vector2(80, 40)
 	_move(ix, off)
-	var gp2 = ix.ground_point(off)
 	ghost = _ghost(main)
-	if gp2 != null and ghost != null:
-		check(ghost.position.distance_to(gp2 + Vector3(0, 0, 25)) < 1e-2,
-			"ghost followed mouse offset")
+	var target2: Dictionary = ix._place_target(off)
+	if ghost != null and not target2.is_empty():
+		var half_z2 := DocumentView.DEFAULT_PRIMITIVE_MM * 0.5
+		var expect2: Vector3 = target2["point"] + Vector3(0, 0, half_z2)
+		check(ghost.position.distance_to(expect2) < 1e-2,
+			"ghost followed mouse offset (got %s want %s)" % [ghost.position, expect2])
+	else:
+		check(false, "ghost followed mouse offset")
 
 
 func test_commit(main) -> void:
@@ -118,7 +126,8 @@ func test_commit(main) -> void:
 	check(not bb.is_empty(), "bbox after ground place")
 	if not bb.is_empty():
 		check(absf(float(bb["min"].z) - 0.0) < 1e-2, "box floor on z=0")
-		check(absf(float(bb["max"].z) - 50.0) < 1e-2, "box top at z=50")
+		check(absf(float(bb["max"].z) - DocumentView.DEFAULT_PRIMITIVE_MM) < 1e-2,
+			"box top at z=%.0f" % DocumentView.DEFAULT_PRIMITIVE_MM)
 
 
 func test_selection_survives_release(main) -> void:
@@ -181,30 +190,28 @@ func test_stack_on_face(main) -> void:
 	print("- stack three boxes on top faces")
 	var view: DocumentView = main.view
 	view.new_document()
+	var s := DocumentView.DEFAULT_PRIMITIVE_MM
 	var a: String = view.insert_primitive("box", Vector3(0, 0, 0))
-	var b: String = view.insert_primitive("box", Vector3(0, 0, 50))
-	var c: String = view.insert_primitive("box", Vector3(0, 0, 100))
+	var b: String = view.insert_primitive("box", Vector3(0, 0, s))
+	var c: String = view.insert_primitive("box", Vector3(0, 0, s * 2.0))
 	check(a != "" and b != "" and c != "", "three stacked boxes inserted")
 	check(view.doc.body_ids().size() == 3, "three bodies in document")
 	var bb_a: Dictionary = view.doc.measure_bbox(a)
 	var bb_b: Dictionary = view.doc.measure_bbox(b)
 	var bb_c: Dictionary = view.doc.measure_bbox(c)
-	check(absf(float(bb_a["min"].z)) < 1e-2 and absf(float(bb_a["max"].z) - 50.0) < 1e-2,
-		"block A spans z 0..50")
-	check(absf(float(bb_b["min"].z) - 50.0) < 1e-2 and absf(float(bb_b["max"].z) - 100.0) < 1e-2,
-		"block B spans z 50..100")
-	check(absf(float(bb_c["min"].z) - 100.0) < 1e-2 and absf(float(bb_c["max"].z) - 150.0) < 1e-2,
-		"block C spans z 100..150")
-	# Place-mode path: arm + commit targeting top of C via pick_info mock (direct API).
-	# UI stack via _place_target is covered when a hit returns near max.z.
+	check(absf(float(bb_a["min"].z)) < 1e-2 and absf(float(bb_a["max"].z) - s) < 1e-2,
+		"block A spans z 0..%.0f" % s)
+	check(absf(float(bb_b["min"].z) - s) < 1e-2 and absf(float(bb_b["max"].z) - s * 2.0) < 1e-2,
+		"block B spans z %.0f..%.0f" % [s, s * 2.0])
+	check(absf(float(bb_c["min"].z) - s * 2.0) < 1e-2 and absf(float(bb_c["max"].z) - s * 3.0) < 1e-2,
+		"block C spans z %.0f..%.0f" % [s * 2.0, s * 3.0])
 	var ix: ViewportInteraction = main.interaction
 	ix.insert_at_center("box")
-	var t: Dictionary = {"point": Vector3(0, 0, 150), "stacked": true, "need_frame": false}
-	# Simulate commit onto z=150 floor.
 	ix._free_ghost()
 	ix._place_kind = ""
-	view.insert_primitive("box", t["point"])
-	check(view.doc.body_ids().size() == 4, "fourth box stacked to z=150..200")
+	view.insert_primitive("box", Vector3(0, 0, s * 3.0))
+	check(view.doc.body_ids().size() == 4,
+		"fourth box stacked to z=%.0f..%.0f" % [s * 3.0, s * 4.0])
 	await process_frame
 
 
@@ -238,3 +245,151 @@ func test_orbit_over_ops_panel(main) -> void:
 	pan.delta = Vector2(20, 0)
 	ix._input(pan)
 	check(absf(cam.yaw - yaw0) > 1e-4, "yaw changed from pan gesture (two-finger)")
+
+
+func test_empty_drag_orbits(main) -> void:
+	print("- empty-space left-drag orbits")
+	var ix: ViewportInteraction = main.interaction
+	var cam: OrbitCamera = main.camera
+	main.view.new_document()
+	main.view.insert_primitive("box", Vector3.ZERO)
+	main.view.clear_selection()
+	# Close default zoom makes the box fill a tiny headless viewport; pull back.
+	root.size = Vector2i(1280, 720)
+	ix.size = Vector2(1280, 720)
+	cam.distance = 800.0
+	cam.pivot = Vector3.ZERO
+	cam._update_transform()
+	await process_frame
+	var miss := Vector2(20, 20)
+	var ray := ix._model_ray(miss)
+	var hit: Dictionary = main.view.pick_info(ray[0], ray[1])
+	check(hit.is_empty(), "miss point has no pick hit")
+	var yaw0: float = cam.yaw
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_LEFT
+	press.pressed = true
+	press.position = miss
+	ix._input(press)
+	var drag := InputEventMouseMotion.new()
+	drag.position = miss + Vector2(60, 0)
+	ix._input(drag)
+	check(ix._drag_mode == ViewportInteraction.DragMode.ORBIT_VIEW, "empty drag armed ORBIT_VIEW")
+	check(absf(cam.yaw - yaw0) > 1e-4, "yaw changed from empty-space drag")
+	var release := InputEventMouseButton.new()
+	release.button_index = MOUSE_BUTTON_LEFT
+	release.pressed = false
+	release.position = miss + Vector2(60, 0)
+	ix._input(release)
+	check(ix._drag_mode == ViewportInteraction.DragMode.NONE, "orbit drag cleared on release")
+
+
+func test_place_snap_ui_and_coords(main) -> void:
+	print("- place snap bar + coordinate snap")
+	var ix: ViewportInteraction = main.interaction
+	main.view.new_document()
+	check(ix.place_snap_enabled, "snap enabled by default")
+	check(is_equal_approx(ix.place_snap_mm, 0.1), "default snap resolution 0.1 mm")
+	ix.insert_at_center("box")
+	check(ix._place_snap_panel != null and ix._place_snap_panel.visible, "snap panel visible while armed")
+	check(ix._place_snap_check != null and ix._place_snap_check.button_pressed, "snap checkbox on")
+	check(ix._place_snap_spin != null and is_equal_approx(ix._place_snap_spin.value, 0.1),
+		"snap spin shows 0.1 mm")
+	check(ix.transform_hud != null and ix.transform_hud.visible, "transform HUD visible while placing")
+	var ds := DocumentView.DEFAULT_PRIMITIVE_MM
+	check(ix.transform_hud.current_size().is_equal_approx(Vector3(ds, ds, ds)),
+		"place HUD default size %.0f³" % ds)
+	var snapped: Vector3 = ix._snap_point(Vector3(1.24, -2.36, 3.07))
+	check(snapped.is_equal_approx(Vector3(1.2, -2.4, 3.1)), "0.1 mm snap rounds axes")
+	ix.place_snap_enabled = false
+	check(ix._snap_point(Vector3(1.24, -2.36, 3.07)).is_equal_approx(Vector3(1.24, -2.36, 3.07)),
+		"snap bypassed when disabled")
+	ix.place_snap_enabled = true
+	ix.place_snap_mm = 1.0
+	check(ix._snap_point(Vector3(1.4, 2.6, 0.4)).is_equal_approx(Vector3(1.0, 3.0, 0.0)),
+		"1.0 mm snap rounds axes")
+	_esc(ix)
+	check(not ix._place_snap_panel.visible, "snap panel hidden after cancel")
+
+
+func test_transform_hud_and_resize(main) -> void:
+	print("- transform HUD + AABB resize + precision field")
+	var ix: ViewportInteraction = main.interaction
+	var view: DocumentView = main.view
+	view.new_document()
+	var id: String = view.insert_primitive("box", Vector3.ZERO)
+	await process_frame
+	view.select_entity(id, "")
+	main._update_panel_visibility()
+	check(ix.transform_hud.visible, "HUD visible when body selected")
+	check(not main.palette.visible, "palette hidden when body selected")
+	check(main.ops_panel.offset_left == 12.0, "modify tools docked left")
+	var bb0: Dictionary = view.selection_bbox()
+	check(not bb0.is_empty(), "selection bbox available")
+	# Resize max-X face by +10 mm via kernel helper (mirror of drag commit).
+	var mn: Vector3 = bb0["min"]
+	var mx: Vector3 = bb0["max"]
+	mx.x += 10.0
+	check(view.resize_primitive_aabb(id, mn, mx), "resize_primitive_aabb grows +X")
+	var bb1: Dictionary = view.doc.measure_bbox(id)
+	check(absf(float(bb1["max"].x) - float(bb0["max"].x) - 10.0) < 1e-2, "max X grew by 10")
+	# Simulate post-drag precision field: re-set distance to 15 from pre-resize.
+	ix._precision_min = bb0["min"]
+	ix._precision_max = bb0["max"]
+	ix._precision_signs = Vector3(1, 0, 0)
+	ix._precision_base = 10.0
+	ix._apply_precision_resize(15.0)
+	var bb2: Dictionary = view.doc.measure_bbox(id)
+	check(absf(float(bb2["max"].x) - float(bb0["max"].x) - 15.0) < 1e-2,
+		"precision field set ΔX to 15 (got %s)" % bb2["max"].x)
+	# HUD size edit.
+	ix._on_hud_size(Vector3(40, 40, 40))
+	var bb3: Dictionary = view.doc.measure_bbox(id)
+	var sz: Vector3 = bb3["max"] - bb3["min"]
+	check(sz.is_equal_approx(Vector3(40, 40, 40)), "HUD size commit → 40³ (got %s)" % sz)
+	# ΔZ precision apply (typed Enter path uses apply() then this).
+	var bbz0: Dictionary = view.doc.measure_bbox(id)
+	ix._precision_min = bbz0["min"]
+	ix._precision_max = bbz0["max"]
+	ix._precision_signs = Vector3(0, 0, 1)
+	ix._precision_base = 0.0
+	ix._apply_precision_resize(12.0)
+	var bbz1: Dictionary = view.doc.measure_bbox(id)
+	check(absf(float(bbz1["max"].z) - float(bbz0["max"].z) - 12.0) < 1e-2,
+		"precision ΔZ grows max Z by 12 (got %s)" % bbz1["max"].z)
+	# Body face press arms MOVE and preserves size (handles must not steal).
+	view.new_document()
+	id = view.insert_primitive("box", Vector3.ZERO)
+	view.select_entity(id, "")
+	main.camera.frame_contents()
+	await process_frame
+	var bb_hit: Dictionary = view.selection_bbox()
+	var body_pt: Vector3 = main.model_space.to_global(bb_hit["center"])
+	var screen_body: Vector2 = main.camera.unproject_position(body_pt)
+	var ray_body := ix._model_ray(screen_body)
+	var hit_body: Dictionary = view.pick_info(ray_body[0], ray_body[1])
+	check(not hit_body.is_empty() and hit_body["body"] == id, "test point hits selected body")
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_LEFT
+	press.pressed = true
+	press.position = screen_body
+	ix._input(press)
+	# Body move may arm immediately or after leaving click-slop (pending path).
+	var armed_on_press := ix._drag_mode == ViewportInteraction.DragMode.MOVE_BODY
+	var pending: bool = bool(ix._pending_body_move)
+	check(armed_on_press or pending, "body press arms or defers MOVE_BODY (mode=%s)" % ix._drag_mode)
+	var drag := InputEventMouseMotion.new()
+	drag.position = screen_body + Vector2(40, 0)
+	ix._input(drag)
+	check(ix._drag_mode == ViewportInteraction.DragMode.MOVE_BODY, "drag stays MOVE_BODY")
+	check(ix._drag_accum.length() > 1e-3, "move accum non-zero")
+	var release := InputEventMouseButton.new()
+	release.button_index = MOUSE_BUTTON_LEFT
+	release.pressed = false
+	release.position = screen_body + Vector2(40, 0)
+	ix._input(release)
+	var bb_moved: Dictionary = view.doc.measure_bbox(id)
+	var size_moved: Vector3 = bb_moved["max"] - bb_moved["min"]
+	var ds2 := DocumentView.DEFAULT_PRIMITIVE_MM
+	check(size_moved.is_equal_approx(Vector3(ds2, ds2, ds2)),
+		"body drag preserves size (got %s)" % size_moved)

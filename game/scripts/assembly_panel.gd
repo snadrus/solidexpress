@@ -17,6 +17,9 @@ var _refreshing := false
 ## Armed two-click mate flow: wait for ground face A, then instanced face B.
 var _mate_armed := false
 var _mate_face_a := ""
+## Sticky error from the last mate add / solve ("" when healthy). Shown as a
+## red badge above the mates list instead of only a transient status line.
+var _mate_error := ""
 
 
 func _ready() -> void:
@@ -115,6 +118,16 @@ func refresh_lists() -> void:
 	for inst in instances:
 		_instances_list.add_child(_make_instance_row(inst))
 
+	if _mate_error != "":
+		var badge := Label.new()
+		badge.name = "MateError"
+		badge.text = "! " + _mate_error
+		badge.tooltip_text = _mate_error
+		badge.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		badge.add_theme_color_override("font_color", Color(0.95, 0.3, 0.25))
+		badge.add_theme_font_size_override("font_size", 11)
+		_mates_list.add_child(badge)
+
 	var mates: Array = view.doc.mate_list()
 	for mate in mates:
 		_mates_list.add_child(_make_mate_row(mate))
@@ -183,6 +196,7 @@ func _remove_instance(id: String) -> void:
 func _arm_mate() -> void:
 	_mate_armed = true
 	_mate_face_a = ""
+	view.mate_anchor_face = ""
 	refresh_lists()
 	status.emit("Mate: click ground face, then instance face")
 
@@ -194,7 +208,9 @@ func _on_selection_changed(_body: String, face: String) -> void:
 		return
 	if _mate_face_a == "":
 		_mate_face_a = face
-		status.emit("Mate: click face on an instanced body")
+		# Keep the anchor face tinted green while waiting for the second pick.
+		view.mate_anchor_face = face
+		status.emit("Mate: click face on an instanced body (anchor shown green)")
 		return
 	_resolve_mate_b(view.selected_body, face)
 
@@ -209,14 +225,17 @@ func _resolve_mate_b(body: String, face_b: String) -> void:
 		mtype, "", _mate_face_a, inst_b, face_b, _offset_spin.value, false, "")
 	_mate_armed = false
 	_mate_face_a = ""
+	view.mate_anchor_face = ""
 	if mid == "":
+		_mate_error = "Mate rejected — %s needs matching face types" % mtype
 		refresh_lists()
 		status.emit("Mate failed")
 		return
-	view.doc.solve_mates()
+	var solved: bool = view.doc.solve_mates()
+	_mate_error = "" if solved else "Solve failed — check mate faces/offsets"
 	view.refresh()
 	refresh_lists()
-	status.emit("Mate added")
+	status.emit("Mate added" if solved else "Mate added — solve FAILED")
 
 
 func _instance_for_source(body: String) -> String:
@@ -242,6 +261,7 @@ func _remove_mate(id: String) -> void:
 
 func _solve_mates() -> void:
 	var ok: bool = view.doc.solve_mates()
+	_mate_error = "" if ok else "Solve failed — check mate faces/offsets"
 	view.refresh()
 	refresh_lists()
 	status.emit("Mates solved" if ok else "Solve mates failed")

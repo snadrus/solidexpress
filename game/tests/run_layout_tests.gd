@@ -53,11 +53,16 @@ func test_selection_toggles_card(main) -> void:
 	var body: String = main.view.insert_primitive("box", Vector3.ZERO)
 	await process_frame
 	main.view.select_entity(body, "")
+	main._update_panel_visibility()
 	check(main.card_box.visible, "card visible with selection")
 	check(main.ops_panel.visible, "ops panel visible with selection")
+	check(not main.palette.visible, "primitives palette hidden while selected")
+	check(main.ops_panel.offset_left == 12.0, "ops panel docked left while selected")
 	main.view.clear_selection()
+	main._update_panel_visibility()
 	check(not main.card_box.visible, "card hidden after deselect")
 	check(not main.ops_panel.visible, "ops panel hidden after deselect")
+	check(main.palette.visible, "primitives palette restored after deselect")
 
 
 func test_timeline_appears_with_features(main) -> void:
@@ -101,7 +106,9 @@ func test_no_text_collisions(main) -> void:
 	for b in main.view.doc.body_ids():
 		body = b
 	main.view.select_entity(body, "")
-	main.sketch_toolbar.visible = true
+	# Enter sketch mode for real so modal chrome (selection strip hides,
+	# sketch toolbar shows) matches what users actually see.
+	main._start_sketch()
 	# The ops panel clamps its height one frame after selection; give layout
 	# a few frames to settle before measuring.
 	for i in range(4):
@@ -140,6 +147,7 @@ func test_no_text_collisions(main) -> void:
 				panel_hits += 1
 				printerr("    panel overlap: %s vs %s" % [panels[i].name, panels[j].name])
 	check(panel_hits == 0, "no top-level panel overlaps (%d found)" % panel_hits)
+	main.sketch_mode.cancel()
 	main.sketch_toolbar.visible = false
 
 

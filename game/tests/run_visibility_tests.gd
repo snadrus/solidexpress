@@ -163,7 +163,7 @@ func test_box_select_drag(main) -> void:
 	var press := InputEventMouseButton.new()
 	press.button_index = MOUSE_BUTTON_LEFT
 	press.pressed = true
-	press.ctrl_pressed = false
+	press.ctrl_pressed = true
 	press.position = start
 	vi._gui_input(press)
 
@@ -179,7 +179,7 @@ func test_box_select_drag(main) -> void:
 	var release := InputEventMouseButton.new()
 	release.button_index = MOUSE_BUTTON_LEFT
 	release.pressed = false
-	release.ctrl_pressed = false
+	release.ctrl_pressed = true
 	release.position = end
 	vi._gui_input(release)
 

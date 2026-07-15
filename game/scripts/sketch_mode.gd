@@ -14,6 +14,7 @@ signal selection_changed(ids: Array)
 
 const PICK_TOLERANCE := 5.0  # model units (mm)
 const SNAP_RADIUS := PICK_TOLERANCE
+const GLYPH_PICK_RADIUS := 2.0  # constraint badges are small, precise targets
 
 var sketch: SxSketch
 var view: DocumentView
@@ -36,6 +37,8 @@ var plane_y := Vector3.UP  # model-space Y (kernel), set on begin()
 
 ## Selected entity ids (SELECT tool), most recent last, max 2.
 var selected: Array[String] = []
+## Selected constraint id (click its glyph with the SELECT tool); Del removes.
+var selected_constraint := ""
 
 ## Applied dimensional constraints: {type, ids, value}. Rebuilt into Label3Ds.
 var dimensions: Array = []
@@ -46,6 +49,11 @@ var _draw_node: MeshInstance3D
 var _preview_node: MeshInstance3D
 var _selected_node: MeshInstance3D
 var _dimension_labels: Node3D
+var _constraint_glyphs: Node3D
+## Anchors of the drawn glyphs: Array of {cid: String, pos: Vector2}.
+var _glyph_anchors: Array = []
+## Live inference hint while drawing (shows H/V/coincident before commit).
+var _infer_label: Label3D
 var _selected_material: StandardMaterial3D
 var _tool_points: Array[Vector2] = []  # committed anchor points of current tool
 var _hover: Vector2 = Vector2.ZERO
@@ -62,6 +70,21 @@ const DIM_LABEL_OFFSET := 4.0  # sketch-plane units perpendicular to a distance 
 const COLOR_ENTITY := Color(0.95, 0.95, 1.0)
 const COLOR_CONSTRUCTION := Color(0.45, 0.45, 0.48)  # dimmer/desaturated
 const COLOR_CONSTRAINED := Color(0.35, 0.85, 0.45)  # fully constrained sketch
+const COLOR_CONFLICT := Color(0.95, 0.3, 0.25)  # entities in conflicting constraints
+const COLOR_GLYPH := Color(0.65, 0.8, 1.0)
+const COLOR_GLYPH_SELECTED := Color(1.0, 0.62, 0.15)
+## SolidWorks-style relation badges drawn next to the owning geometry.
+## Dimensional constraints (distance/radius/angle) use the dim labels instead.
+const GLYPH_SYMBOLS := {
+	"horizontal": "H",
+	"vertical": "V",
+	"parallel": "∥",
+	"perpendicular": "⊥",
+	"equal": "=",
+	"coincident": "◉",
+	"point_on_line": "◇",
+	"tangent": "⌒",
+}
 ## Geometry within this distance of exact H/V or an existing endpoint gets an
 ## inferred constraint on creation (SolidWorks-style automatic relations).
 const INFER_TOL := 0.5
@@ -71,6 +94,16 @@ var infer_enabled := true
 ## Diagnostics from the most recent solve: -1 until first solve.
 var last_dofs := -1
 var last_solve_status := ""
+## Constraint ids the solver reported as conflicting / redundant.
+var last_conflicting: Array = []
+var last_redundant: Array = []
+## Entity ids involved in conflicting constraints (drawn red).
+var _conflict_entities := {}
+
+## Emitted after every solve so the toolbar DOF chip stays current.
+signal solve_updated(dofs: int, solve_status: String, conflicts: int)
+## Emitted when the SELECT tool clicks a dimension label (in-viewport edit).
+signal dimension_edit_requested(index: int)
 
 
 func _ready() -> void:
@@ -96,6 +129,18 @@ func _ready() -> void:
 	_dimension_labels = Node3D.new()
 	_dimension_labels.name = "DimensionLabels"
 	add_child(_dimension_labels)
+	_constraint_glyphs = Node3D.new()
+	_constraint_glyphs.name = "ConstraintGlyphs"
+	add_child(_constraint_glyphs)
+	_infer_label = Label3D.new()
+	_infer_label.name = "InferHint"
+	_infer_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	_infer_label.fixed_size = true
+	_infer_label.pixel_size = 0.004
+	_infer_label.font_size = 24
+	_infer_label.modulate = Color(1.0, 0.85, 0.3)
+	_infer_label.visible = false
+	add_child(_infer_label)
 
 
 ## Derive a sketch plane from an axis-aligned planar face via bbox heuristics.
@@ -288,6 +333,12 @@ func set_snap(on: bool) -> void:
 	snap_enabled = on
 	if not on:
 		_snap_marker = null
+
+
+func set_infer(on: bool) -> void:
+	infer_enabled = on
+	if not on and _infer_label != null:
+		_infer_label.visible = false
 
 
 ## Snap sketch-plane point to nearby geometry / axis. Priority:
@@ -828,6 +879,17 @@ func click(pos2: Vector2) -> void:
 		pos2 = snap_point(pos2)
 	match tool:
 		Tool.SELECT:
+			# Priority: constraint glyphs, then dimension labels, then geometry.
+			var chit := constraint_hit(pos2)
+			if chit != "":
+				select_constraint(chit)
+				return
+			if selected_constraint != "":
+				select_constraint("")
+			var dhit := dimension_hit(pos2)
+			if dhit >= 0:
+				dimension_edit_requested.emit(dhit)
+				return
 			_select_at(pos2)
 		Tool.TRIM:
 			trim_at(pos2)
@@ -903,6 +965,14 @@ func run_solve() -> Dictionary:
 	var res: Dictionary = sketch.solve()
 	last_dofs = res["dofs"]
 	last_solve_status = res["status"]
+	last_conflicting = Array(res.get("conflicting", PackedStringArray()))
+	last_redundant = Array(res.get("redundant", PackedStringArray()))
+	_conflict_entities.clear()
+	for cid in last_conflicting:
+		var cinfo: Dictionary = sketch.constraint_info(str(cid))
+		for ref in cinfo.get("refs", []):
+			_conflict_entities[str(ref["entity"])] = true
+	solve_updated.emit(last_dofs, last_solve_status, last_conflicting.size())
 	return res
 
 
@@ -993,6 +1063,12 @@ func end_chain() -> void:
 
 func hover(pos2: Vector2) -> void:
 	_hover = snap_point(pos2)
+	if _infer_label != null:
+		var hint := _infer_hint_text(_hover)
+		_infer_label.visible = hint != ""
+		if hint != "":
+			_infer_label.text = hint
+			_infer_label.position = _to3(_hover + Vector2(2.0, 2.0))
 	_update_preview()
 
 
@@ -1005,8 +1081,12 @@ func _clear_meshes() -> void:
 	_preview_node.mesh = null
 	_selected_node.mesh = null
 	selected = []
+	selected_constraint = ""
 	dimensions.clear()
 	_clear_dimension_labels()
+	_rebuild_constraint_glyphs()
+	if _infer_label != null:
+		_infer_label.visible = false
 
 
 func _clear_dimension_labels() -> void:
@@ -1018,7 +1098,9 @@ func _clear_dimension_labels() -> void:
 		child.free()
 
 
-func _entity_draw_color(info: Dictionary) -> Color:
+func _entity_draw_color(info: Dictionary, id: String = "") -> Color:
+	if id != "" and _conflict_entities.has(id):
+		return COLOR_CONFLICT
 	if info.get("construction", false):
 		return COLOR_CONSTRUCTION
 	# Fully-constrained sketches draw green (per-entity DOF isn't reported by
@@ -1097,6 +1179,179 @@ func _rebuild_dimension_labels() -> void:
 		_dimension_labels.add_child(label)
 
 
+# --- constraint glyphs (visible relations, SolidWorks-style) ---
+
+## Sketch-plane position of a constraint reference point. Role "self" means
+## the entity itself: line midpoint, circle/arc center, point position.
+func _ref_pos(ref: Dictionary) -> Variant:
+	var info: Dictionary = sketch.entity_info(str(ref["entity"]))
+	if info.is_empty():
+		return null
+	var role := str(ref.get("role", "self"))
+	match info.get("type", ""):
+		"line":
+			if role == "start":
+				return info["start"]
+			if role == "end":
+				return info["end"]
+			return (info["start"] + info["end"]) * 0.5
+		"circle", "arc":
+			return info["center"]
+		"point":
+			return info["position"]
+	return null
+
+
+## Glyph anchor for a constraint: mean of its reference points, nudged
+## perpendicular for single-line relations so the badge sits beside the line.
+func _constraint_anchor(cinfo: Dictionary) -> Variant:
+	var refs: Array = cinfo.get("refs", [])
+	if refs.is_empty():
+		return null
+	var sum := Vector2.ZERO
+	var n := 0
+	for ref in refs:
+		var p: Variant = _ref_pos(ref)
+		if p == null:
+			continue
+		sum += p as Vector2
+		n += 1
+	if n == 0:
+		return null
+	var anchor := sum / float(n)
+	if refs.size() == 1:
+		var info: Dictionary = sketch.entity_info(str(refs[0]["entity"]))
+		if info.get("type", "") == "line":
+			var d: Vector2 = info["end"] - info["start"]
+			if d.length_squared() > 1e-12:
+				anchor += Vector2(-d.y, d.x).normalized() * 2.5
+	return anchor
+
+
+func _rebuild_constraint_glyphs() -> void:
+	_glyph_anchors.clear()
+	if _constraint_glyphs == null:
+		return
+	while _constraint_glyphs.get_child_count() > 0:
+		var child := _constraint_glyphs.get_child(0)
+		_constraint_glyphs.remove_child(child)
+		child.free()
+	if sketch == null or not active:
+		return
+	if selected_constraint != "" and sketch.constraint_info(selected_constraint).is_empty():
+		selected_constraint = ""
+	var taken: Array[Vector2] = []
+	for cid in sketch.constraint_ids():
+		var cinfo: Dictionary = sketch.constraint_info(cid)
+		var type := str(cinfo.get("type", ""))
+		if not GLYPH_SYMBOLS.has(type):
+			continue
+		var anchor: Variant = _constraint_anchor(cinfo)
+		if anchor == null:
+			continue
+		var pos := anchor as Vector2
+		# Stack overlapping badges instead of drawing them on top of each other.
+		var guard := 0
+		while guard < 8 and taken.any(func(t: Vector2) -> bool: return t.distance_to(pos) < 2.0):
+			pos += Vector2(0, 2.5)
+			guard += 1
+		taken.append(pos)
+		var label := Label3D.new()
+		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		label.fixed_size = true
+		label.pixel_size = 0.004
+		label.font_size = 22
+		label.text = GLYPH_SYMBOLS[type]
+		if str(cid) == selected_constraint:
+			label.modulate = COLOR_GLYPH_SELECTED
+		elif last_conflicting.has(str(cid)):
+			label.modulate = COLOR_CONFLICT
+		else:
+			label.modulate = COLOR_GLYPH
+		label.position = _to3(pos)
+		label.set_meta("cid", str(cid))
+		_constraint_glyphs.add_child(label)
+		_glyph_anchors.append({"cid": str(cid), "pos": pos})
+
+
+## Constraint whose glyph is within GLYPH_PICK_RADIUS of pos2, or "".
+## Geometry wins ties: a click closer to an entity than to the badge selects
+## the entity, so badges beside a line never steal clicks aimed at it.
+func constraint_hit(pos2: Vector2) -> String:
+	var best := ""
+	var best_d := GLYPH_PICK_RADIUS
+	for a in _glyph_anchors:
+		var d: float = pos2.distance_to(a["pos"])
+		if d < best_d:
+			best_d = d
+			best = a["cid"]
+	if best == "":
+		return ""
+	var eid := _nearest_entity_at(pos2)
+	if eid != "" and _entity_distance(sketch.entity_info(eid), pos2) < best_d:
+		return ""
+	return best
+
+
+func select_constraint(cid: String) -> void:
+	selected_constraint = cid
+	_rebuild_constraint_glyphs()
+	if cid != "":
+		var type := str(sketch.constraint_info(cid).get("type", ""))
+		status.emit("Constraint selected: %s — Del removes it" % type)
+
+
+## Remove the selected constraint (glyph click + Del). Returns true on success.
+func delete_selected_constraint() -> bool:
+	if selected_constraint == "" or sketch == null:
+		return false
+	var cid := selected_constraint
+	if not sketch.remove_constraint(cid):
+		return false
+	selected_constraint = ""
+	# Drop any recorded dimension driven by this constraint.
+	for i in range(dimensions.size() - 1, -1, -1):
+		if str(dimensions[i].get("cid", "")) == cid:
+			dimensions.remove_at(i)
+	run_solve()
+	_redraw()
+	_redraw_selected()
+	status.emit("Constraint removed")
+	return true
+
+
+## Index of the dimension whose label sits within PICK_TOLERANCE of pos2 (-1 = none).
+func dimension_hit(pos2: Vector2) -> int:
+	var best := -1
+	var best_d := PICK_TOLERANCE
+	for i in range(dimensions.size()):
+		var lp: Variant = _dimension_label_pos2(dimensions[i])
+		if lp == null:
+			continue
+		var d: float = pos2.distance_to(lp as Vector2)
+		if d < best_d:
+			best_d = d
+			best = i
+	return best
+
+
+## Live inference hint while drawing: which constraint the LINE tool would add
+## for a segment from the last tool point to `p` ("H", "V", coincident glyph).
+func _infer_hint_text(p: Vector2) -> String:
+	if not infer_enabled or tool != Tool.LINE or _tool_points.is_empty():
+		return ""
+	if not _endpoint_hit(p, "").is_empty():
+		return GLYPH_SYMBOLS["coincident"]
+	var d := p - _tool_points[_tool_points.size() - 1]
+	if d.length() <= INFER_TOL:
+		return ""
+	if absf(d.y) <= INFER_TOL:
+		return "H"
+	if absf(d.x) <= INFER_TOL:
+		return "V"
+	return ""
+
+
 ## Approximate "%.4g" (GDScript's % operator has no g specifier).
 func _format_dimension(v: float) -> String:
 	if not is_finite(v):
@@ -1143,7 +1398,7 @@ func _redraw() -> void:
 	var has := false
 	for id in sketch.entity_ids():
 		var info: Dictionary = sketch.entity_info(id)
-		var col := _entity_draw_color(info)
+		var col := _entity_draw_color(info, str(id))
 		match info.get("type", ""):
 			"line":
 				if not has:
@@ -1188,6 +1443,7 @@ func _redraw() -> void:
 	else:
 		_draw_node.mesh = null
 	_rebuild_dimension_labels()
+	_rebuild_constraint_glyphs()
 
 
 func _update_preview() -> void:

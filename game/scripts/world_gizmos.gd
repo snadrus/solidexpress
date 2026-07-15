@@ -3,11 +3,12 @@ extends Node3D
 ## Origin triad (RGB XYZ) and reference grid on the model XY ground plane
 ## (kernel Z-up). Sibling of DocumentView under ModelSpace.
 
-const TRIAD_LEN := 20.0
-const TRIAD_RADIUS := 0.35
-const GRID_HALF := 100.0
-const GRID_STEP := 10.0
-const GRID_MAJOR := 50.0
+const TRIAD_LEN := 5.0
+const TRIAD_RADIUS := 0.12
+## Match place-snap (0.1 mm): minor every 0.1, major every 1.0, ±50 mm sheet.
+const GRID_HALF := 50.0
+const GRID_STEP := 0.1
+const GRID_MAJOR := 1.0
 
 const COLOR_X := Color(0.92, 0.22, 0.18)
 const COLOR_Y := Color(0.22, 0.82, 0.28)
@@ -103,10 +104,13 @@ func _make_axis_cylinder(dir: Vector3, color: Color, node_name: String) -> MeshI
 func _make_grid_mesh() -> ImmediateMesh:
 	var im := ImmediateMesh.new()
 	im.surface_begin(Mesh.PRIMITIVE_LINES)
-	var i := -GRID_HALF
-	while i <= GRID_HALF + 0.001:
-		var is_center := absf(i) < 0.001
-		var is_major := not is_center and absf(fmod(absf(i), GRID_MAJOR)) < 0.001
+	# Integer indices avoid float drift so major lines land on GRID_MAJOR.
+	var n := int(round(GRID_HALF / GRID_STEP))
+	var major_every := maxi(int(round(GRID_MAJOR / GRID_STEP)), 1)
+	for k in range(-n, n + 1):
+		var i := float(k) * GRID_STEP
+		var is_center := k == 0
+		var is_major := not is_center and (k % major_every) == 0
 		# Lines parallel to Y (constant X).
 		if is_center:
 			im.surface_set_color(COLOR_GRID_CENTER_Y)
@@ -125,6 +129,5 @@ func _make_grid_mesh() -> ImmediateMesh:
 			im.surface_set_color(COLOR_GRID)
 		im.surface_add_vertex(Vector3(-GRID_HALF, i, 0))
 		im.surface_add_vertex(Vector3(GRID_HALF, i, 0))
-		i += GRID_STEP
 	im.surface_end()
 	return im

@@ -30,8 +30,8 @@ func _ready() -> void:
 	root.add_child(title)
 
 	var grouped := Shortcuts.by_context()
-	# Preserve TABLE order: View, Model, Sketch, File.
-	for ctx in ["View", "Model", "Sketch", "File"]:
+	# Preserve TABLE order: View, Model, Sketch, Timeline, File.
+	for ctx in ["View", "Model", "Sketch", "Timeline", "File"]:
 		if not grouped.has(ctx):
 			continue
 		var section := Label.new()

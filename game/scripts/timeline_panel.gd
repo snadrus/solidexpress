@@ -1,10 +1,11 @@
 class_name TimelinePanel
 extends PanelContainer
-## Feature timeline (parametric history). One row per feature: suppress
-## checkbox, name (inline rename), up/down reorder, delete. Selecting a row
-## highlights its body and opens a universal JSON param editor (v0 — structured
-## data by design, so the same editor works for every feature type and for AI
-## round-trips).
+## Feature timeline (parametric history). One row per feature: type icon,
+## suppress checkbox, name (inline rename), failure badge, drag/button
+## reorder, delete. A draggable rollback bar (SolidWorks-style) skips
+## regeneration of everything below it. Selecting a row highlights its body
+## and opens a universal JSON param editor (v0 — structured data by design,
+## so the same editor works for every feature type and for AI round-trips).
 
 signal status(text: String)
 
@@ -19,6 +20,17 @@ var _json_toggle: CheckButton
 var _refreshing := false
 var _renaming_fid := ""
 var property_panel: PropertyPanel
+var rollback_bar: Control
+
+## Feature type -> UIIcons glyph. Primitives resolve their kind from params.
+const TYPE_ICONS := {
+	"sketch": "sketch", "extrude": "extrude", "revolve": "revolve",
+	"fillet": "fillet", "chamfer": "chamfer", "hole": "hole",
+	"mirror": "mirror", "linear_pattern": "linear_pattern",
+	"circular_pattern": "circular_pattern", "shell": "shell",
+	"offset": "offset", "sweep": "arc", "loft": "area",
+	"helix_sweep": "revolve", "thread": "cylinder", "import_step": "box",
+}
 
 
 func _ready() -> void:
@@ -77,14 +89,61 @@ func refresh() -> void:
 	for child in _list.get_children():
 		child.queue_free()
 	_rows.clear()
+	rollback_bar = null
 	var feats: Array = view.doc.graph_features()
 	var n := feats.size()
+	var rollback: int = view.doc.graph_rollback()
 	for i in n:
-		_list.add_child(_make_row(feats[i], i, n))
+		if rollback >= 0 and i == rollback:
+			_add_rollback_bar()
+		var row := _make_row(feats[i], i, n)
+		if rollback >= 0 and i >= rollback:
+			row.modulate = Color(1, 1, 1, 0.4)
+		_list.add_child(row)
+	# Bar sits at the end when rolled to end (or past the last feature).
+	if rollback_bar == null and n > 0:
+		_add_rollback_bar()
 	if _selected_fid != "" and not _has_feature(feats, _selected_fid):
 		_selected_fid = ""
 		_editor_box.visible = false
 	_refreshing = false
+
+
+## Draggable rollback bar. Drop it onto a row to roll back before that
+## feature; double-click rolls to the end of the timeline.
+func _add_rollback_bar() -> void:
+	rollback_bar = Button.new()
+	rollback_bar.text = "═══ rollback ═══"
+	rollback_bar.flat = true
+	rollback_bar.add_theme_font_size_override("font_size", 10)
+	rollback_bar.modulate = Color(0.55, 0.75, 1.0)
+	rollback_bar.tooltip_text = "Rollback bar — drag onto a feature to roll back; double-click to roll to end"
+	rollback_bar.mouse_default_cursor_shape = Control.CURSOR_VSIZE
+	var bar := rollback_bar
+	var get_data := func(_pos: Vector2) -> Variant:
+		var preview := Label.new()
+		preview.text = "═══ rollback ═══"
+		bar.set_drag_preview(preview)
+		return {"rollback_bar": true}
+	var no_drop := func(_pos: Vector2, _data: Variant) -> bool:
+		return false
+	var drop_noop := func(_pos: Vector2, _data: Variant) -> void:
+		pass
+	rollback_bar.set_drag_forwarding(get_data, no_drop, drop_noop)
+	rollback_bar.gui_input.connect(func(ev: InputEvent) -> void:
+		if ev is InputEventMouseButton and ev.pressed and ev.double_click \
+				and ev.button_index == MOUSE_BUTTON_LEFT:
+			set_rollback(-1)
+	)
+	_list.add_child(rollback_bar)
+
+
+func set_rollback(index: int) -> void:
+	if view.doc.graph_set_rollback(index):
+		view.graph_changed()
+		status.emit("Rolled to end" if index < 0 else "Rolled back before feature %d" % (index + 1))
+	else:
+		status.emit("Rollback failed")
 
 
 func _has_feature(feats: Array, fid: String) -> bool:
@@ -92,6 +151,21 @@ func _has_feature(feats: Array, fid: String) -> bool:
 		if f["id"] == fid:
 			return true
 	return false
+
+
+## UIIcons glyph for a feature row (primitives use their kind's shape glyph,
+## booleans their op glyph).
+static func _row_icon(f: Dictionary) -> String:
+	var type := str(f["type"])
+	var params_raw = JSON.parse_string(str(f.get("params", "{}")))
+	var params: Dictionary = params_raw if params_raw is Dictionary else {}
+	if type == "primitive":
+		var kind := str(params.get("kind", "box"))
+		return kind if UIIcons.GLYPHS.has(kind) else "box"
+	if type == "boolean":
+		var op := str(params.get("op", "fuse"))
+		return op if UIIcons.GLYPHS.has(op) else "fuse"
+	return TYPE_ICONS.get(type, "box")
 
 
 func _make_row(f: Dictionary, index: int, count: int) -> Control:
@@ -107,7 +181,8 @@ func _make_row(f: Dictionary, index: int, count: int) -> Control:
 
 	var name_btn := Button.new()
 	name_btn.text = f["name"]
-	name_btn.tooltip_text = "Select feature (click again to rename)"
+	name_btn.icon = UIIcons.get_icon(_row_icon(f), 14)
+	name_btn.tooltip_text = "Select feature (click again to rename) · drag to reorder"
 	name_btn.flat = true
 	name_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
@@ -120,6 +195,34 @@ func _make_row(f: Dictionary, index: int, count: int) -> Control:
 			_begin_rename(fid, row, name_btn)
 	)
 	row.add_child(name_btn)
+
+	# Failure badge: regenerate stopped at this feature (tooltip = why).
+	if f.get("failed", false):
+		var badge := Label.new()
+		badge.name = "FailBadge"
+		badge.text = "!"
+		badge.tooltip_text = str(f.get("error", "Regeneration failed"))
+		badge.mouse_filter = Control.MOUSE_FILTER_STOP
+		badge.add_theme_color_override("font_color", Color(0.95, 0.3, 0.25))
+		badge.add_theme_font_size_override("font_size", 16)
+		row.add_child(badge)
+		name_btn.modulate = Color(1.0, 0.55, 0.5)
+
+	# Drag reorder: rows are both drag sources (feature) and drop targets
+	# (feature reorder, or the rollback bar landing before this feature).
+	var get_data := func(_pos: Vector2) -> Variant:
+		var preview := Label.new()
+		preview.text = str(f["name"])
+		name_btn.set_drag_preview(preview)
+		return {"timeline_fid": fid}
+	var can_drop := func(_pos: Vector2, data: Variant) -> bool:
+		return data is Dictionary and (data.has("timeline_fid") or data.has("rollback_bar"))
+	var drop := func(_pos: Vector2, data: Variant) -> void:
+		if data.has("rollback_bar"):
+			set_rollback(index)
+		elif str(data["timeline_fid"]) != fid:
+			_move_feature(str(data["timeline_fid"]), index)
+	name_btn.set_drag_forwarding(get_data, can_drop, drop)
 
 	var edit_btn := UIIcons.button("rename", "", "Rename feature")
 	edit_btn.pressed.connect(func() -> void: _begin_rename(fid, row, name_btn))
@@ -184,6 +287,17 @@ func _move_feature(fid: String, new_index: int) -> void:
 		status.emit("Feature moved")
 	else:
 		status.emit("Cannot move: would break feature dependencies")
+		_flash_row(fid)
+
+
+## Brief red flash on a row (dependency-blocked drop feedback).
+func _flash_row(fid: String) -> void:
+	var row: Control = _rows.get(fid)
+	if row == null or not is_instance_valid(row):
+		return
+	row.modulate = Color(1.0, 0.4, 0.35)
+	var tw := row.create_tween()
+	tw.tween_property(row, "modulate", Color.WHITE, 0.6)
 
 
 func _select_feature(fid: String) -> void:

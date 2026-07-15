@@ -266,10 +266,11 @@ func test_body_props(main) -> void:
 			and absf(got.b - tint.b) < 1e-4, "get_body_color round-trips")
 	view.clear_selection()
 	var node := view.body_node(id)
-	var mat: StandardMaterial3D = node.get_surface_override_material(0)
-	check(mat != null and absf(mat.albedo_color.r - tint.r) < 1e-4
-			and absf(mat.albedo_color.g - tint.g) < 1e-4
-			and absf(mat.albedo_color.b - tint.b) < 1e-4,
+	var mat := node.get_surface_override_material(0) as ShaderMaterial
+	var albedo: Color = mat.get_shader_parameter("albedo_color") if mat != null else Color.BLACK
+	check(mat != null and absf(albedo.r - tint.r) < 1e-4
+			and absf(albedo.g - tint.g) < 1e-4
+			and absf(albedo.b - tint.b) < 1e-4,
 			"body mesh albedo matches color")
 
 	var path := "/tmp/sx_ui_bodyprops.sxp"
@@ -290,8 +291,9 @@ func test_draft(main) -> void:
 	var view: DocumentView = main.view
 	var ops: OpsPanel = main.ops_panel
 	view.new_document()
-	# Box centered at (-900,-900), spans -925..-875 in x/y, 0..50 in z.
-	var id: String = view.insert_primitive("box", Vector3(-900, -900, 0))
+	# Box centered at (-900,-900), spans -925..-875 in x/y, 0..50 in z
+	# (explicit 50 mm — the palette default shrank to 10 mm).
+	var id: String = view.insert_primitive("box", Vector3(-900, -900, 0), Vector3(50, 50, 50))
 	view.select_entity(id, "")
 	# Ray from +X onto the side face.
 	view.select_ray(Vector3(-870, -900, 25), Vector3(-1, 0, 0))
@@ -343,7 +345,7 @@ func test_edge_selection(main) -> void:
 	print("- edge selection + targeted fillet")
 	var view: DocumentView = main.view
 	var ops: OpsPanel = main.ops_panel
-	var a: String = view.insert_primitive("box", Vector3(-600, -600, 0))
+	var a: String = view.insert_primitive("box", Vector3(-600, -600, 0), Vector3(50, 50, 50))
 	# Box spans -625..-575 in x/y, 0..50 in z. Ray down the top-front edge
 	# (y = -625): hits the top face within edge tolerance.
 	view.select_entity(a, "")
@@ -428,8 +430,9 @@ func test_revolve_and_cut(main) -> void:
 		"revolved volume matches Pappus")
 	view.delete_selected()
 
-	# Extrude-cut: sketch a circle on a box top face, cut 20 deep.
-	var box: String = view.insert_primitive("box", Vector3(800, 800, 0))
+	# Extrude-cut: sketch a circle on a box top face, cut 20 deep
+	# (explicit 50 mm box so the Ø20 circle fits and the cut has depth).
+	var box: String = view.insert_primitive("box", Vector3(800, 800, 0), Vector3(50, 50, 50))
 	var vol0: float = view.doc.body_volume(box)
 	view.select_entity(box, "")
 	view.select_ray(Vector3(800, 800, 500), Vector3(0, 0, -1))
@@ -470,7 +473,7 @@ func test_ops_panel(main) -> void:
 	view.clear_selection()
 	check(not ops.visible, "hidden with no selection")
 
-	var a: String = view.insert_primitive("box", Vector3(400, 400, 0))
+	var a: String = view.insert_primitive("box", Vector3(400, 400, 0), Vector3(50, 50, 50))
 	check(ops.visible and ops._body_ops.visible, "body ops shown on body selection")
 
 	# Fillet all edges shrinks volume.

@@ -179,7 +179,7 @@ func workflow_bracket() -> void:
 ## 3. Hollow box: shell a cube through its top face.
 func workflow_hollow_box() -> void:
 	begin_workflow("hollow box (shell)")
-	view.insert_primitive("box", Vector3.ZERO)
+	view.insert_primitive("box", Vector3.ZERO, Vector3(50, 50, 50))
 	gesture(2)
 	var body := _only_body()
 	check(body != "", "box created")
@@ -224,7 +224,7 @@ func workflow_washer() -> void:
 ## 5. Flanged cylinder: shaft + flange disc fused via the armed boolean flow.
 func workflow_flanged_cylinder() -> void:
 	begin_workflow("flanged cylinder (fuse)")
-	view.insert_primitive("cylinder", Vector3.ZERO)  # r25 h50
+	view.insert_primitive("cylinder", Vector3.ZERO, Vector3(50, 50, 50))  # r25 h50
 	gesture(2)
 	var shaft := _only_body()
 	check(shaft != "", "shaft created")

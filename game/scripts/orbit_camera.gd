@@ -1,23 +1,35 @@
 class_name OrbitCamera
 extends Camera3D
-## Turntable orbit camera: middle-drag OR Alt+left-drag orbits;
-## Shift+middle / Alt+Shift+left pans; two-finger PanGesture orbits
-## (touchpads); wheel zooms toward the cursor. F frames the scene;
-## 1/2/3/7 jump to front/right/top/isometric; 5 toggles ortho/perspective.
-## Named views persist in user://views.cfg.
+## Turntable orbit camera with CAD-familiar presets (SolidWorks / Fusion /
+## SolidExpress). Middle / Alt / empty-drag / two-finger navigate; wheel zooms
+## toward the cursor. Wheel / pan over ScrollContainers are left alone.
+## F frames selection (or all); Shift+F / double-middle-click fit all / selection.
+## 1/2/3/7 standard views; 5 toggles ortho. Named views in user://views.cfg.
+
+enum NavPreset { SOLIDEXPRESS, SOLIDWORKS, FUSION }
 
 var pivot := Vector3.ZERO
-var distance := 400.0
+## Empty-scene start: close enough that 0.1 mm grid cells resolve on screen.
+var distance := DEFAULT_DISTANCE
 var yaw := deg_to_rad(-35.0)
 var pitch := deg_to_rad(30.0)
 ## Set by main; used by frame_contents (F) to fit all bodies.
 var view: DocumentView
 var model_space: Node3D
+## Mouse binding preset for middle-drag (and Shift+middle).
+var nav_preset := NavPreset.SOLIDEXPRESS
 
-const MIN_DISTANCE := 5.0
+## ~15 mm puts ≈4 px on a 0.1 mm cell at 900p / 75° FOV.
+const DEFAULT_DISTANCE := 15.0
+const MIN_DISTANCE := 1.0
 const MAX_DISTANCE := 20000.0
 const ORBIT_SPEED := 0.008
-const PAN_GESTURE_SCALE := 0.02
+## Two-finger pan sensitivity. Higher so a short trackpad swipe actually turns.
+const PAN_GESTURE_SCALE := 0.045
+## Amplify near-1.0 MagnifyGesture deltas (Wayland/libinput often sends tiny factors).
+const MAGNIFY_GAIN := 4.0
+## Ctrl/Cmd + two-finger drag vertical → zoom (fallback when MagnifyGesture is absent).
+const PAN_ZOOM_SCALE := 0.018
 const MIN_PITCH := deg_to_rad(-89.0)
 const MAX_PITCH := deg_to_rad(89.0)
 const VIEWS_CFG := "user://views.cfg"
@@ -46,18 +58,53 @@ func _pan_by(dx: float, dy: float) -> void:
 	_update_transform()
 
 
+## True when the pointer is over a control that should consume wheel / two-finger
+## scroll (ScrollContainer, TextEdit, etc.) instead of the 3D camera.
+static func pointer_over_scrollable_ui() -> bool:
+	var vp := Engine.get_main_loop() as SceneTree
+	if vp == null or vp.root == null:
+		return false
+	var hovered: Control = vp.root.get_viewport().gui_get_hovered_control()
+	while hovered != null:
+		if hovered is ScrollContainer:
+			return true
+		if hovered is TextEdit or hovered is CodeEdit:
+			return true
+		if hovered is ItemList or hovered is Tree:
+			return true
+		if hovered is RichTextLabel and (hovered as RichTextLabel).scroll_active:
+			return true
+		hovered = hovered.get_parent() as Control
+	return false
+
+
 ## True when this event should drive the camera (middle, Alt+left, pan gesture, wheel).
-func is_nav_event(event: InputEvent) -> bool:
-	if event is InputEventPanGesture or event is InputEventMagnifyGesture:
+## Pass `allow_scroll_gestures=false` when the pointer is over a scrolling UI panel.
+## Pinch-zoom (MagnifyGesture) is never gated — docks don't use pinch.
+func is_nav_event(event: InputEvent, allow_scroll_gestures := true) -> bool:
+	if event is InputEventMagnifyGesture:
 		return true
+	if event is InputEventPanGesture:
+		# Ctrl/Cmd+pan is treated as pinch-zoom and always available.
+		if event.ctrl_pressed or event.meta_pressed:
+			return true
+		return allow_scroll_gestures
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_WHEEL_UP \
-				or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN \
-				or mb.button_index == MOUSE_BUTTON_MIDDLE:
+				or mb.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			# Ctrl+wheel is pinch-zoom on many Linux trackpads — never gate it.
+			if mb.ctrl_pressed or mb.meta_pressed:
+				return true
+			return allow_scroll_gestures
+		if mb.button_index == MOUSE_BUTTON_MIDDLE:
 			return true
 		# Consume Alt+LMB press/release so place/select don't also fire.
 		if mb.button_index == MOUSE_BUTTON_LEFT and mb.alt_pressed:
+			return true
+		# Two-finger click on many trackpads = middle; some emit left+ctrl/meta.
+		if mb.button_index == MOUSE_BUTTON_LEFT and (mb.ctrl_pressed or mb.meta_pressed) \
+				and mb.alt_pressed:
 			return true
 	if event is InputEventMouseMotion:
 		var mm := event as InputEventMouseMotion
@@ -68,31 +115,61 @@ func is_nav_event(event: InputEvent) -> bool:
 	return false
 
 
-func handle_input(event: InputEvent) -> bool:
-	if event is InputEventPanGesture:
-		# Two-finger drag on many touchpads.
-		var pg := event as InputEventPanGesture
-		yaw -= pg.delta.x * PAN_GESTURE_SCALE
-		pitch = clampf(pitch + pg.delta.y * PAN_GESTURE_SCALE, MIN_PITCH, MAX_PITCH)
-		_update_transform()
-		return true
+func handle_input(event: InputEvent, allow_scroll_gestures := true) -> bool:
+	# Pinch always zooms (never defer to dock scroll — ScrollContainers don't pinch).
 	if event is InputEventMagnifyGesture:
 		var mg := event as InputEventMagnifyGesture
-		# factor > 1 = pinch out = zoom in
-		var factor := 1.0 / maxf(mg.factor, 0.01)
+		# factor > 1 = pinch out = zoom in. Gain helps tiny Wayland deltas.
+		var boosted := 1.0 + (mg.factor - 1.0) * MAGNIFY_GAIN
+		var factor := 1.0 / maxf(boosted, 0.01)
+		factor = clampf(factor, 0.5, 2.0)
 		var vp := get_viewport()
 		var pos := vp.get_mouse_position() if vp != null else Vector2.ZERO
 		zoom_at(pos, factor)
 		return true
+	if event is InputEventPanGesture and (event.ctrl_pressed or event.meta_pressed):
+		# Ctrl+two-finger drag → zoom (Linux fallback when MagnifyGesture is missing).
+		var pg_zoom := event as InputEventPanGesture
+		var vp2 := get_viewport()
+		var pos2 := vp2.get_mouse_position() if vp2 != null else Vector2.ZERO
+		# Finger move up (negative Y delta) → zoom in (distance shrinks).
+		var zfactor := exp(pg_zoom.delta.y * PAN_ZOOM_SCALE)
+		zoom_at(pos2, clampf(zfactor, 0.5, 2.0))
+		return true
+	if not allow_scroll_gestures and (
+			event is InputEventPanGesture
+			or (event is InputEventMouseButton and (
+				(event as InputEventMouseButton).button_index == MOUSE_BUTTON_WHEEL_UP
+				or (event as InputEventMouseButton).button_index == MOUSE_BUTTON_WHEEL_DOWN)
+				and not (event as InputEventMouseButton).ctrl_pressed
+				and not (event as InputEventMouseButton).meta_pressed)):
+		return false
+	if event is InputEventPanGesture:
+		# Two-finger drag (with or without a click/hold). Always orbit.
+		var pg := event as InputEventPanGesture
+		var scale := PAN_GESTURE_SCALE
+		# Click held under the fingers (LMB/MMB mask) → slightly snappier turn.
+		if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) \
+				or Input.is_mouse_button_pressed(MOUSE_BUTTON_MIDDLE):
+			scale *= 1.35
+		yaw -= pg.delta.x * scale
+		pitch = clampf(pitch + pg.delta.y * scale, MIN_PITCH, MAX_PITCH)
+		_update_transform()
+		return true
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
-			zoom_at(mb.position, 0.9)
+			zoom_at(mb.position, 0.85 if (mb.ctrl_pressed or mb.meta_pressed) else 0.9)
 			return true
 		if mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
-			zoom_at(mb.position, 1.0 / 0.9)
+			var out := 0.85 if (mb.ctrl_pressed or mb.meta_pressed) else 0.9
+			zoom_at(mb.position, 1.0 / out)
 			return true
 		if mb.button_index == MOUSE_BUTTON_MIDDLE:
+			# SolidWorks muscle memory: double-middle = zoom to fit.
+			if mb.pressed and mb.double_click:
+				frame_selection_or_all(false)
+				return true
 			return true  # claim press/release so LMB paths ignore them
 		if mb.button_index == MOUSE_BUTTON_LEFT and mb.alt_pressed:
 			return true  # Alt+LMB orbit/pan — do not place/select
@@ -103,7 +180,7 @@ func handle_input(event: InputEvent) -> bool:
 		var alt_left := (mm.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0 and mm.alt_pressed
 		if not middle and not alt_left:
 			return false
-		if mm.shift_pressed:
+		if _want_pan(mm.shift_pressed):
 			_pan_by(mm.relative.x, mm.relative.y)
 		else:
 			_orbit_by(mm.relative.x, mm.relative.y)
@@ -114,7 +191,8 @@ func handle_input(event: InputEvent) -> bool:
 			return false
 		match k.keycode:
 			KEY_F:
-				frame_contents()
+				# F → selection (or all); Shift+F → always all.
+				frame_selection_or_all(k.shift_pressed)
 				return true
 			KEY_1:  # front: looking along -Y in model space (Z-up kernel)
 				set_view(deg_to_rad(0.0), deg_to_rad(0.0))
@@ -132,6 +210,14 @@ func handle_input(event: InputEvent) -> bool:
 				toggle_projection()
 				return true
 	return false
+
+
+## Fusion: middle pans, Shift+middle orbits. SolidWorks / SX: middle orbits,
+## Shift+middle pans. Alt+left follows the same rule as middle.
+func _want_pan(shift_held: bool) -> bool:
+	if nav_preset == NavPreset.FUSION:
+		return not shift_held
+	return shift_held
 
 
 ## Zoom by `factor` (< 1 in, > 1 out) keeping the point under `screen_pos`
@@ -212,11 +298,46 @@ func animate_to(new_yaw: float, new_pitch: float, duration := 0.25) -> void:
 	)
 
 
+## Frame selection when anything is selected; otherwise all bodies.
+## Pass `force_all=true` for Shift+F / “fit whole model”.
+func frame_selection_or_all(force_all := false) -> void:
+	if not force_all and view != null and view.selected_body != "":
+		if frame_selection():
+			return
+	frame_contents()
+
+
+## Frames the current selection AABB (model → world). Returns false if empty.
+func frame_selection() -> bool:
+	if view == null:
+		return false
+	var bb: Dictionary = view.selection_bbox()
+	if bb.is_empty():
+		return false
+	var mn: Vector3 = bb["min"]
+	var mx: Vector3 = bb["max"]
+	var corners: Array[Vector3] = [
+		Vector3(mn.x, mn.y, mn.z), Vector3(mx.x, mn.y, mn.z),
+		Vector3(mx.x, mx.y, mn.z), Vector3(mn.x, mx.y, mn.z),
+		Vector3(mn.x, mn.y, mx.z), Vector3(mx.x, mn.y, mx.z),
+		Vector3(mx.x, mx.y, mx.z), Vector3(mn.x, mx.y, mx.z),
+	]
+	var united := AABB()
+	var first := true
+	for c in corners:
+		var w: Vector3 = model_space.to_global(c) if model_space != null else c
+		var a := AABB(w, Vector3.ZERO)
+		united = a if first else united.merge(a)
+		first = false
+	_frame_world_aabb(united)
+	return true
+
+
 ## Frames all bodies (world-space AABB union); origin fallback when empty.
 func frame_contents() -> void:
 	if view == null or view.doc.body_ids().is_empty():
 		pivot = Vector3.ZERO
-		distance = 400.0
+		distance = DEFAULT_DISTANCE
 		_update_transform()
 		return
 	var united := AABB()
@@ -232,10 +353,27 @@ func frame_contents() -> void:
 		first = false
 	if first:
 		return
+	_frame_world_aabb(united)
+
+
+func _frame_world_aabb(united: AABB) -> void:
 	pivot = united.get_center()
 	var radius: float = united.size.length() / 2.0
 	distance = clampf(radius / tan(deg_to_rad(fov) / 2.0) * 1.2, MIN_DISTANCE, MAX_DISTANCE)
 	_update_transform()
+
+
+## Orient the camera to look along -normal (face “normal to” / look-at).
+func look_along_model_normal(normal: Vector3) -> void:
+	var n := normal.normalized()
+	if n.length_squared() < 1e-8:
+		return
+	# Model Z-up: yaw around Z, pitch from XY plane.
+	var yaw_n := atan2(n.x, -n.y)
+	var pitch_n := asin(clampf(n.z, -1.0, 1.0))
+	animate_to(yaw_n, pitch_n)
+	if view != null and view.selected_body != "":
+		frame_selection()
 
 
 func save_named_view(view_name: String) -> void:
@@ -299,7 +437,7 @@ func _load_named_views() -> void:
 		_named_views[section] = {
 			"yaw": cfg.get_value(section, "yaw", 0.0),
 			"pitch": cfg.get_value(section, "pitch", 0.0),
-			"distance": cfg.get_value(section, "distance", 400.0),
+			"distance": cfg.get_value(section, "distance", DEFAULT_DISTANCE),
 			"pivot": cfg.get_value(section, "pivot", Vector3.ZERO),
 			"projection": cfg.get_value(section, "projection", PROJECTION_PERSPECTIVE),
 		}
