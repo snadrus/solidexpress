@@ -32,9 +32,10 @@ var _last_drag_pos := Vector2.ZERO
 var _move_start_center := Vector3.ZERO
 var _move_start_node_xform := Transform3D.IDENTITY
 var _move_delta_base := Vector3.ZERO  # last kernel-committed Δ from start center
-## Blender-style axis lock during a body move: tap X/Y to toggle (-1 = free).
+## Blender-style axis lock during a body move: tap X/Y/Z to toggle (-1 = free).
 const AXIS_X := 0
 const AXIS_Y := 1
+const AXIS_Z := 2
 var _move_axis_lock := -1
 ## Rotate drag about a principal axis through the selection center.
 var _rotate_axis := Vector3.ZERO
@@ -612,8 +613,8 @@ func _gui_input(event: InputEvent) -> void:
 		accept_event()
 
 
-## True when the pointer is over the 3D view (or nothing), not a dock / HUD.
-func _viewport_owns_pointer() -> bool:
+## True when model LMB/motion should run from `_input`, not blocked by chrome/docks.
+func _viewport_owns_pointer(event_pos: Vector2 = Vector2.INF) -> bool:
 	var vp := get_viewport()
 	if vp == null:
 		return true
@@ -624,10 +625,16 @@ func _viewport_owns_pointer() -> bool:
 		return true
 	if h == self:
 		return true
-	# TransformHud / SelectionStrip / PlaceSnapBar / PopupMenu are our children.
+	# TransformHud / SelectionStrip / PlaceSnapBar are our children with STOP.
+	# Stale hover or oversized rects must not swallow empty-space clicks — only
+	# block when the event is actually over chrome (`_over_chrome`).
 	if is_ancestor_of(h):
-		return false
-	return false
+		if event_pos == Vector2.INF:
+			return true
+		return not _over_chrome(event_pos)
+	# Sibling docks / scroll panels: `_input` owns viewport gestures (camera
+	# already consumed nav above; select/orbit/drag must still work over docks).
+	return true
 
 
 ## Shared LMB / motion path for select, empty-orbit, and handle drags.
@@ -956,23 +963,29 @@ func _on_drag(pos: Vector2) -> void:
 			queue_redraw()
 		DragMode.MOVE_BODY:
 			# Drag stays on the horizontal plane; ΔZ only via typed HUD.
+			# Z-lock freezes XY at the current accum so only typed ΔZ hops.
 			_last_drag_pos = pos
-			var plane_z := _drag_start_point.z
-			var gp = _horizontal_plane_point(pos, plane_z)
-			var gp0 = _horizontal_plane_point(_drag_start_mouse, plane_z)
-			if gp == null or gp0 == null:
-				return
-			var target: Vector3 = gp - gp0
-			match _move_axis_lock:
-				AXIS_X: target.y = 0.0
-				AXIS_Y: target.x = 0.0
-			target.z = _drag_accum.z  # preserve typed off-plane hop
+			var target: Vector3
+			if _move_axis_lock == AXIS_Z:
+				target = Vector3(_drag_accum.x, _drag_accum.y, _drag_accum.z)
+			else:
+				var plane_z := _drag_start_point.z
+				var gp = _horizontal_plane_point(pos, plane_z)
+				var gp0 = _horizontal_plane_point(_drag_start_mouse, plane_z)
+				if gp == null or gp0 == null:
+					return
+				target = gp - gp0
+				match _move_axis_lock:
+					AXIS_X: target.y = 0.0
+					AXIS_Y: target.x = 0.0
+				target.z = _drag_accum.z  # preserve typed off-plane hop
 			_apply_live_move(target)
 			var lock_hint := ""
 			match _move_axis_lock:
 				AXIS_X: lock_hint = " [X locked]"
 				AXIS_Y: lock_hint = " [Y locked]"
-			status.emit("Move Δ (%.2f, %.2f, %.2f)%s — tap X/Y to lock axis, type ΔZ to leave plane" \
+				AXIS_Z: lock_hint = " [Z locked]"
+			status.emit("Move Δ (%.2f, %.2f, %.2f)%s — tap X/Y/Z to lock axis, type ΔZ to leave plane" \
 					% [target.x, target.y, target.z, lock_hint])
 			queue_redraw()
 		DragMode.ROTATE_BODY:
@@ -1716,20 +1729,29 @@ func _input(event: InputEvent) -> void:
 	# Interaction has size 0 or is under another Control for hit-testing.
 	# Keep capturing motion/release after a press even if the cursor drifts
 	# over a dock edge.
-	if _pressed or _viewport_owns_pointer():
+	var event_pos := Vector2.INF
+	if event is InputEventMouse:
+		event_pos = (event as InputEventMouse).position
+	if _pressed or _viewport_owns_pointer(event_pos):
 		if _handle_model_pointer(event):
 			get_viewport().set_input_as_handled()
 			return
 
-	# Tap X / Y mid body-move to lock the drag to that axis (tap again to free).
+	# Tap X / Y / Z mid body-move to lock the drag to that axis (tap again to free).
 	# Handled here (not _gui_key) so it works regardless of Control focus.
+	# Plain Z only — Ctrl+Z still reaches undo via _gui_key when not dragging.
 	if event is InputEventKey and event.pressed and not event.echo \
-			and _drag_mode == DragMode.MOVE_BODY:
+			and not event.ctrl_pressed and _drag_mode == DragMode.MOVE_BODY:
 		var kc := (event as InputEventKey).keycode
-		if kc == KEY_X or kc == KEY_Y:
-			var axis := AXIS_X if kc == KEY_X else AXIS_Y
+		var axis := -1
+		match kc:
+			KEY_X: axis = AXIS_X
+			KEY_Y: axis = AXIS_Y
+			KEY_Z: axis = AXIS_Z
+		if axis >= 0:
 			_move_axis_lock = -1 if _move_axis_lock == axis else axis
 			_on_drag(_last_drag_pos)  # re-apply preview under the new lock
+			queue_redraw()
 			get_viewport().set_input_as_handled()
 			return
 
@@ -2051,17 +2073,20 @@ func _draw_selection_gizmos() -> void:
 	# Rotate arcs (no move triad — body itself is the move grip).
 	for g in _rotate_grips():
 		_draw_rotate_arc(g)
-	# During move: old center, new center, connecting segment.
-	if _drag_mode == DragMode.MOVE_BODY and _drag_accum.length() > 1e-4:
-		var old_s := _model_to_screen(_move_start_center)
-		var new_s := _model_to_screen(_move_start_center + _drag_accum)
-		draw_line(old_s, new_s, Color(1.0, 0.85, 0.2, 0.9), 1.5)
-		_draw_center_mark(old_s, Color(0.85, 0.85, 0.9, 0.95))
-		_draw_center_mark(new_s, Color(1.0, 0.75, 0.15, 0.95))
-		draw_string(ThemeDB.fallback_font, old_s + Vector2(8, -8), "old",
-				HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.85, 0.85, 0.9))
-		draw_string(ThemeDB.fallback_font, new_s + Vector2(8, -8), "new",
-				HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1.0, 0.75, 0.15))
+	# During move: old center, new center, connecting segment + locked-axis cue.
+	if _drag_mode == DragMode.MOVE_BODY:
+		if _drag_accum.length() > 1e-4:
+			var old_s := _model_to_screen(_move_start_center)
+			var new_s := _model_to_screen(_move_start_center + _drag_accum)
+			draw_line(old_s, new_s, Color(1.0, 0.85, 0.2, 0.9), 1.5)
+			_draw_center_mark(old_s, Color(0.85, 0.85, 0.9, 0.95))
+			_draw_center_mark(new_s, Color(1.0, 0.75, 0.15, 0.95))
+			draw_string(ThemeDB.fallback_font, old_s + Vector2(8, -8), "old",
+					HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.85, 0.85, 0.9))
+			draw_string(ThemeDB.fallback_font, new_s + Vector2(8, -8), "new",
+					HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1.0, 0.75, 0.15))
+		if _move_axis_lock >= 0:
+			_draw_move_lock_axis()
 	# Face push/pull arrow.
 	var pull := _face_pull_anchor()
 	if not pull.is_empty():
@@ -2077,6 +2102,30 @@ func _draw_center_mark(screen: Vector2, color: Color) -> void:
 	draw_circle(screen, 4.0, color)
 	draw_line(screen + Vector2(-8, 0), screen + Vector2(8, 0), color, 1.5)
 	draw_line(screen + Vector2(0, -8), screen + Vector2(0, 8), color, 1.5)
+
+
+## Highlight the locked principal axis through the live move center.
+func _draw_move_lock_axis() -> void:
+	var dir := Vector3.ZERO
+	var col := Color(1, 1, 1, 0.95)
+	match _move_axis_lock:
+		AXIS_X:
+			dir = Vector3(1, 0, 0)
+			col = Color(0.95, 0.25, 0.22, 0.95)
+		AXIS_Y:
+			dir = Vector3(0, 1, 0)
+			col = Color(0.3, 0.85, 0.3, 0.95)
+		AXIS_Z:
+			dir = Vector3(0, 0, 1)
+			col = Color(0.3, 0.55, 1.0, 0.95)
+		_:
+			return
+	var c := _move_start_center + _drag_accum
+	var half := maxf(_axis_len() * 1.2, 25.0)
+	var a := _model_to_screen(c - dir * half)
+	var b := _model_to_screen(c + dir * half)
+	draw_line(a, b, col, 2.5)
+	_draw_center_mark(_model_to_screen(c), col)
 
 
 func _draw_rotate_arc(g: Dictionary) -> void:

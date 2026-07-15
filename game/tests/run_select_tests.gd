@@ -33,6 +33,7 @@ func _init() -> void:
 	await test_shift_click_event_path(main)
 	test_empty_click_deselect(main)
 	test_jitter_reselect_after_deselect(main)
+	await test_chrome_hover_does_not_block_empty_input(main)
 	test_shift_empty_keeps_selection(main)
 
 	print("%d checks, %d failures" % [checks, failures])
@@ -286,6 +287,48 @@ func test_jitter_reselect_after_deselect(main) -> void:
 	release.position = miss + Vector2(40, 0)
 	vi._input(release)
 	check(vi._drag_mode == ViewportInteraction.DragMode.NONE, "orbit cleared on release")
+
+
+## Regression: stale TransformHud / SelectionStrip hover must not block empty-space
+## LMB via `_input` when the click is outside chrome rects.
+func test_chrome_hover_does_not_block_empty_input(main) -> void:
+	print("- chrome hover does not block empty _input")
+	var view: DocumentView = main.view
+	var vi: ViewportInteraction = main.interaction
+	view.new_document()
+	var a: String = view.insert_primitive("box", Vector3.ZERO)
+	view.select_entity(a, "")
+	root.size = Vector2i(1280, 720)
+	vi.size = Vector2(1280, 720)
+	main.camera.frame_contents()
+	await process_frame
+	check(vi._selection_strip.visible, "selection strip visible after select")
+	var miss := _find_empty_screen(main, view, vi)
+	check(miss.x >= 0.0, "found empty screen point")
+	check(not vi._over_chrome(miss), "miss is outside chrome rects")
+	# Park the cursor over the strip so gui hover is our chrome, not empty space.
+	var strip_center := vi._selection_strip.get_global_rect().get_center()
+	var hover := InputEventMouseMotion.new()
+	hover.position = strip_center
+	vi.get_viewport().push_input(hover)
+	await process_frame
+	var h: Control = vi.get_viewport().gui_get_hovered_control()
+	check(h != null and vi.is_ancestor_of(h), "cursor hover is interaction chrome")
+	check(vi._viewport_owns_pointer(miss), "empty miss still owns pointer despite chrome hover")
+	var press := InputEventMouseButton.new()
+	press.button_index = MOUSE_BUTTON_LEFT
+	press.pressed = true
+	press.position = miss
+	vi._input(press)
+	var mm := InputEventMouseMotion.new()
+	mm.position = miss + Vector2(16, 0)
+	vi._input(mm)
+	var release := InputEventMouseButton.new()
+	release.button_index = MOUSE_BUTTON_LEFT
+	release.pressed = false
+	release.position = miss + Vector2(16, 0)
+	vi._input(release)
+	check(view.selected_body == "", "soft empty orbit deselects with chrome hover")
 
 
 func test_shift_empty_keeps_selection(main) -> void:

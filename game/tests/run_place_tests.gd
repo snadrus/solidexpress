@@ -398,6 +398,21 @@ func test_transform_hud_and_resize(main) -> void:
 	ix._input(key_x)
 	check(ix._move_axis_lock == -1, "second X tap frees the axis lock")
 	check(absf(ix._drag_accum.y) > 1e-4, "freed drag regains ΔY (got %s)" % ix._drag_accum.y)
+	# Tap Z → freeze XY; further mouse motion must not change planar Δ.
+	var xy_before := Vector2(ix._drag_accum.x, ix._drag_accum.y)
+	var key_z := InputEventKey.new()
+	key_z.keycode = KEY_Z
+	key_z.pressed = true
+	ix._input(key_z)
+	check(ix._move_axis_lock == ViewportInteraction.AXIS_Z, "Z tap locks move to vertical")
+	var wriggle := InputEventMouseMotion.new()
+	wriggle.position = screen_body + Vector2(90, 50)
+	ix._input(wriggle)
+	check(absf(ix._drag_accum.x - xy_before.x) < 1e-6 \
+			and absf(ix._drag_accum.y - xy_before.y) < 1e-6,
+		"Z-locked drag freezes XY (got %s)" % ix._drag_accum)
+	ix._input(key_z)
+	check(ix._move_axis_lock == -1, "second Z tap frees the axis lock")
 	var release := InputEventMouseButton.new()
 	release.button_index = MOUSE_BUTTON_LEFT
 	release.pressed = false
