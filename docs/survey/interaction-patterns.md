@@ -69,4 +69,5 @@ SolidExpress principle: prefer geometry-attached affordances over dock-only or s
 - [master-feature-list.md](master-feature-list.md) — “Drag-handle editing”, direct face editing
 - [howto/direct-edit.md](../howto/direct-edit.md) — end-user steps
 - [howto/place-and-orbit.md](../howto/place-and-orbit.md) — place / camera
+- [howto/horizontal-hole.md](../howto/horizontal-hole.md) — rotate cylinder, Subtract hole
 - [howto/edit-history.md](../howto/edit-history.md) — timeline rollback, constraint badges, dim editing

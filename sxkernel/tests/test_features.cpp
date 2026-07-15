@@ -68,6 +68,33 @@ TEST_CASE("feature graph: primitive + parametric edit + regenerate", "[features]
     REQUIRE(doc.body_ids().size() == 1);  // no duplicate bodies
 }
 
+TEST_CASE("feature graph: cylinder respects z_dir placement", "[features]") {
+    Document doc;
+    FeatureGraph graph;
+
+    Feature cyl;
+    cyl.type = FeatureType::Primitive;
+    // Radius 4, height 20, axis along +X from origin.
+    cyl.params = {{"kind", "cylinder"},
+                  {"a", 4.0},
+                  {"b", 20.0},
+                  {"origin", json::array({0.0, 0.0, 0.0})},
+                  {"z_dir", json::array({1.0, 0.0, 0.0})},
+                  {"x_dir", json::array({0.0, 0.0, -1.0})}};
+    auto fid = graph.add(std::move(cyl));
+
+    std::string err;
+    REQUIRE(graph.regenerate(doc, &err));
+    EntityId body_id = graph.feature(fid)->output_body;
+    const Body* b = doc.body(body_id);
+    REQUIRE(b != nullptr);
+    REQUIRE(shape::volume(b->shape) == Approx(M_PI * 16.0 * 20.0).epsilon(1e-6));
+    auto com = shape::center_of_mass(b->shape);
+    REQUIRE(com[0] == Approx(10.0).margin(1e-3));
+    REQUIRE(com[1] == Approx(0.0).margin(1e-3));
+    REQUIRE(com[2] == Approx(0.0).margin(1e-3));
+}
+
 TEST_CASE("feature graph: sketch -> extrude -> fillet chain", "[features]") {
     Document doc;
     FeatureGraph graph;

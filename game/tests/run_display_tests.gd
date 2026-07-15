@@ -161,7 +161,7 @@ func test_section_plane(view: DocumentView) -> void:
 
 
 func test_backface_shader(view: DocumentView) -> void:
-	print("- body shader exposes translucent back faces")
+	print("- body shader darkens back faces while staying opaque")
 	view.new_document()
 	var id: String = view.insert_primitive("box", Vector3.ZERO)
 	var mat := _surface_mat(view, id)
@@ -170,10 +170,10 @@ func test_backface_shader(view: DocumentView) -> void:
 		var sm := mat as ShaderMaterial
 		check(sm.shader != null, "body material has shader")
 		check(sm.shader.code.contains("FRONT_FACING"), "shader branches on FRONT_FACING")
-		check(sm.shader.code.contains("backface_alpha") or sm.shader.code.contains("ALPHA"),
-			"shader writes ALPHA for back faces")
-		check(is_equal_approx(float(sm.get_shader_parameter("backface_alpha")), 0.18),
-			"default backface_alpha is 0.18")
+		# ALPHA writes put the solid in the transparent pass — a boolean hole
+		# then orbits like a slideshow. Keep backfaces opaque + darkened.
+		check(not sm.shader.code.contains("ALPHA"), "shader must not write ALPHA")
+		check(sm.shader.code.contains("cull_disabled"), "both sides drawn for holes")
 
 
 func test_selection_corners(view: DocumentView) -> void:

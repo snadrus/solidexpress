@@ -26,6 +26,7 @@ func _init() -> void:
 	await howto_place_and_orbit(main)
 	await howto_stack_three_blocks(main)
 	await howto_extrude_s_shape(main)
+	await howto_horizontal_hole(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -142,3 +143,148 @@ func howto_extrude_s_shape(main) -> void:
 	var mp: Dictionary = view.doc.measure_mass(id)
 	var vol: float = float(mp.get("volume", 0.0))
 	check(vol > 100.0, "S extrusion has substantial volume (got %s)" % vol)
+
+
+## docs/howto/horizontal-hole.md
+func howto_horizontal_hole(main) -> void:
+	print("- howto_horizontal_hole")
+	var view: DocumentView = main.view
+	var ix: ViewportInteraction = main.interaction
+	view.new_document()
+
+	# 1–2. Box + cylinder beside it (sizes match the howto).
+	var box: String = view.insert_primitive("box", Vector3.ZERO, Vector3(20, 20, 20))
+	var cyl: String = view.insert_primitive("cylinder", Vector3(40, 0, 0), Vector3(8, 8, 10))
+	check(box != "" and cyl != "", "box and cylinder placed")
+	check(view.doc.body_ids().size() == 2, "two bodies before cut")
+
+	# Upright stretch on flat (+Z) end lengthens without tilting.
+	view.select_entity(cyl, "")
+	var bb: Dictionary = view.doc.measure_bbox(cyl)
+	var len0: float = float(bb["max"].z) - float(bb["min"].z)
+	var mn: Vector3 = bb["min"]
+	var mx: Vector3 = bb["max"]
+	mx.z += 6.0
+	check(view.resize_primitive_aabb(cyl, mn, mx), "upright +Z stretch commits")
+	bb = view.doc.measure_bbox(cyl)
+	check(absf((float(bb["max"].z) - float(bb["min"].z)) - (len0 + 6.0)) < 1e-2,
+		"upright stretch grew length by 6 (got %s)" % (bb["max"].z - bb["min"].z))
+	check(absf(float(bb["max"].x) - float(bb["min"].x) - 8.0) < 1e-2,
+		"upright stretch kept diameter")
+
+	# 3. Rotate cylinder 90° about Y → axis horizontal (parametric: keeps z_dir).
+	bb = view.doc.measure_bbox(cyl)
+	var c: Vector3 = (bb["min"] + bb["max"]) * 0.5
+	check(view.rotate_selected(c, Vector3(0, 1, 0), PI / 2.0), "rotate cylinder 90° about Y")
+	bb = view.doc.measure_bbox(cyl)
+	var size: Vector3 = bb["max"] - bb["min"]
+	check(size.x > size.z - 1e-2, "after rotate, extent is longer in X than Z")
+	var params: Dictionary = view.feature_params(cyl)
+	var z_dir := DocumentView._param_vec3(params, "z_dir", Vector3.ZERO)
+	check(z_dir.dot(Vector3(1, 0, 0)) > 0.99, "params z_dir along +X after rotate")
+
+	# Flat-end stretch (+X) lengthens; must NOT snap upright / change rotation.
+	var len_x0: float = float(bb["max"].x) - float(bb["min"].x)
+	var diam_y0: float = float(bb["max"].y) - float(bb["min"].y)
+	mn = bb["min"]
+	mx = bb["max"]
+	mx.x += 10.0
+	check(view.resize_primitive_aabb(cyl, mn, mx), "horizontal +X stretch commits")
+	bb = view.doc.measure_bbox(cyl)
+	check(absf((float(bb["max"].x) - float(bb["min"].x)) - (len_x0 + 10.0)) < 1e-2,
+		"flat-end stretch grew length along X by 10 (got %s)" % (bb["max"].x - bb["min"].x))
+	check(absf((float(bb["max"].y) - float(bb["min"].y)) - diam_y0) < 1e-2,
+		"flat-end stretch kept diameter")
+	params = view.feature_params(cyl)
+	z_dir = DocumentView._param_vec3(params, "z_dir", Vector3.ZERO)
+	check(z_dir.dot(Vector3(1, 0, 0)) > 0.99, "stretch preserved position (still horizontal)")
+
+	# Radial stretch (both Y and Z — diameter = min of the two) keeps axis horizontal.
+	mn = bb["min"]
+	mx = bb["max"]
+	mx.y += 2.0
+	mn.y -= 2.0
+	mx.z += 2.0
+	mn.z -= 2.0
+	check(view.resize_primitive_aabb(cyl, mn, mx), "radial stretch commits")
+	bb = view.doc.measure_bbox(cyl)
+	check(absf((float(bb["max"].y) - float(bb["min"].y)) - (diam_y0 + 4.0)) < 1e-2,
+		"radial stretch grew diameter")
+	params = view.feature_params(cyl)
+	z_dir = DocumentView._param_vec3(params, "z_dir", Vector3.ZERO)
+	check(z_dir.dot(Vector3(1, 0, 0)) > 0.99, "radial stretch did not re-orient cylinder")
+
+	# 4. Lengthen further via Pull on an end face (alternate path).
+	c = (bb["min"] + bb["max"]) * 0.5
+	var end_hit: Dictionary = view.doc.pick(
+			Vector3(bb["max"].x + 50.0, c.y, c.z), Vector3(-1, 0, 0))
+	check(not end_hit.is_empty() and end_hit["body"] == cyl, "picked cylinder end face")
+	view.select_entity(cyl, end_hit["face"])
+	var len_before_pull: float = float(bb["max"].x) - float(bb["min"].x)
+	check(view.push_pull_selected(12.0), "lengthen cylinder via pull")
+	bb = view.doc.measure_bbox(cyl)
+	check(float(bb["max"].x) - float(bb["min"].x) > len_before_pull + 11.0,
+		"pull grew length along X")
+	check(float(bb["max"].x) - float(bb["min"].x) > 30.0, "cylinder longer than box width")
+
+	# 5. Push through the box center.
+	view.select_entity(cyl, "")
+	bb = view.doc.measure_bbox(cyl)
+	c = (bb["min"] + bb["max"]) * 0.5
+	var box_bb: Dictionary = view.doc.measure_bbox(box)
+	var box_c: Vector3 = (box_bb["min"] + box_bb["max"]) * 0.5
+	check(view.move_selected(box_c - c), "move cylinder through box")
+	bb = view.doc.measure_bbox(cyl)
+	check(float(bb["min"].x) < float(box_bb["min"].x) - 1e-2
+			and float(bb["max"].x) > float(box_bb["max"].x) + 1e-2,
+		"cylinder sticks out both sides of the box")
+	params = view.feature_params(cyl)
+	z_dir = DocumentView._param_vec3(params, "z_dir", Vector3.ZERO)
+	check(z_dir.dot(Vector3(1, 0, 0)) > 0.99, "move kept cylinder horizontal")
+
+	# 6. Multi-select with box primary (last), then Subtract.
+	view.select_entity(cyl, "")
+	# Additive pick from a point that hits the box (cylinder already selected).
+	check(view.select_ray(Vector3(box_c.x, box_c.y, 500.0), Vector3(0, 0, -1), true),
+		"Shift-add box to selection")
+	check(view.selected_bodies.size() == 2, "two bodies multi-selected")
+	check(view.selected_body == box, "box is primary (last selected)")
+	ix._refresh_selection_strip()
+	check(ix._strip_cut.visible, "Subtract strip visible")
+	var vol0: float = view.doc.body_volume(box)
+	ix._ctx_boolean("cut")
+	check(view.doc.body_ids().size() == 1, "cut leaves one body")
+	var remaining: String = str(view.doc.body_ids()[0])
+	check(remaining == box, "remaining body is the box")
+	# Diameter was stretched +4 total (r≈6); through depth = box X = 20.
+	var drop: float = vol0 - view.doc.body_volume(box)
+	var r_final: float = (float(bb["max"].y) - float(bb["min"].y)) * 0.5
+	var expected: float = PI * r_final * r_final * 20.0
+	check(absf(drop - expected) < expected * 0.05,
+		"horizontal hole volume drop ~%.0f (got %.0f)" % [expected, drop])
+	# Cut stays: move/rotate mutate the live solid and must not resurrect tools
+	# or rebuild the uncut primitives.
+	var vol_cut: float = view.doc.body_volume(box)
+	var bb_cut: Dictionary = view.doc.measure_bbox(box)
+	view.select_entity(box, "")
+	check(view.move_selected(Vector3(5, 0, 0)), "move cut result")
+	check(view.doc.body_ids().size() == 1, "move after cut still one body")
+	check(str(view.doc.body_ids()[0]) == box, "move after cut keeps the box id")
+	check(absf(view.doc.body_volume(box) - vol_cut) < 1.0,
+		"move after cut preserves holed volume (got %.0f vs %.0f)" % [
+				view.doc.body_volume(box), vol_cut])
+	var bb_moved: Dictionary = view.doc.measure_bbox(box)
+	check(absf(float(bb_moved["min"].x) - float(bb_cut["min"].x) - 5.0) < 1e-2,
+		"move shifted the holed solid (not a rebuilt stock box)")
+	var c_cut: Vector3 = (bb_moved["min"] + bb_moved["max"]) * 0.5
+	check(view.rotate_selected(c_cut, Vector3(0, 0, 1), PI / 6.0), "rotate cut result")
+	check(view.doc.body_ids().size() == 1, "rotate after cut still one body")
+	check(absf(view.doc.body_volume(box) - vol_cut) < 1.0,
+		"rotate after cut preserves holed volume")
+	var has_boolean := false
+	for f in view.doc.graph_features():
+		if str(f.get("type", "")) == "boolean":
+			has_boolean = true
+			break
+	check(has_boolean, "Subtract recorded as a timeline boolean feature")
+	await process_frame

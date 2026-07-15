@@ -172,7 +172,7 @@ Round 19 test state: kernel 210 cases / 7043 assertions; Godot voice 29 + help 1
 ## Usability / how-tos (post voice bridge)
 - [x] Place trust: ghost sits on floor; Esc after palette arm; selection kept after commit+release; middle/wheel orbit via `_input` (works over docks)
 - [x] Stack-on-face: `insert_primitive` uses floor z; place ray hits body top → stack; three boxes → height 150
-- [x] How-tos: `docs/howto/place-and-orbit.md`, `stack-three-blocks.md`, `extrude-s-shape.md` + README links; `run_howto_tests.gd` (13) mirrors goals
+- [x] How-tos: `docs/howto/place-and-orbit.md`, `stack-three-blocks.md`, `extrude-s-shape.md`, `horizontal-hole.md` + README links; `run_howto_tests.gd` mirrors goals
 - [x] Place suite extended (34 checks)
 
 ## Later phases

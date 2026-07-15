@@ -43,6 +43,10 @@ var display_mode := DisplayMode.SHADED_EDGES
 var section_enabled := false
 ## Body ids currently hidden from view / picking (id -> true).
 var hidden_bodies := {}
+## Body ids remembered by Ctrl+C for later Ctrl+V paste (may become stale).
+var _clipboard_bodies: Array[String] = []
+## Pastes since last copy — scales the XY offset so each paste lands further away.
+var _clipboard_paste_count := 0
 
 const EDGE_PICK_TOLERANCE := 2.5  # model units (mm)
 const DATUM_PLANE_HALF := 20.0  # ~40 unit square
@@ -135,29 +139,29 @@ func _ready() -> void:
 	refresh()
 
 
-## Front faces opaque; back faces translucent so shells / holes read correctly.
+## Front faces full albedo; back faces darker so hole/shell interiors read.
+## Must stay fully opaque (no ALPHA write): translucent body materials force
+## Godot's transparent pass and turn a boolean hole into a slideshow on orbit.
 func _make_body_shader() -> Shader:
 	var s := Shader.new()
 	s.code = """
 shader_type spatial;
-render_mode blend_mix, depth_prepass_alpha, cull_disabled, diffuse_lambert, specular_schlick_ggx;
+render_mode cull_disabled, diffuse_lambert, specular_schlick_ggx;
 
 uniform vec4 albedo_color : source_color = vec4(0.72, 0.74, 0.78, 1.0);
 uniform float metallic : hint_range(0.0, 1.0) = 0.1;
 uniform float roughness : hint_range(0.0, 1.0) = 0.55;
 uniform float emission_energy : hint_range(0.0, 2.0) = 0.0;
-uniform float backface_alpha : hint_range(0.0, 1.0) = 0.18;
 
 void fragment() {
+	if (albedo_color.a < 0.01) {
+		discard;
+	}
 	bool back = !FRONT_FACING;
 	ALBEDO = albedo_color.rgb * (back ? 0.55 : 1.0);
 	METALLIC = metallic;
 	ROUGHNESS = roughness;
 	EMISSION = albedo_color.rgb * emission_energy;
-	ALPHA = back ? backface_alpha : albedo_color.a;
-	if (albedo_color.a < 0.01) {
-		ALPHA = 0.0;
-	}
 }
 """
 	return s
@@ -170,7 +174,6 @@ func _make_material(color: Color, emission_energy: float = 0.0) -> ShaderMateria
 	m.set_shader_parameter("metallic", 0.1)
 	m.set_shader_parameter("roughness", 0.55)
 	m.set_shader_parameter("emission_energy", emission_energy)
-	m.set_shader_parameter("backface_alpha", 0.18)
 	return m
 
 
@@ -178,7 +181,7 @@ func _make_section_shader() -> Shader:
 	var s := Shader.new()
 	s.code = """
 shader_type spatial;
-render_mode blend_mix, depth_prepass_alpha, cull_disabled, diffuse_lambert, specular_schlick_ggx;
+render_mode cull_disabled, diffuse_lambert, specular_schlick_ggx;
 
 uniform vec4 albedo_color : source_color = vec4(0.72, 0.74, 0.78, 1.0);
 uniform vec3 section_point = vec3(0.0);
@@ -208,7 +211,6 @@ void fragment() {
 	METALLIC = metallic;
 	ROUGHNESS = roughness;
 	EMISSION = emission_color.rgb * emission_energy;
-	ALPHA = back ? 0.18 : 1.0;
 }
 """
 	return s
@@ -379,6 +381,8 @@ func selection_bbox() -> Dictionary:
 
 ## Resize a primitive body so its AABB becomes `new_min`..`new_max`.
 ## Returns false when the body is not a primitive or the edit fails.
+## Cylinders / cones honor optional `z_dir` so end-face stretches change length
+## after a rotate, instead of rewriting an upright Z-axis solid.
 func resize_primitive_aabb(body_id: String, new_min: Vector3, new_max: Vector3) -> bool:
 	if not is_primitive_body(body_id):
 		return false
@@ -397,19 +401,13 @@ func resize_primitive_aabb(body_id: String, new_min: Vector3, new_max: Vector3) 
 			params["c"] = size.z
 			params["origin"] = [new_min.x, new_min.y, new_min.z]
 		"cylinder":
-			var r := minf(size.x, size.y) * 0.5
-			params["a"] = r
-			params["b"] = size.z
-			params["origin"] = [new_min.x + r, new_min.y + r, new_min.z]
+			_apply_cyl_cone_aabb_params(params, size, new_min, new_max, false)
 		"sphere":
 			var r2 := minf(size.x, minf(size.y, size.z)) * 0.5
 			params["a"] = r2
 			params["origin"] = [new_min.x + r2, new_min.y + r2, new_min.z + r2]
 		"cone":
-			params["a"] = size.x * 0.5
-			params["b"] = float(params.get("b", size.x * 0.1))
-			params["c"] = size.z
-			params["origin"] = [new_min.x + size.x * 0.5, new_min.y + size.y * 0.5, new_min.z]
+			_apply_cyl_cone_aabb_params(params, size, new_min, new_max, true)
 		"torus":
 			params["a"] = size.x * 0.5
 			params["b"] = size.z * 0.5
@@ -425,9 +423,95 @@ func resize_primitive_aabb(body_id: String, new_min: Vector3, new_max: Vector3) 
 	return true
 
 
+static func _param_vec3(params: Dictionary, key: String, fallback: Vector3) -> Vector3:
+	if not params.has(key):
+		return fallback
+	var v = params[key]
+	if typeof(v) != TYPE_ARRAY and typeof(v) != TYPE_PACKED_FLOAT32_ARRAY \
+			and typeof(v) != TYPE_PACKED_FLOAT64_ARRAY:
+		return fallback
+	if v.size() < 3:
+		return fallback
+	return Vector3(float(v[0]), float(v[1]), float(v[2]))
+
+
+static func _vec3_to_param(v: Vector3) -> Array:
+	return [v.x, v.y, v.z]
+
+
+## Map a world AABB onto cylinder/cone params using `z_dir` (default +Z).
+static func _apply_cyl_cone_aabb_params(params: Dictionary, size: Vector3,
+		new_min: Vector3, new_max: Vector3, is_cone: bool) -> void:
+	var z := _param_vec3(params, "z_dir", Vector3(0, 0, 1))
+	if z.length_squared() < 1e-12:
+		z = Vector3(0, 0, 1)
+	else:
+		z = z.normalized()
+	var axis := _dominant_axis(z)
+	var height: float = size[axis]
+	var r_a := size[(axis + 1) % 3]
+	var r_b := size[(axis + 2) % 3]
+	var r := minf(r_a, r_b) * 0.5
+	params["a"] = r
+	if is_cone:
+		params["b"] = float(params.get("b", r * 0.2))
+		params["c"] = height
+	else:
+		params["b"] = height
+	var center := (new_min + new_max) * 0.5
+	var origin := center - z * (height * 0.5)
+	params["origin"] = _vec3_to_param(origin)
+	params["z_dir"] = _vec3_to_param(z)
+	if not params.has("x_dir"):
+		var x := Vector3(1, 0, 0) if absf(z.dot(Vector3(1, 0, 0))) < 0.9 else Vector3(0, 0, -1)
+		x = (x - z * x.dot(z)).normalized()
+		params["x_dir"] = _vec3_to_param(x)
+
+
+static func _dominant_axis(v: Vector3) -> int:
+	if absf(v.x) >= absf(v.y) and absf(v.x) >= absf(v.z):
+		return 0
+	if absf(v.y) >= absf(v.x) and absf(v.y) >= absf(v.z):
+		return 1
+	return 2
+
+
+## Re-read cylinder/cone radius+height+origin from the live body AABB so a prior
+## push/pull (or any BREP edit) does not get wiped by the next parametric regen.
+func _sync_cyl_cone_params_from_body(body_id: String, params: Dictionary) -> void:
+	var kind := str(params.get("kind", ""))
+	if kind != "cylinder" and kind != "cone":
+		return
+	var bb: Dictionary = doc.measure_bbox(body_id)
+	if bb.is_empty():
+		return
+	_apply_cyl_cone_aabb_params(params, bb["max"] - bb["min"], bb["min"], bb["max"],
+			kind == "cone")
+
+
 func graph_changed() -> void:
 	clear_selection()
 	_after_mutation()
+
+
+## Boolean two bodies. Timeline-owned bodies get a graph Boolean feature so later
+## primitive edits / regenerates keep the cut (tool stays consumed). Free bodies
+## use the imperative boolean_op path.
+func boolean_bodies(target: String, tool: String, op: String) -> bool:
+	if target == "" or tool == "" or target == tool:
+		return false
+	var target_fid := feature_of_body(target)
+	var tool_fid := feature_of_body(tool)
+	if target_fid != "" and tool_fid != "":
+		var fid := doc.graph_add_boolean(op, target_fid, tool_fid)
+		if fid == "":
+			return false
+		_after_mutation()
+		return true
+	if not doc.boolean_op(target, tool, op, false):
+		return false
+	_after_mutation()
+	return true
 
 
 # --- selection ---
@@ -814,18 +898,125 @@ func body_center(body_id: String) -> Vector3:
 func move_selected(delta: Vector3) -> bool:
 	if selected_body == "":
 		return false
-	var ok := doc.translate_body(selected_body, delta)
+	# Live BREP translate — never regenerate on move (regen would rebuild
+	# primitives and undo booleans / pull / other committed shape edits).
+	if not doc.translate_body(selected_body, delta):
+		return false
+	_nudge_related_placements(selected_body, delta)
 	_after_mutation()
-	return ok
+	return true
 
 
 ## Rotate the selected body about `axis_point` along `axis_dir` by `angle` (rad).
 func rotate_selected(axis_point: Vector3, axis_dir: Vector3, angle: float) -> bool:
 	if selected_body == "":
 		return false
-	var ok := doc.rotate_body(selected_body, axis_point, axis_dir, angle)
+	if absf(angle) < 1e-12 or axis_dir.length_squared() < 1e-12:
+		return true
+	if not doc.rotate_body(selected_body, axis_point, axis_dir, angle):
+		return false
+	_transform_related_placements(selected_body, axis_point, Basis(axis_dir.normalized(), angle))
 	_after_mutation()
-	return ok
+	return true
+
+
+## Feature ids whose placement should track a move/rotate of `body_id`: the body
+## owner plus boolean tools (and their placements) that cut/fuse into it.
+func _related_feature_ids(body_id: String) -> Array[String]:
+	var out: Array[String] = []
+	var fid := feature_of_body(body_id)
+	if fid == "":
+		return out
+	out.append(fid)
+	for f in doc.graph_features():
+		var p = JSON.parse_string(str(f.get("params", "{}")))
+		if typeof(p) != TYPE_DICTIONARY:
+			continue
+		if str(f.get("type", "")) == "boolean" and str(p.get("target", "")) == fid:
+			var tool_fid := str(p.get("tool", ""))
+			if tool_fid != "" and not out.has(tool_fid):
+				out.append(tool_fid)
+		elif str(p.get("target", "")) == fid:
+			# Hole / fillet / etc. store world positions that must track the body.
+			var child := str(f.get("id", ""))
+			if child != "" and not out.has(child):
+				out.append(child)
+	return out
+
+
+func _nudge_related_placements(body_id: String, delta: Vector3) -> void:
+	for fid in _related_feature_ids(body_id):
+		_nudge_feature_placement(fid, delta)
+
+
+func _transform_related_placements(body_id: String, axis_point: Vector3, R: Basis) -> void:
+	for fid in _related_feature_ids(body_id):
+		_transform_feature_placement(fid, axis_point, R)
+
+
+func _feature_record(fid: String) -> Dictionary:
+	for f in doc.graph_features():
+		if str(f.get("id", "")) == fid:
+			return f
+	return {}
+
+
+func _feature_params_by_id(fid: String) -> Dictionary:
+	var f := _feature_record(fid)
+	if f.is_empty():
+		return {}
+	var parsed = JSON.parse_string(str(f.get("params", "{}")))
+	return parsed if typeof(parsed) == TYPE_DICTIONARY else {}
+
+
+func _write_feature_params_quiet(fid: String, params: Dictionary) -> bool:
+	return doc.graph_set_params_no_regen(fid, JSON.stringify(params))
+
+
+func _nudge_feature_placement(fid: String, delta: Vector3) -> void:
+	var params := _feature_params_by_id(fid)
+	if params.is_empty():
+		return
+	if params.has("origin"):
+		params["origin"] = _vec3_to_param(_param_vec3(params, "origin", Vector3.ZERO) + delta)
+	if params.has("position"):
+		params["position"] = _vec3_to_param(_param_vec3(params, "position", Vector3.ZERO) + delta)
+	_write_feature_params_quiet(fid, params)
+
+
+func _transform_feature_placement(fid: String, axis_point: Vector3, R: Basis) -> void:
+	var rec := _feature_record(fid)
+	var params := _feature_params_by_id(fid)
+	if params.is_empty():
+		return
+	if params.has("origin"):
+		var o := _param_vec3(params, "origin", Vector3.ZERO)
+		params["origin"] = _vec3_to_param(axis_point + R * (o - axis_point))
+	if params.has("position"):
+		var p := _param_vec3(params, "position", Vector3.ZERO)
+		params["position"] = _vec3_to_param(axis_point + R * (p - axis_point))
+	# Primitives always keep an axis frame so later stretch/regen stay oriented.
+	var is_prim := str(rec.get("type", "")) == "primitive"
+	if is_prim or params.has("z_dir") or params.has("x_dir"):
+		var z0 := _param_vec3(params, "z_dir", Vector3(0, 0, 1))
+		var x0 := _param_vec3(params, "x_dir", Vector3(1, 0, 0))
+		if z0.length_squared() < 1e-12:
+			z0 = Vector3(0, 0, 1)
+		if x0.length_squared() < 1e-12:
+			x0 = Vector3(1, 0, 0)
+		var new_z := (R * z0).normalized()
+		var new_x := (R * x0).normalized()
+		new_x = (new_x - new_z * new_x.dot(new_z)).normalized()
+		if new_x.length_squared() < 1e-12:
+			var hint := Vector3(1, 0, 0) if absf(new_z.dot(Vector3(1, 0, 0))) < 0.9 \
+					else Vector3(0, 0, -1)
+			new_x = (hint - new_z * hint.dot(new_z)).normalized()
+		params["z_dir"] = _vec3_to_param(new_z)
+		params["x_dir"] = _vec3_to_param(new_x)
+	if params.has("direction"):
+		params["direction"] = _vec3_to_param(
+				(R * _param_vec3(params, "direction", Vector3(0, 0, 1))).normalized())
+	_write_feature_params_quiet(fid, params)
 
 
 func push_pull_selected(distance: float) -> bool:
@@ -834,6 +1025,13 @@ func push_pull_selected(distance: float) -> bool:
 	var face := selected_face
 	var body := selected_body
 	var ok := doc.push_pull(face, distance)
+	if ok and is_primitive_body(body):
+		# Bake pull into cylinder/cone params without rebuilding (keeps length).
+		var info := feature_info(body)
+		var params := feature_params(body)
+		if not info.is_empty() and not params.is_empty():
+			_sync_cyl_cone_params_from_body(body, params)
+			_write_feature_params_quiet(info["id"], params)
 	_after_mutation()
 	if ok:
 		# Face ids are reassigned after a shape change (naming v0); keep the
@@ -842,20 +1040,105 @@ func push_pull_selected(distance: float) -> bool:
 	return ok
 
 
+## Delete every selected body. Timeline-owned bodies remove their feature
+## (fails if later features depend on it); free bodies delete directly.
 func delete_selected() -> bool:
-	if selected_body == "":
+	var ids: Array[String] = []
+	for b in selected_bodies:
+		if b != "" and not ids.has(b):
+			ids.append(b)
+	if selected_body != "" and not ids.has(selected_body):
+		ids.append(selected_body)
+	if ids.is_empty():
 		return false
-	# Bodies owned by a timeline feature are deleted by removing the feature
-	# (fails if later features depend on it); free bodies delete directly.
-	var fid := feature_of_body(selected_body)
-	var ok: bool
-	if fid != "":
-		ok = doc.graph_remove(fid)
-	else:
-		ok = doc.delete_body(selected_body)
+	var any := false
+	for body_id in ids:
+		var fid := feature_of_body(body_id)
+		var ok: bool
+		if fid != "":
+			ok = doc.graph_remove(fid)
+		else:
+			ok = doc.delete_body(body_id)
+		if ok:
+			any = true
 	clear_selection()
 	_after_mutation()
-	return ok
+	return any
+
+
+## Remember currently selected bodies for paste. Returns how many were copied.
+func copy_selection() -> int:
+	var ids: Array[String] = []
+	for b in selected_bodies:
+		ids.append(b)
+	if ids.is_empty() and selected_body != "":
+		ids.append(selected_body)
+	_clipboard_bodies.clear()
+	_clipboard_paste_count = 0
+	var live := {}
+	for id in doc.body_ids():
+		live[id] = true
+	for id in ids:
+		if live.has(id) and not _clipboard_bodies.has(id):
+			_clipboard_bodies.append(id)
+	return _clipboard_bodies.size()
+
+
+## Paste clipboard bodies offset by 20% of their combined AABB in the ground
+## plane (XY). Each successive paste without re-copy steps further by that
+## same delta. Returns the new body ids (selection is set to them).
+func paste_clipboard() -> Array[String]:
+	var live := {}
+	for id in doc.body_ids():
+		live[id] = true
+	var sources: Array[String] = []
+	for id in _clipboard_bodies:
+		if live.has(id):
+			sources.append(id)
+	if sources.is_empty():
+		return []
+
+	var mn := Vector3(1e12, 1e12, 1e12)
+	var mx := Vector3(-1e12, -1e12, -1e12)
+	var any := false
+	for id in sources:
+		var bb: Dictionary = doc.measure_bbox(id)
+		if bb.is_empty():
+			continue
+		any = true
+		mn = mn.min(bb["min"])
+		mx = mx.max(bb["max"])
+	if not any:
+		return []
+	var size: Vector3 = mx - mn
+	# Ground plane is kernel XY (Z-up). Offset 20% of planar bounds in each axis.
+	var step := Vector3(size.x * 0.2, size.y * 0.2, 0.0)
+	if step.length_squared() < 1e-8:
+		step = Vector3(1.0, 1.0, 0.0)
+	_clipboard_paste_count += 1
+	var offset := step * float(_clipboard_paste_count)
+	var spacing := offset.length()
+	var direction := offset / spacing
+
+	var created: Array[String] = []
+	for id in sources:
+		var made: PackedStringArray = doc.linear_pattern(id, direction, spacing, 2)
+		if made.size() > 0:
+			created.append(made[0])
+	if created.is_empty():
+		return []
+	selected_body = created[created.size() - 1]
+	selected_face = ""
+	selected_edge = ""
+	selected_bodies.assign(created)
+	selected_faces.clear()
+	selected_edges.clear()
+	if selected_instance != "":
+		selected_instance = ""
+		_apply_instance_highlight()
+	_after_mutation()
+	selection_changed.emit(selected_body, selected_face)
+	return created
 
 
 func set_selection_alias(text: String) -> void:
@@ -892,6 +1175,8 @@ func load_from(path: String) -> bool:
 	var ok := doc.load(path)
 	clear_selection()
 	hidden_bodies.clear()
+	_clipboard_bodies.clear()
+	_clipboard_paste_count = 0
 	_after_mutation()
 	return ok
 
@@ -900,6 +1185,8 @@ func new_document() -> void:
 	doc = SxDocument.new()
 	clear_selection()
 	hidden_bodies.clear()
+	_clipboard_bodies.clear()
+	_clipboard_paste_count = 0
 	_after_mutation()
 
 

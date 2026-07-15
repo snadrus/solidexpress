@@ -36,6 +36,8 @@ func _init() -> void:
 	await test_chrome_hover_does_not_block_empty_input(main)
 	test_shift_empty_keeps_selection(main)
 	test_multi_boolean_instant(main)
+	test_copy_paste_offset(main)
+	test_delete_key_and_strip(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -370,3 +372,110 @@ func test_multi_boolean_instant(main) -> void:
 	var vol1: float = float(view.doc.body_volume(remaining))
 	check(vol1 > vol0 + 1.0, "fused volume larger than primary alone")
 	check(b != "", "tool body id allocated")
+
+
+func test_copy_paste_offset(main) -> void:
+	print("- Ctrl+C / Ctrl+V paste offset")
+	var view: DocumentView = main.view
+	var vi: ViewportInteraction = main.interaction
+	view.new_document()
+	# 50×30×10 box so XY offset is predictable: 20% → (10, 6, 0).
+	var a: String = view.insert_primitive("box", Vector3.ZERO, Vector3(50, 30, 10))
+	view.select_entity(a, "")
+	var bb0: Dictionary = view.doc.measure_bbox(a)
+	check(not bb0.is_empty(), "source has bbox")
+
+	var key_c := InputEventKey.new()
+	key_c.keycode = KEY_C
+	key_c.ctrl_pressed = true
+	key_c.pressed = true
+	check(vi._gui_key(key_c), "Ctrl+C handled")
+	check(view._clipboard_bodies.size() == 1, "one body on clipboard")
+	check(view._clipboard_bodies[0] == a, "clipboard is the selected body")
+
+	var before_ids: PackedStringArray = view.doc.body_ids()
+	var key_v := InputEventKey.new()
+	key_v.keycode = KEY_V
+	key_v.ctrl_pressed = true
+	key_v.pressed = true
+	check(vi._gui_key(key_v), "Ctrl+V handled")
+	check(view.doc.body_ids().size() == before_ids.size() + 1, "paste added one body")
+	check(view.selection_size() == 1, "paste selects the new body")
+	var pasted: String = view.selected_body
+	check(pasted != "" and pasted != a, "selection is the paste, not the source")
+	var bb1: Dictionary = view.doc.measure_bbox(pasted)
+	var delta: Vector3 = bb1["min"] - bb0["min"]
+	check(is_equal_approx(delta.x, 10.0), "paste ΔX = 20%% of width (got %.3f)" % delta.x)
+	check(is_equal_approx(delta.y, 6.0), "paste ΔY = 20%% of depth (got %.3f)" % delta.y)
+	check(is_equal_approx(delta.z, 0.0), "paste stays on plane (ΔZ=0, got %.3f)" % delta.z)
+
+	# Second paste steps further by the same offset.
+	check(vi._gui_key(key_v), "second Ctrl+V")
+	check(view.doc.body_ids().size() == before_ids.size() + 2, "second paste added another body")
+	var bb2: Dictionary = view.doc.measure_bbox(view.selected_body)
+	var delta2: Vector3 = bb2["min"] - bb0["min"]
+	check(is_equal_approx(delta2.x, 20.0), "second paste ΔX = 40%% of width (got %.3f)" % delta2.x)
+	check(is_equal_approx(delta2.y, 12.0), "second paste ΔY = 40%% of depth (got %.3f)" % delta2.y)
+
+	# Multi-select copy/paste keeps relative spacing.
+	view.new_document()
+	var p: String = view.insert_primitive("box", Vector3.ZERO, Vector3(10, 10, 10))
+	var q: String = view.insert_primitive("box", Vector3(40, 0, 0), Vector3(10, 10, 10))
+	view.select_entity(p, "")
+	view.select_ray(Vector3(40, 0, 200), Vector3(0, 0, -1), true)
+	check(view.selection_size() == 2, "multi-selected two bodies")
+	check(view.copy_selection() == 2, "copied two")
+	var n0: int = view.doc.body_ids().size()
+	var made: Array = view.paste_clipboard()
+	check(made.size() == 2, "pasted two (got %d)" % made.size())
+	check(view.doc.body_ids().size() == n0 + 2, "doc gained two bodies")
+	check(view.selection_size() == 2, "selection is both pastes")
+	# Combined group is 50 wide (0..10 and 40..50); 20% → 10 mm in X for both.
+	var bb_p: Dictionary = view.doc.measure_bbox(p)
+	var bb_m0: Dictionary = view.doc.measure_bbox(made[0])
+	check(is_equal_approx((bb_m0["min"] - bb_p["min"]).x, 10.0),
+		"multi paste shares group XY offset")
+	check(q != "", "second source allocated")
+
+
+func test_delete_key_and_strip(main) -> void:
+	print("- Del / Backspace / Delete strip remove selection")
+	var view: DocumentView = main.view
+	var vi: ViewportInteraction = main.interaction
+	view.new_document()
+	var a: String = view.insert_primitive("box", Vector3.ZERO)
+	var b: String = view.insert_primitive("box", Vector3(40, 0, 0))
+	view.select_entity(a, "")
+	check(view.selected_body == a, "body selected before delete")
+	# Focus elsewhere (simulates size HUD / dock) — Del must still work.
+	vi.release_focus()
+	check(not vi.has_focus(), "Interaction unfocused")
+	var key_del := InputEventKey.new()
+	key_del.keycode = KEY_DELETE
+	key_del.pressed = true
+	vi._input(key_del)
+	check(view.doc.body_ids().size() == 1, "Delete key removed body without focus")
+	check(view.selected_body == "", "selection cleared after Delete")
+	view.select_entity(b, "")
+	vi.release_focus()
+	var key_bs := InputEventKey.new()
+	key_bs.keycode = KEY_BACKSPACE
+	key_bs.pressed = true
+	vi._input(key_bs)
+	check(view.doc.body_ids().is_empty(), "Backspace removed remaining body")
+	# Strip Delete button.
+	var c: String = view.insert_primitive("box", Vector3.ZERO)
+	view.select_entity(c, "")
+	vi._refresh_selection_strip()
+	check(vi._strip_delete.visible, "Delete strip button visible")
+	vi._strip_delete.pressed.emit()
+	check(view.doc.body_ids().is_empty(), "strip Delete removed body")
+	# Multi-select delete removes every selected body.
+	var p: String = view.insert_primitive("box", Vector3.ZERO)
+	var q: String = view.insert_primitive("box", Vector3(40, 0, 0))
+	view.select_entity(p, "")
+	view.select_ray(Vector3(40, 0, 200), Vector3(0, 0, -1), true)
+	check(view.selection_size() == 2, "two bodies selected")
+	check(view.delete_selected(), "delete_selected removes multi")
+	check(view.doc.body_ids().is_empty(), "both bodies gone")
+	check(p != "" and q != "", "ids allocated")

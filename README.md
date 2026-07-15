@@ -61,6 +61,7 @@ Short, verified walkthroughs (each ends with the automated test that proves the 
 - [Place a box and orbit](docs/howto/place-and-orbit.md) — ground placement, selection kept, middle-drag over panels
 - [Stack three blocks](docs/howto/stack-three-blocks.md) — place on top faces (total height 150 mm)
 - [Extrude an S shape](docs/howto/extrude-s-shape.md) — closed S-channel sketch → solid
+- [Cut a horizontal hole](docs/howto/horizontal-hole.md) — rotate + lengthen a cylinder, Subtract through a box
 
 ## Keyboard and mouse
 
@@ -130,6 +131,7 @@ Short, verified walkthroughs (same steps exercised by `game/tests/run_howto_test
 - [Place a box and orbit](docs/howto/place-and-orbit.md)
 - [Stack three blocks](docs/howto/stack-three-blocks.md)
 - [Extrude an S-shaped profile](docs/howto/extrude-s-shape.md)
+- [Cut a horizontal hole](docs/howto/horizontal-hole.md)
 
 ## License policy
 

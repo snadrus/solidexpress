@@ -953,6 +953,9 @@ func _begin_resize(handle: Dictionary, pos: Vector2) -> void:
 	_resize_max = _resize_start_max
 	_resize_distance = 0.0
 	_resize_axis_hint = str(handle.get("hint", "Δ"))
+	# Radial grips on cyl/cone/sphere grow Ø about the axis — not a one-sided AABB slide.
+	if _coupled_resize_axes(_resize_signs).size() >= 2:
+		_resize_axis_hint = "ΔØ"
 	if transform_hud != null:
 		transform_hud.hide_move_delta()
 		transform_hud.hide_precision()
@@ -1282,14 +1285,7 @@ func _gui_key(event: InputEventKey) -> bool:
 			status.emit("")
 			return true
 		KEY_DELETE, KEY_BACKSPACE:
-			if view.selected_instance != "":
-				if view.doc.remove_instance(view.selected_instance):
-					view.refresh()
-					status.emit("Instance removed")
-				return true
-			if view.delete_selected():
-				status.emit("Deleted body")
-			return true
+			return _delete_selection()
 		KEY_C:
 			if event.ctrl_pressed:
 				var n := view.copy_selection()
@@ -1471,11 +1467,31 @@ func _on_hud_size(size: Vector3) -> void:
 	var bb := view.selection_bbox()
 	if bb.is_empty():
 		return
+	size = _equalize_hud_size_for_primitive(view.selected_body, size)
 	var center: Vector3 = bb["center"]
 	var half := size * 0.5
 	if view.resize_primitive_aabb(view.selected_body, center - half, center + half):
 		status.emit("Size → %.1f × %.1f × %.1f" % [size.x, size.y, size.z])
 	_refresh_transform_hud()
+
+
+## Cylinder/cone need equal radial AABB sides; sphere is isotropic.
+func _equalize_hud_size_for_primitive(body_id: String, size: Vector3) -> Vector3:
+	var params := view.feature_params(body_id)
+	var kind := str(params.get("kind", "box"))
+	if kind == "sphere":
+		var d := maxf(size.x, maxf(size.y, size.z))
+		return Vector3(d, d, d)
+	if kind != "cylinder" and kind != "cone":
+		return size
+	var z := DocumentView._param_vec3(params, "z_dir", Vector3(0, 0, 1))
+	var axis := DocumentView._dominant_axis(z)
+	var a := (axis + 1) % 3
+	var b := (axis + 2) % 3
+	var diam := maxf(size[a], size[b])
+	size[a] = diam
+	size[b] = diam
+	return size
 
 
 func _on_hud_move_delta(delta: Vector3) -> void:
@@ -1516,16 +1532,12 @@ func _on_hud_precision(distance: float) -> void:
 
 
 func _apply_precision_resize(distance: float) -> void:
-	var mn := Vector3(_precision_min)
-	var mx := Vector3(_precision_max)
-	for axis in range(3):
-		var s: float = _precision_signs[axis]
-		if absf(s) < 0.5:
-			continue
-		if s > 0.0:
-			mx[axis] = _precision_max[axis] + distance
-		else:
-			mn[axis] = _precision_min[axis] - distance
+	_resize_start_min = _precision_min
+	_resize_start_max = _precision_max
+	_resize_signs = _precision_signs
+	_apply_resize_delta(distance)
+	var mn := _resize_min
+	var mx := _resize_max
 	for axis in range(3):
 		if mx[axis] - mn[axis] < 0.1:
 			status.emit("Size too small")
@@ -1645,6 +1657,69 @@ func _screen_capped_tip(base_m: Vector3, tip_m: Vector3) -> Vector3:
 	return base_m.lerp(tip_m, limit / len_s)
 
 
+## AABB axes that must grow, together, when `signs` is a radial/sphere grip.
+## Empty → ordinary one-sided face stretch (boxes, cylinder length, etc.).
+func _coupled_resize_axes(signs: Vector3) -> PackedInt32Array:
+	if view == null or view.selected_body == "" or not view.is_primitive_body(view.selected_body):
+		return PackedInt32Array()
+	var params := view.feature_params(view.selected_body)
+	var kind := str(params.get("kind", "box"))
+	if kind == "sphere":
+		return PackedInt32Array([0, 1, 2])
+	if kind != "cylinder" and kind != "cone":
+		return PackedInt32Array()
+	var z := DocumentView._param_vec3(params, "z_dir", Vector3(0, 0, 1))
+	var height_axis := DocumentView._dominant_axis(z)
+	var drag_axis := -1
+	for i in range(3):
+		if absf(signs[i]) > 0.5:
+			drag_axis = i
+			break
+	if drag_axis < 0 or drag_axis == height_axis:
+		return PackedInt32Array()
+	var out := PackedInt32Array()
+	for i in range(3):
+		if i != height_axis:
+			out.append(i)
+	return out
+
+
+## Apply outward face travel `dist` (mm) onto `_resize_min`/`_resize_max`.
+## Radial cyl/cone/sphere grips expand diameter about the start center.
+func _apply_resize_delta(dist: float) -> void:
+	_resize_distance = dist
+	_resize_min = _resize_start_min
+	_resize_max = _resize_start_max
+	var coupled := _coupled_resize_axes(_resize_signs)
+	if coupled.size() >= 2:
+		var center := (_resize_start_min + _resize_start_max) * 0.5
+		var start_size := _resize_start_max - _resize_start_min
+		var start_diam := start_size[coupled[0]]
+		for i in range(1, coupled.size()):
+			start_diam = maxf(start_diam, start_size[coupled[i]])
+		var new_diam := maxf(0.1, start_diam + dist)
+		for ai in coupled:
+			_resize_min[ai] = center[ai] - new_diam * 0.5
+			_resize_max[ai] = center[ai] + new_diam * 0.5
+		return
+	var signs := _resize_signs
+	var axis := Vector3(signs.x, signs.y, signs.z).normalized()
+	var delta_vec := axis * dist
+	for ai in range(3):
+		var s: float = signs[ai]
+		if absf(s) < 0.5:
+			continue
+		if s > 0.0:
+			_resize_max[ai] = _resize_start_max[ai] + delta_vec[ai]
+		else:
+			_resize_min[ai] = _resize_start_min[ai] + delta_vec[ai]
+		if _resize_max[ai] - _resize_min[ai] < 0.1:
+			if s > 0.0:
+				_resize_max[ai] = _resize_min[ai] + 0.1
+			else:
+				_resize_min[ai] = _resize_max[ai] - 0.1
+
+
 func _update_resize_drag(screen_pos: Vector2) -> void:
 	var ray := _model_ray(screen_pos)
 	var o: Vector3 = ray[0]
@@ -1657,24 +1732,7 @@ func _update_resize_drag(screen_pos: Vector2) -> void:
 	if denom < 1e-12:
 		return
 	var dist := (o - _drag_start_point).dot(cross_dn.cross(d)) / denom
-	var delta_vec := axis * dist
-	_resize_distance = dist
-	_resize_min = _resize_start_min
-	_resize_max = _resize_start_max
-	for ai in range(3):
-		var s: float = signs[ai]
-		if absf(s) < 0.5:
-			continue
-		if s > 0.0:
-			_resize_max[ai] = _resize_start_max[ai] + delta_vec[ai]
-		else:
-			_resize_min[ai] = _resize_start_min[ai] + delta_vec[ai]
-		# Keep a tiny positive extent.
-		if _resize_max[ai] - _resize_min[ai] < 0.1:
-			if s > 0.0:
-				_resize_max[ai] = _resize_min[ai] + 0.1
-			else:
-				_resize_min[ai] = _resize_max[ai] - 0.1
+	_apply_resize_delta(dist)
 	if transform_hud != null:
 		var size := _resize_max - _resize_min
 		transform_hud.set_values((_resize_min + _resize_max) * 0.5, size, true)
@@ -1820,9 +1878,46 @@ func _input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 
-	if event is InputEventKey and has_focus():
-		if _gui_key(event):
+	if event is InputEventKey and event.pressed and not event.echo:
+		var ke := event as InputEventKey
+		# Del/Backspace must work without Interaction focus (focus often sits on
+		# docks after placing). Never steal keystrokes from live text fields.
+		if (ke.keycode == KEY_DELETE or ke.keycode == KEY_BACKSPACE) \
+				and not _text_field_has_focus():
+			if _gui_key(ke):
+				get_viewport().set_input_as_handled()
+				return
+		if has_focus() and _gui_key(ke):
 			get_viewport().set_input_as_handled()
+
+
+## True when a LineEdit / TextEdit (incl. SpinBox inner edit) owns focus.
+func _text_field_has_focus() -> bool:
+	var vp := get_viewport()
+	if vp == null:
+		return false
+	var f := vp.gui_get_focus_owner()
+	return f is LineEdit or f is TextEdit or f is CodeEdit
+
+
+## Delete selected bodies / instance. Returns false when there was nothing to delete.
+func _delete_selection() -> bool:
+	if view == null:
+		return false
+	if view.selected_instance != "":
+		if view.doc.remove_instance(view.selected_instance):
+			view.refresh()
+			status.emit("Instance removed")
+			return true
+		return false
+	var n := view.selection_size()
+	if n <= 0 and view.selected_body == "":
+		return false
+	if view.delete_selected():
+		status.emit("Deleted %d" % n if n > 1 else "Deleted body")
+		return true
+	status.emit("Cannot delete (later features depend on it)")
+	return false
 
 
 # --- selection chrome (strip + RMB) ---
@@ -1922,14 +2017,12 @@ func _ctx_boolean(op: String) -> void:
 			tools.append(str(id))
 	var ok_count := 0
 	for tool in tools:
-		if view.doc.boolean_op(primary, tool, op, false):
+		if view.boolean_bodies(primary, tool, op):
 			ok_count += 1
 		else:
 			status.emit("Boolean %s failed on tool %s" % [op, str(tool).left(8)])
-			view.graph_changed()
 			view.select_entity(primary, "")
 			return
-	view.graph_changed()
 	view.select_entity(primary, "")
 	status.emit("Boolean %s applied (%d tool%s)" % [
 			op, ok_count, "" if ok_count == 1 else "s"])
@@ -1948,13 +2041,7 @@ func _ctx_isolate() -> void:
 
 
 func _ctx_delete() -> void:
-	if view.selected_instance != "":
-		if view.doc.remove_instance(view.selected_instance):
-			view.refresh()
-			status.emit("Instance removed")
-		return
-	if view.delete_selected():
-		status.emit("Deleted body")
+	_delete_selection()
 
 
 func _ctx_look_at() -> void:
@@ -2026,6 +2113,17 @@ func _axis_len() -> float:
 	return maxf(maxf(s.x, s.y), s.z) * AXIS_LEN_FRAC + 12.0
 
 
+## Radius that clears the selection AABB corners with a small pad (not _axis_len —
+## that includes a large fixed offset meant for lift/stretch grips).
+func _rotate_radius() -> float:
+	var bb := view.selection_bbox()
+	if bb.is_empty():
+		return 20.0
+	var s: Vector3 = bb["size"]
+	# Half-diagonal of the AABB — rings sit just outside the solid.
+	return maxf(s.length() * 0.5 * 1.08, 2.0)
+
+
 ## Rotation grips: three arcs about principal axes through the selection center.
 func _rotate_grips() -> Array:
 	if view == null or view.selected_body == "" or view.selected_face != "":
@@ -2033,7 +2131,7 @@ func _rotate_grips() -> Array:
 	if view.selection_size() != 1:
 		return []
 	var c := _selection_center()
-	var r := _axis_len() * 1.15
+	var r := _rotate_radius()
 	return [
 		{"axis": Vector3.RIGHT, "center": c, "radius": r, "color": Color(0.9, 0.25, 0.2)},
 		{"axis": Vector3.UP, "center": c, "radius": r, "color": Color(0.25, 0.85, 0.3)},

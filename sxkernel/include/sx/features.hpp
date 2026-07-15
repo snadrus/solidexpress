@@ -25,7 +25,8 @@ namespace sx {
 class Document;
 
 enum class FeatureType {
-    Primitive,  // params: {kind: "box|cylinder|sphere|cone|torus", a, b, c, origin: [x,y,z]}
+    Primitive,  // params: {kind: "box|cylinder|sphere|cone|torus", a, b, c,
+                //          origin: [x,y,z], optional z_dir/x_dir: [x,y,z]}
     Sketch,     // embedded sketch; no geometry output
     Extrude,    // params: {sketch: <feature uuid>, distance, symmetric,
                 //          op: "new|fuse|cut", target: <feature uuid, for fuse/cut>}

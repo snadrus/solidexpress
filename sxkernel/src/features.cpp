@@ -244,8 +244,13 @@ bool FeatureGraph::has_dependents(const EntityId& id) const {
 namespace {
 shape::Placement placement_from(const json& p) {
     shape::Placement pl;
-    if (p.contains("origin"))
+    if (p.contains("origin") && p["origin"].is_array() && p["origin"].size() == 3)
         for (int i = 0; i < 3; ++i) pl.origin[i] = p["origin"][i].get<double>();
+    // Optional axis frame — used when a primitive has been rotated in-place.
+    if (p.contains("z_dir") && p["z_dir"].is_array() && p["z_dir"].size() == 3)
+        for (int i = 0; i < 3; ++i) pl.z_dir[i] = p["z_dir"][i].get<double>();
+    if (p.contains("x_dir") && p["x_dir"].is_array() && p["x_dir"].size() == 3)
+        for (int i = 0; i < 3; ++i) pl.x_dir[i] = p["x_dir"][i].get<double>();
     return pl;
 }
 

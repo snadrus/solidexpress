@@ -832,6 +832,24 @@ String SxDocument::graph_add_import_step(const String& path, float scale) {
     return ok ? to_gd(fid.str()) : String();
 }
 
+String SxDocument::graph_add_boolean(const String& op, const String& target_fid,
+                                     const String& tool_fid) {
+    if (target_fid.is_empty() || tool_fid.is_empty() || target_fid == tool_fid) return {};
+    std::string op_name = to_std(op);
+    if (op_name != "fuse" && op_name != "cut" && op_name != "common") return {};
+    sx::EntityId fid;
+    bool ok = apply_graph_edit(op_name, [&] {
+        sx::Feature f;
+        f.type = sx::FeatureType::Boolean;
+        f.params = {{"op", op_name},
+                    {"target", to_std(target_fid)},
+                    {"tool", to_std(tool_fid)}};
+        fid = doc_->graph().add(std::move(f));
+        return true;
+    });
+    return ok ? to_gd(fid.str()) : String();
+}
+
 bool SxDocument::graph_set_params(const String& fid, const String& params_json) {
     nlohmann::json p;
     try {
@@ -842,6 +860,16 @@ bool SxDocument::graph_set_params(const String& fid, const String& params_json) 
     return apply_graph_edit("edit feature", [&] {
         return doc_->graph().set_params(parse_id(fid), std::move(p));
     });
+}
+
+bool SxDocument::graph_set_params_no_regen(const String& fid, const String& params_json) {
+    nlohmann::json p;
+    try {
+        p = nlohmann::json::parse(to_std(params_json));
+    } catch (...) {
+        return false;
+    }
+    return doc_->graph().set_params(parse_id(fid), std::move(p));
 }
 
 bool SxDocument::graph_set_suppressed(const String& fid, bool suppressed) {
@@ -1223,7 +1251,11 @@ void SxDocument::_bind_methods() {
                          &SxDocument::graph_add_hole);
     ClassDB::bind_method(D_METHOD("graph_add_import_step", "path", "scale"),
                          &SxDocument::graph_add_import_step);
+    ClassDB::bind_method(D_METHOD("graph_add_boolean", "op", "target_fid", "tool_fid"),
+                         &SxDocument::graph_add_boolean);
     ClassDB::bind_method(D_METHOD("graph_set_params", "fid", "params_json"), &SxDocument::graph_set_params);
+    ClassDB::bind_method(D_METHOD("graph_set_params_no_regen", "fid", "params_json"),
+                         &SxDocument::graph_set_params_no_regen);
     ClassDB::bind_method(D_METHOD("graph_set_suppressed", "fid", "suppressed"), &SxDocument::graph_set_suppressed);
     ClassDB::bind_method(D_METHOD("graph_remove", "fid"), &SxDocument::graph_remove);
     ClassDB::bind_method(D_METHOD("graph_move", "fid", "new_index"), &SxDocument::graph_move);

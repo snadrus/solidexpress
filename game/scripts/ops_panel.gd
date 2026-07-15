@@ -515,8 +515,7 @@ func _resolve_pending(body: String, face: String) -> void:
 			if body == "" or body == _pending_first:
 				status.emit("Boolean cancelled")
 				return
-			if view.doc.boolean_op(_pending_first, body, _boolean_op, false):
-				view.graph_changed()
+			if view.boolean_bodies(_pending_first, body, _boolean_op):
 				view.select_entity(_pending_first, "")
 				status.emit("Boolean %s applied" % _boolean_op)
 			else:

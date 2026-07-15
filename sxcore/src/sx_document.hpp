@@ -176,7 +176,15 @@ public:
                                  float cs_diameter, float cs_angle_deg);
     // Import a STEP solid as a timeline BASE feature (index 0, uniform scale).
     godot::String graph_add_import_step(const godot::String& path, float scale);
+    // Body-level boolean on the timeline. op: "fuse" | "cut" | "common".
+    // Target keeps the result; tool feature's body is consumed on regenerate.
+    godot::String graph_add_boolean(const godot::String& op, const godot::String& target_fid,
+                                    const godot::String& tool_fid);
     bool graph_set_params(const godot::String& fid, const godot::String& params_json);
+    // Write feature params without regenerating geometry. Used after a live-body
+    // translate/rotate so the timeline placement stays in sync without rebuilding
+    // (and undoing) committed BREP edits.
+    bool graph_set_params_no_regen(const godot::String& fid, const godot::String& params_json);
     bool graph_set_suppressed(const godot::String& fid, bool suppressed);
     bool graph_remove(const godot::String& fid);
     bool graph_move(const godot::String& fid, int new_index);

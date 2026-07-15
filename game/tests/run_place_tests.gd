@@ -36,6 +36,7 @@ func _init() -> void:
 	await test_palette_click_arms_place(main)
 	test_place_snap_ui_and_coords(main)
 	await test_transform_hud_and_resize(main)
+	test_cylinder_radial_stretch(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -463,3 +464,45 @@ func test_transform_hud_and_resize(main) -> void:
 	var ds2 := DocumentView.DEFAULT_PRIMITIVE_MM
 	check(size_moved.is_equal_approx(Vector3(ds2, ds2, ds2)),
 		"body drag preserves size (got %s)" % size_moved)
+
+
+## Side grip on a cylinder must grow Ø about the axis — not translate like a bad drag.
+func test_cylinder_radial_stretch(main) -> void:
+	print("- cylinder radial stretch grows diameter about center")
+	var ix: ViewportInteraction = main.interaction
+	var view: DocumentView = main.view
+	view.new_document()
+	var id: String = view.insert_primitive("cylinder", Vector3.ZERO, Vector3(10, 10, 12))
+	view.select_entity(id, "")
+	var bb0: Dictionary = view.doc.measure_bbox(id)
+	var c0: Vector3 = (bb0["min"] + bb0["max"]) * 0.5
+	var diam0: float = float(bb0["max"].x) - float(bb0["min"].x)
+	var h0: float = float(bb0["max"].z) - float(bb0["min"].z)
+	ix._resize_signs = Vector3(1, 0, 0)
+	ix._resize_start_min = bb0["min"]
+	ix._resize_start_max = bb0["max"]
+	check(ix._coupled_resize_axes(Vector3(1, 0, 0)).size() == 2, "side grip couples both radial axes")
+	check(ix._coupled_resize_axes(Vector3(0, 0, 1)).is_empty(), "end grip is axial (length)")
+	ix._apply_resize_delta(4.0)
+	check(absf((_resize_extent(ix, 0) - (diam0 + 4.0))) < 1e-3, "+X radial Δ grows ØX")
+	check(absf((_resize_extent(ix, 1) - (diam0 + 4.0))) < 1e-3, "+X radial Δ also grows ØY")
+	check(absf(_resize_extent(ix, 2) - h0) < 1e-3, "radial Δ keeps height")
+	var c_live: Vector3 = (ix._resize_min + ix._resize_max) * 0.5
+	check(c_live.distance_to(c0) < 1e-3, "radial Δ keeps center (not a translate)")
+	check(view.resize_primitive_aabb(id, ix._resize_min, ix._resize_max), "commit radial resize")
+	var bb1: Dictionary = view.doc.measure_bbox(id)
+	check(absf((float(bb1["max"].x) - float(bb1["min"].x)) - (diam0 + 4.0)) < 1e-2,
+		"committed Ø is start+4 (got %s)" % (bb1["max"].x - bb1["min"].x))
+	var c1: Vector3 = (bb1["min"] + bb1["max"]) * 0.5
+	check(Vector2(c1.x, c1.y).distance_to(Vector2(c0.x, c0.y)) < 1e-2,
+		"committed center XY unchanged")
+	# HUD W edit alone must still grow both radial sides.
+	ix._on_hud_size(Vector3(20, 10, h0))
+	var bb2: Dictionary = view.doc.measure_bbox(id)
+	var sz2: Vector3 = bb2["max"] - bb2["min"]
+	check(absf(sz2.x - 20.0) < 1e-2 and absf(sz2.y - 20.0) < 1e-2,
+		"HUD size equalizes cylinder Ø (got %s)" % sz2)
+
+
+func _resize_extent(ix: ViewportInteraction, axis: int) -> float:
+	return ix._resize_max[axis] - ix._resize_min[axis]

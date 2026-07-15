@@ -79,6 +79,10 @@ func test_rotate_stretch_and_pull_handles(main) -> void:
 	var grips: Array = ix._rotate_grips()
 	check(grips.size() == 3, "three rotate grips when body selected")
 	if grips.size() == 3:
+		var bb_r: Dictionary = view.selection_bbox()
+		var expect_r: float = (bb_r["size"] as Vector3).length() * 0.5 * 1.08
+		check(absf(float(grips[0]["radius"]) - expect_r) < 1e-3,
+				"rotate ring hugs AABB (r=%.2f, expect≈%.2f)" % [grips[0]["radius"], expect_r])
 		# Prefer a Z-tick that other rings don't share (45° is not a tick; use +Y).
 		var g: Dictionary = grips[2]
 		var ticks: Array = ix._rotate_tick_points(g)
