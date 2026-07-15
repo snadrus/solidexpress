@@ -32,6 +32,10 @@ var _last_drag_pos := Vector2.ZERO
 var _move_start_center := Vector3.ZERO
 var _move_start_node_xform := Transform3D.IDENTITY
 var _move_delta_base := Vector3.ZERO  # last kernel-committed Δ from start center
+## Blender-style axis lock during a body move: tap X/Y to toggle (-1 = free).
+const AXIS_X := 0
+const AXIS_Y := 1
+var _move_axis_lock := -1
 ## Rotate drag about a principal axis through the selection center.
 var _rotate_axis := Vector3.ZERO
 var _rotate_center := Vector3.ZERO
@@ -805,6 +809,7 @@ func _on_press(pos: Vector2) -> void:
 	_pp_preview_dist = 0.0
 	_pending_body_move = false
 	_pending_instance_move = false
+	_move_axis_lock = -1
 	grab_focus()
 	view.clear_hover()
 
@@ -951,16 +956,24 @@ func _on_drag(pos: Vector2) -> void:
 			queue_redraw()
 		DragMode.MOVE_BODY:
 			# Drag stays on the horizontal plane; ΔZ only via typed HUD.
+			_last_drag_pos = pos
 			var plane_z := _drag_start_point.z
 			var gp = _horizontal_plane_point(pos, plane_z)
 			var gp0 = _horizontal_plane_point(_drag_start_mouse, plane_z)
 			if gp == null or gp0 == null:
 				return
 			var target: Vector3 = gp - gp0
+			match _move_axis_lock:
+				AXIS_X: target.y = 0.0
+				AXIS_Y: target.x = 0.0
 			target.z = _drag_accum.z  # preserve typed off-plane hop
 			_apply_live_move(target)
-			status.emit("Move Δ (%.2f, %.2f, %.2f) — type ΔZ to leave plane" \
-					% [target.x, target.y, target.z])
+			var lock_hint := ""
+			match _move_axis_lock:
+				AXIS_X: lock_hint = " [X locked]"
+				AXIS_Y: lock_hint = " [Y locked]"
+			status.emit("Move Δ (%.2f, %.2f, %.2f)%s — tap X/Y to lock axis, type ΔZ to leave plane" \
+					% [target.x, target.y, target.z, lock_hint])
 			queue_redraw()
 		DragMode.ROTATE_BODY:
 			var ang := _angle_about_axis(pos, _rotate_axis, _rotate_center)
@@ -1705,6 +1718,18 @@ func _input(event: InputEvent) -> void:
 	# over a dock edge.
 	if _pressed or _viewport_owns_pointer():
 		if _handle_model_pointer(event):
+			get_viewport().set_input_as_handled()
+			return
+
+	# Tap X / Y mid body-move to lock the drag to that axis (tap again to free).
+	# Handled here (not _gui_key) so it works regardless of Control focus.
+	if event is InputEventKey and event.pressed and not event.echo \
+			and _drag_mode == DragMode.MOVE_BODY:
+		var kc := (event as InputEventKey).keycode
+		if kc == KEY_X or kc == KEY_Y:
+			var axis := AXIS_X if kc == KEY_X else AXIS_Y
+			_move_axis_lock = -1 if _move_axis_lock == axis else axis
+			_on_drag(_last_drag_pos)  # re-apply preview under the new lock
 			get_viewport().set_input_as_handled()
 			return
 

@@ -34,6 +34,7 @@ const TABLE: Array[Dictionary] = [
 	{"keys": "Shift+Click", "context": "Model", "desc": "Add / toggle multi-select (empty click keeps selection)"},
 	{"keys": "Ctrl+Click", "context": "Model", "desc": "Add / toggle multi-select"},
 	{"keys": "Drag body", "context": "Model", "desc": "Move on the active plane; shows old/new center + editable Δ (type ΔZ to leave plane)"},
+	{"keys": "X / Y (while moving)", "context": "Model", "desc": "Lock the body move to that axis (tap again to free)"},
 	{"keys": "Drag stretch grip", "context": "Model", "desc": "Stretch via face tick / corner diamond; Enter refines Δ"},
 	{"keys": "Drag rotate arc", "context": "Model", "desc": "Rotate about that axis; Enter refines Δ°"},
 	{"keys": "Drag face", "context": "Model", "desc": "Push / pull selected face"},

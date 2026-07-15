@@ -22,10 +22,10 @@ Test state: `make test` → kernel 24 cases / 5373 assertions PASS; Godot integr
 - [x] 1.1 Viewport navigation: OrbitCamera (middle-drag orbit, shift+middle pan, wheel zoom, F frame), grid + axes, Z-up ModelSpace mapping kernel frame to Godot Y-up
 - [x] 1.2 Primitive palette (box/cylinder/sphere/cone/torus) with Godot drag-and-drop onto viewport + click-to-insert
 - [x] 1.3 Selection: click = body, second click = face; per-face highlight materials; card panel (RichTextLabel) shows semantic card of selection
-- [x] 1.4 Move: drag selected body on ground plane (live preview, kernel commit on release) — axis gizmo still TODO
+- [x] 1.4 Move: drag selected body on ground plane (live preview, kernel commit on release)
 - [x] 1.5 Push/pull: drag a selected face along its normal (ray-line closest-approach math), planar faces v0
 - [x] 1.6 Undo/redo (Ctrl+Z/Y), delete (Del), save/load (Ctrl+S/O) wired; status bar hints
-- [ ] 1.7 Move gizmo with per-axis constraints (follow-up)
+- [x] 1.7 Per-axis move constraints: tap X/Y mid body-drag to lock that axis (Blender-style toggle; visual triad still not drawn)
 
 Key files: `game/scripts/document_view.gd` (view-model), `viewport_interaction.gd` (input), `orbit_camera.gd`, `palette_button.gd`, `main.gd` (composition root). Tests: `game/tests/run_ui_tests.gd`.
 

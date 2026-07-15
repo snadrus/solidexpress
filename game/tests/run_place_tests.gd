@@ -383,6 +383,21 @@ func test_transform_hud_and_resize(main) -> void:
 	ix._input(drag)
 	check(ix._drag_mode == ViewportInteraction.DragMode.MOVE_BODY, "drag stays MOVE_BODY")
 	check(ix._drag_accum.length() > 1e-3, "move accum non-zero")
+	# Tap X mid-drag → lock to X: diagonal motion must keep model ΔY at 0.
+	var key_x := InputEventKey.new()
+	key_x.keycode = KEY_X
+	key_x.pressed = true
+	ix._input(key_x)
+	check(ix._move_axis_lock == ViewportInteraction.AXIS_X, "X tap locks move to X axis")
+	var diag := InputEventMouseMotion.new()
+	diag.position = screen_body + Vector2(60, 30)
+	ix._input(diag)
+	check(absf(ix._drag_accum.y) < 1e-6, "X-locked drag keeps ΔY at 0 (got %s)" % ix._drag_accum.y)
+	check(absf(ix._drag_accum.x) > 1e-3, "X-locked drag still moves along X")
+	# Tap X again → free: the same pointer position now yields a ΔY component.
+	ix._input(key_x)
+	check(ix._move_axis_lock == -1, "second X tap frees the axis lock")
+	check(absf(ix._drag_accum.y) > 1e-4, "freed drag regains ΔY (got %s)" % ix._drag_accum.y)
 	var release := InputEventMouseButton.new()
 	release.button_index = MOUSE_BUTTON_LEFT
 	release.pressed = false
