@@ -43,12 +43,20 @@ test-godot: build import
 	$(GODOT) --headless --path game --script tests/run_drag_tests.gd
 	$(GODOT) --headless --path game --script tests/run_voice_tests.gd
 	$(GODOT) --headless --path game --script tests/run_howto_tests.gd
+	$(GODOT) --headless --path game --script tests/run_visual_ux_tests.gd
+	$(GODOT) --headless --path game --script tests/run_timeline_ux_tests.gd
 
 test: test-kernel test-godot
 	@echo "ALL TESTS PASSED"
 
+# Prefer native Wayland so trackpad MagnifyGesture (pinch-zoom) actually arrives.
+# Under XWayland, Godot often never sees InputEventMagnifyGesture.
 run: build import
-	$(GODOT) --path game
+	@if [ -n "$$WAYLAND_DISPLAY" ]; then \
+		$(GODOT) --display-driver wayland --path game; \
+	else \
+		$(GODOT) --path game; \
+	fi
 
 clean:
 	rm -rf $(BUILD_DIR)
