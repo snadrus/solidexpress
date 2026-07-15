@@ -632,9 +632,10 @@ func _viewport_owns_pointer(event_pos: Vector2 = Vector2.INF) -> bool:
 		if event_pos == Vector2.INF:
 			return true
 		return not _over_chrome(event_pos)
-	# Sibling docks / scroll panels: `_input` owns viewport gestures (camera
-	# already consumed nav above; select/orbit/drag must still work over docks).
-	return true
+	# Sibling docks / palette buttons / menus own their GUI clicks. Stealing
+	# them via `_input` + set_input_as_handled breaks "click Box to place".
+	# Camera nav is handled earlier in `_input` and still works over docks.
+	return false
 
 
 ## Shared LMB / motion path for select, empty-orbit, and handle drags.

@@ -33,6 +33,7 @@ func _init() -> void:
 	await test_stack_on_face(main)
 	await test_orbit_over_ops_panel(main)
 	await test_empty_drag_orbits(main)
+	await test_palette_click_arms_place(main)
 	test_place_snap_ui_and_coords(main)
 	await test_transform_hud_and_resize(main)
 
@@ -282,6 +283,45 @@ func test_empty_drag_orbits(main) -> void:
 	release.position = miss + Vector2(60, 0)
 	ix._input(release)
 	check(ix._drag_mode == ViewportInteraction.DragMode.NONE, "orbit drag cleared on release")
+
+
+func test_palette_click_arms_place(main) -> void:
+	print("- palette Box click arms place (not stolen by Interaction _input)")
+	var ix: ViewportInteraction = main.interaction
+	main.view.new_document()
+	main.view.clear_selection()
+	root.size = Vector2i(1280, 720)
+	ix.size = Vector2(1280, 720)
+	await process_frame
+	# Find the Box PaletteButton under the left palette.
+	var box_btn: Button = null
+	for child in main.palette.find_children("*", "Button", true, false):
+		if child is PaletteButton and (child as PaletteButton).kind == "box":
+			box_btn = child
+			break
+	check(box_btn != null, "Box palette button exists")
+	if box_btn == null:
+		return
+	var at := box_btn.get_global_rect().get_center()
+	var hover := InputEventMouseMotion.new()
+	hover.position = at
+	ix.get_viewport().push_input(hover)
+	await process_frame
+	var h: Control = ix.get_viewport().gui_get_hovered_control()
+	check(h != null and (h == box_btn or box_btn.is_ancestor_of(h) or h == main.palette
+			or main.palette.is_ancestor_of(h)), "hover is on palette chrome")
+	check(not ix._viewport_owns_pointer(at), "palette hover does not own model pointer")
+	# Full press/release through the viewport — must reach the Button.
+	for pressed in [true, false]:
+		var mb := InputEventMouseButton.new()
+		mb.button_index = MOUSE_BUTTON_LEFT
+		mb.pressed = pressed
+		mb.position = at
+		ix.get_viewport().push_input(mb)
+		await process_frame
+	check(ix._place_kind == "box", "palette click armed place mode (got '%s')" % ix._place_kind)
+	check(_ghost(main) != null, "ghost present after palette click")
+	ix._disarm_place(false)
 
 
 func test_place_snap_ui_and_coords(main) -> void:
