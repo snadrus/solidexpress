@@ -622,6 +622,9 @@ Array SxDocument::graph_features() const {
         d["suppressed"] = f.suppressed;
         d["params"] = to_gd(f.params.dump());
         d["output_body"] = f.output_body.is_null() ? String() : to_gd(f.output_body.str());
+        const bool failed = !last_failed_fid_.empty() && f.id.str() == last_failed_fid_;
+        d["failed"] = failed;
+        d["error"] = failed ? to_gd(last_graph_error_) : String();
         out.push_back(d);
     }
     return out;
@@ -639,10 +642,17 @@ bool SxDocument::apply_graph_edit(const std::string& label,
     std::string err;
     if (!doc_->graph().regenerate(*doc_, &err)) {
         sx::log::error(label + ": " + err);
+        // Blame the offending feature before the revert wipes the graph state;
+        // the timeline badges the row if the feature still exists afterwards.
+        const sx::EntityId failed = doc_->graph().last_failed_feature();
+        last_failed_fid_ = failed.is_null() ? std::string() : failed.str();
+        last_graph_error_ = err;
         doc_->set_graph(sx::FeatureGraph::from_json(before));
         doc_->graph().regenerate(*doc_, nullptr);
         return false;
     }
+    last_failed_fid_.clear();
+    last_graph_error_.clear();
     stack_.push(*doc_, std::make_unique<sx::GraphSnapshotCommand>(label, std::move(before),
                                                                   std::move(after)));
     return true;
@@ -862,9 +872,27 @@ Dictionary SxDocument::graph_regenerate() {
     Dictionary out;
     std::string err;
     bool ok = doc_->graph().regenerate(*doc_, &err);
+    if (ok) {
+        last_failed_fid_.clear();
+        last_graph_error_.clear();
+    } else {
+        const sx::EntityId failed = doc_->graph().last_failed_feature();
+        last_failed_fid_ = failed.is_null() ? std::string() : failed.str();
+        last_graph_error_ = err;
+    }
     out["ok"] = ok;
     out["error"] = to_gd(err);
     return out;
+}
+
+bool SxDocument::graph_set_rollback(int index) {
+    return apply_graph_edit("rollback", [&] {
+        return doc_->graph().set_rollback(index);
+    });
+}
+
+int SxDocument::graph_rollback() const {
+    return doc_->graph().rollback();
 }
 
 bool SxDocument::set_variable(const String& name, const String& expr) {
@@ -1200,6 +1228,8 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("graph_remove", "fid"), &SxDocument::graph_remove);
     ClassDB::bind_method(D_METHOD("graph_move", "fid", "new_index"), &SxDocument::graph_move);
     ClassDB::bind_method(D_METHOD("graph_rename", "fid", "name"), &SxDocument::graph_rename);
+    ClassDB::bind_method(D_METHOD("graph_set_rollback", "index"), &SxDocument::graph_set_rollback);
+    ClassDB::bind_method(D_METHOD("graph_rollback"), &SxDocument::graph_rollback);
     ClassDB::bind_method(D_METHOD("graph_regenerate"), &SxDocument::graph_regenerate);
     ClassDB::bind_method(D_METHOD("set_variable", "name", "expr"), &SxDocument::set_variable);
     ClassDB::bind_method(D_METHOD("remove_variable", "name"), &SxDocument::remove_variable);

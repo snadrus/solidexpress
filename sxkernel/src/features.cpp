@@ -210,6 +210,13 @@ const Feature* FeatureGraph::feature(const EntityId& id) const {
     return nullptr;
 }
 
+bool FeatureGraph::set_rollback(int index) {
+    if (index < -1 || index > static_cast<int>(timeline_.size())) return false;
+    // Clamp "roll to end" spellings (size or -1) to the -1 sentinel.
+    rollback_index_ = (index >= static_cast<int>(timeline_.size())) ? -1 : index;
+    return true;
+}
+
 bool FeatureGraph::has_dependents(const EntityId& id) const {
     std::string needle = id.str();
     bool found_self = false;
@@ -903,15 +910,23 @@ bool FeatureGraph::regenerate(Document& doc, std::string* err) {
     // are removed up front; generated_ covers features removed from the
     // timeline since the last regenerate.
     std::map<std::string, double> env;
+    last_failed_ = {};
+    last_error_.clear();
     try {
         env = variables_.evaluate();
     } catch (const std::exception& e) {
         if (err) *err = e.what();
+        last_error_ = e.what();
         return false;
     }
+    // Rollback treats features past the bar exactly like suppressed ones.
+    auto rolled_back = [&](size_t i) {
+        return rollback_index_ >= 0 && static_cast<int>(i) >= rollback_index_;
+    };
     std::vector<EntityId> rebuilt;
-    for (const auto& f : timeline_) {
-        if (f.suppressed) continue;
+    for (size_t i = 0; i < timeline_.size(); ++i) {
+        const auto& f = timeline_[i];
+        if (f.suppressed || rolled_back(i)) continue;
         if (!f.output_body.is_null()) rebuilt.push_back(f.output_body);
         for (const auto& id : f.output_bodies) rebuilt.push_back(id);
     }
@@ -931,9 +946,12 @@ bool FeatureGraph::regenerate(Document& doc, std::string* err) {
         }
     }
     generated_.clear();
-    for (auto& f : timeline_) {
-        if (f.suppressed) continue;
+    for (size_t i = 0; i < timeline_.size(); ++i) {
+        auto& f = timeline_[i];
+        if (f.suppressed || rolled_back(i)) continue;
         if (!apply(doc, f, env, err)) {
+            last_failed_ = f.id;
+            last_error_ = err ? *err : (f.name + ": regeneration failed");
             log::error("regenerate stopped at feature " + f.name);
             // Stale bodies of features after the failure point would show the
             // previous generation's geometry; drop them.
@@ -960,6 +978,7 @@ bool FeatureGraph::regenerate(Document& doc, std::string* err) {
 json FeatureGraph::to_json() const {
     json j;
     j["variables"] = variables_.to_json();
+    if (rollback_index_ >= 0) j["rollback"] = rollback_index_;
     j["timeline"] = json::array();
     for (const auto& f : timeline_) {
         json jf;
@@ -982,6 +1001,7 @@ json FeatureGraph::to_json() const {
 FeatureGraph FeatureGraph::from_json(const json& j) {
     FeatureGraph g;
     if (j.contains("variables")) g.variables_ = VariableTable::from_json(j["variables"]);
+    g.rollback_index_ = j.value("rollback", -1);
     for (const auto& jf : j.at("timeline")) {
         Feature f;
         f.id = EntityId::from_string(jf.at("id").get<std::string>());

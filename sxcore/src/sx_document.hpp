@@ -181,6 +181,10 @@ public:
     bool graph_remove(const godot::String& fid);
     bool graph_move(const godot::String& fid, int new_index);
     bool graph_rename(const godot::String& fid, const godot::String& name);
+    // Rollback bar: features at timeline position >= index are skipped during
+    // regenerate. index = -1 (or the timeline size) rolls to end. Undoable.
+    bool graph_set_rollback(int index);
+    int graph_rollback() const;
     // Returns {ok: bool, error: String}.
     godot::Dictionary graph_regenerate();
 
@@ -245,6 +249,11 @@ private:
                                     const godot::PackedStringArray& edge_ids, double value);
 
     std::unique_ptr<sx::Document> doc_;
+    // Feature blamed for the most recent failed regenerate (empty when the
+    // last graph operation succeeded). Surfaced as failed/error flags in
+    // graph_features() so the timeline can badge the offending row.
+    std::string last_failed_fid_;
+    std::string last_graph_error_;
     sx::CommandStack stack_;
 };
 

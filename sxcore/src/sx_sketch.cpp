@@ -205,6 +205,36 @@ PackedStringArray SxSketch::constraint_ids() const {
     return out;
 }
 
+static const char* role_to_string(sx::PointRole r) {
+    switch (r) {
+        case sx::PointRole::Start: return "start";
+        case sx::PointRole::End: return "end";
+        case sx::PointRole::Center: return "center";
+        case sx::PointRole::Self: break;
+    }
+    return "self";
+}
+
+Dictionary SxSketch::constraint_info(const String& id) const {
+    Dictionary out;
+    sx::EntityId cid = parse_id(id);
+    for (const auto& c : sketch_->constraints()) {
+        if (c.id != cid) continue;
+        out["type"] = to_gd(sx::to_string(c.type));
+        out["value"] = c.value;
+        Array refs;
+        for (const auto& r : c.refs) {
+            Dictionary ref;
+            ref["entity"] = to_gd(r.entity.str());
+            ref["role"] = String(role_to_string(r.role));
+            refs.push_back(ref);
+        }
+        out["refs"] = refs;
+        break;
+    }
+    return out;
+}
+
 Dictionary SxSketch::solve() {
     sx::SolveResult res = solver_->solve(*sketch_);
     Dictionary out;
@@ -245,6 +275,7 @@ void SxSketch::_bind_methods() {
     ClassDB::bind_method(D_METHOD("remove_constraint", "id"), &SxSketch::remove_constraint);
     ClassDB::bind_method(D_METHOD("set_constraint_value", "id", "value"), &SxSketch::set_constraint_value);
     ClassDB::bind_method(D_METHOD("constraint_ids"), &SxSketch::constraint_ids);
+    ClassDB::bind_method(D_METHOD("constraint_info", "id"), &SxSketch::constraint_info);
     ClassDB::bind_method(D_METHOD("solve"), &SxSketch::solve);
 }
 

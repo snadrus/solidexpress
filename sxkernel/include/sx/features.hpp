@@ -101,6 +101,17 @@ public:
     // True if any later feature references `id` in its params.
     bool has_dependents(const EntityId& id) const;
 
+    // Rollback bar: features at timeline position >= index are skipped during
+    // regenerate (like temporary suppression). -1 (default) = end of timeline.
+    // Persisted with the graph. Returns false on out-of-range index.
+    bool set_rollback(int index);
+    int rollback() const { return rollback_index_; }
+
+    // Feature that stopped the last regenerate (null if it succeeded) and its
+    // error message. Lets the UI badge the offending timeline row.
+    const EntityId& last_failed_feature() const { return last_failed_; }
+    const std::string& last_error() const { return last_error_; }
+
     // Full rebuild: removes all graph-owned bodies from the document and
     // replays the timeline. On failure, err names the offending feature and
     // the document is left with features applied up to that point.
@@ -114,6 +125,9 @@ private:
                std::string* err);
     std::vector<Feature> timeline_;
     VariableTable variables_;
+    int rollback_index_ = -1;
+    EntityId last_failed_;
+    std::string last_error_;
     // Body ids created by the last regenerate. Needed so bodies belonging to
     // features that were since removed from the timeline still get cleaned up.
     std::vector<EntityId> generated_;

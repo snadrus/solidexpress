@@ -56,6 +56,9 @@ public:
     bool remove_constraint(const godot::String& id);
     bool set_constraint_value(const godot::String& id, double value);
     godot::PackedStringArray constraint_ids() const;
+    // Snapshot for UI glyphs: {type: String, value: float,
+    //   refs: Array of {entity: String, role: String}}. Empty if unknown id.
+    godot::Dictionary constraint_info(const godot::String& id) const;
 
     // --- solving ---
     // Returns {status: "success"|"converged"|"failed", dofs: int,
