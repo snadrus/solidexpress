@@ -94,6 +94,11 @@ func test_rotate_stretch_and_pull_handles(main) -> void:
 			(bb["min"].z + bb["max"].z) * 0.5)
 	stretch = ix._pick_resize_handle(ix._model_to_screen(out_pt))
 	check(not stretch.is_empty(), "stretch grip pickable outside silhouette")
+	var z_grip: Dictionary = ix._z_move_grip_anchor()
+	check(not z_grip.is_empty(), "ΔZ leave/approach grip present")
+	if not z_grip.is_empty():
+		check(not ix._pick_z_move_grip(ix._model_to_screen(z_grip["point"])).is_empty(),
+			"ΔZ grip pickable at tip")
 	var faces: PackedStringArray = view.doc.get_face_ids(id)
 	if faces.size() > 0:
 		view.select_entity(id, faces[0])

@@ -35,6 +35,7 @@ func _init() -> void:
 	test_jitter_reselect_after_deselect(main)
 	await test_chrome_hover_does_not_block_empty_input(main)
 	test_shift_empty_keeps_selection(main)
+	test_multi_boolean_instant(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -348,3 +349,24 @@ func test_shift_empty_keeps_selection(main) -> void:
 		vi._gui_input(mb)
 	check(view.selected_body == a, "shift+empty kept selection")
 	check(view.selection_size() == 1, "selection size still 1")
+
+
+func test_multi_boolean_instant(main) -> void:
+	print("- multi-select Join/Subtract apply instantly")
+	var view: DocumentView = main.view
+	var vi: ViewportInteraction = main.interaction
+	view.new_document()
+	var a: String = view.insert_primitive("box", Vector3.ZERO, Vector3(20, 20, 20))
+	var b: String = view.insert_primitive("box", Vector3(10, 0, 0), Vector3(20, 20, 20))
+	view.select_entity(a, "")
+	check(view.select_ray(Vector3(15, 0, 200), Vector3(0, 0, -1), true), "additive select overlapping B")
+	check(view.selected_bodies.size() == 2, "two bodies multi-selected (got %d)" % view.selected_bodies.size())
+	vi._refresh_selection_strip()
+	check(vi._strip_fuse.visible and vi._strip_cut.visible, "Join/Subtract visible for multi-select")
+	var vol0: float = float(view.doc.body_volume(a))
+	vi._ctx_boolean("fuse")
+	check(view.doc.body_ids().size() == 1, "fuse consumed tool body")
+	var remaining: String = str(view.doc.body_ids()[0])
+	var vol1: float = float(view.doc.body_volume(remaining))
+	check(vol1 > vol0 + 1.0, "fused volume larger than primary alone")
+	check(b != "", "tool body id allocated")

@@ -9,9 +9,10 @@ Goal: place a box, see what a click will hit, then reshape and move it with on-c
 3. Click the body to select it. You should see:
    - Blue AABB / corner brackets
    - RGB **rotate arcs** (grab a tick on the ring to rotate about that axis)
-   - Blue **stretch** face ticks and corner diamonds (primitives) — grab just outside the silhouette
-   - A thin **Fillet / Sketch / Look at / Hide / Delete** strip at the top (Sketch / Look at appear when a face is selected)
-4. **Drag the solid itself** (after a short move past the click slop) to move it on the horizontal plane. Tiny clicks still refine selection instead of nudging. While dragging you see the **old** and **new** center marks plus an editable **Δ** row. Tap **X**, **Y**, or **Z** mid-drag to lock the move to that axis (tap again to free); a highlighted axis line through the selection center shows the lock. **Z** freezes XY at the current Δ and keeps vertical-only intent alongside typed **ΔZ**. Type **ΔZ** to hop off-plane.
+   - Blue **stretch arrows** pointing outward from each face (primitives)
+   - A yellow **ΔZ** double-arrow above the solid (leave / approach the ground plane — all bodies)
+   - A thin **Fillet / Sketch / Look at / Hide / Delete** strip at the top (Sketch / Look at appear when a face is selected; **Join / Subtract / Intersect** appear for multi-body selection and apply instantly)
+4. **Drag the solid itself** (after a short move past the click slop) to move it on the horizontal plane. Tiny clicks still refine selection instead of nudging. While dragging you see the **old** and **new** center marks plus an editable **Δ** row. Drag the **ΔZ** grip (or tap **Z** mid-drag) for vertical motion; tap **X** / **Y** to lock planar axes.
 5. Click a face again to select the face. An orange **Pull** arrow appears. Drag the arrow — a live mm badge shows the distance; release commits. Use **Look at** (strip or RMB) for a SolidWorks-style normal-to view.
 6. **Right-click** for a context menu. **Right-drag** orbits instead (menu only on click without drag).
 7. **Space** opens an orientation panel (Front / Right / Top / Iso / Fit / Ortho / restore “User”). ViewHud **Save view** stores “User”.

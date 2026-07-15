@@ -256,7 +256,7 @@ func cycle_display_mode() -> int:
 # --- creation (palette drop / click-to-place) ---
 
 ## Default edge length (mm) for palette primitives — sized for the close 0.1 mm grid view.
-const DEFAULT_PRIMITIVE_MM := 10.0
+const DEFAULT_PRIMITIVE_MM := 5.0
 
 
 ## Default footprint/height used when the place HUD has not overridden sizes.

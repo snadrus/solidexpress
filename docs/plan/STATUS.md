@@ -25,7 +25,8 @@ Test state: `make test` → kernel 24 cases / 5373 assertions PASS; Godot integr
 - [x] 1.4 Move: drag selected body on ground plane (live preview, kernel commit on release)
 - [x] 1.5 Push/pull: drag a selected face along its normal (ray-line closest-approach math), planar faces v0
 - [x] 1.6 Undo/redo (Ctrl+Z/Y), delete (Del), save/load (Ctrl+S/O) wired; status bar hints
-- [x] 1.7 Per-axis move constraints: tap X/Y/Z mid body-drag to lock that axis (Blender-style toggle; Z pairs with typed ΔZ; highlighted axis line through selection center — full move triad gizmo still not drawn)
+- [x] 1.7 Per-axis move constraints: face stretch arrows + ΔZ leave/approach grip; tap X/Y/Z mid body-drag to lock (full move triad gizmo still not drawn)
+
 
 Key files: `game/scripts/document_view.gd` (view-model), `viewport_interaction.gd` (input), `orbit_camera.gd`, `palette_button.gd`, `main.gd` (composition root). Tests: `game/tests/run_ui_tests.gd`.
 

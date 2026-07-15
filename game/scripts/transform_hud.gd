@@ -46,9 +46,9 @@ func _ready() -> void:
 	_pos_y = _spin(row, "Y", -1e6, 1e6, 0.1, 0.0)
 	_pos_z = _spin(row, "Z", -1e6, 1e6, 0.1, 0.0)
 	row.add_child(VSeparator.new())
-	_size_w = _spin(row, "W", 0.1, 1e6, 0.1, 10.0)
-	_size_h = _spin(row, "H", 0.1, 1e6, 0.1, 10.0)
-	_size_d = _spin(row, "D", 0.1, 1e6, 0.1, 10.0)
+	_size_w = _spin(row, "W", 0.1, 1e6, 0.1, 5.0)
+	_size_h = _spin(row, "H", 0.1, 1e6, 0.1, 5.0)
+	_size_d = _spin(row, "D", 0.1, 1e6, 0.1, 5.0)
 	for s in [_pos_x, _pos_y, _pos_z]:
 		s.value_changed.connect(_on_pos_changed)
 		s.get_line_edit().text_submitted.connect(func(_t: String) -> void:

@@ -67,6 +67,9 @@ var _strip_hide: Button
 var _strip_delete: Button
 var _strip_sketch: Button
 var _strip_look: Button
+var _strip_fuse: Button
+var _strip_cut: Button
+var _strip_common: Button
 ## RMB: click = context menu, drag = orbit (peer FreeCAD / SW-like).
 var _rmb_pressed := false
 var _rmb_press_pos := Vector2.ZERO
@@ -132,11 +135,11 @@ const AXIS_LEN_FRAC := 0.35
 const GHOST_NAME := "PlaceGhost"
 ## Kernel primitive sizes used for sit-on-plane ghost offsets (half-heights).
 const PLACE_HALF_Z := {
-	"box": 5.0,
-	"cylinder": 5.0,
-	"cone": 5.0,
-	"sphere": 5.0,
-	"torus": 1.6,
+	"box": 2.5,
+	"cylinder": 2.5,
+	"cone": 2.5,
+	"sphere": 2.5,
+	"torus": 0.8,
 }
 
 
@@ -203,8 +206,8 @@ func _build_selection_strip() -> void:
 	_selection_strip.visible = false
 	_selection_strip.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_selection_strip.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	_selection_strip.offset_left = -260
-	_selection_strip.offset_right = 260
+	_selection_strip.offset_left = -360
+	_selection_strip.offset_right = 360
 	_selection_strip.offset_top = 8
 	_selection_strip.offset_bottom = 44
 	add_child(_selection_strip)
@@ -212,6 +215,15 @@ func _build_selection_strip() -> void:
 	row.add_theme_constant_override("separation", 6)
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	_selection_strip.add_child(row)
+	_strip_fuse = UIIcons.button("fuse", "Join", "Fuse selected bodies (primary receives the result)")
+	_strip_fuse.pressed.connect(func() -> void: _ctx_boolean("fuse"))
+	row.add_child(_strip_fuse)
+	_strip_cut = UIIcons.button("cut", "Subtract", "Cut tool bodies from the primary selection")
+	_strip_cut.pressed.connect(func() -> void: _ctx_boolean("cut"))
+	row.add_child(_strip_cut)
+	_strip_common = UIIcons.button("common", "Intersect", "Keep only the common volume of the selection")
+	_strip_common.pressed.connect(func() -> void: _ctx_boolean("common"))
+	row.add_child(_strip_common)
 	_strip_fillet = Button.new()
 	_strip_fillet.text = "Fillet"
 	_strip_fillet.pressed.connect(func() -> void: _ctx_fillet())
@@ -879,6 +891,15 @@ func _on_press(pos: Vector2) -> void:
 		_drag_start_point = pp_handle["point"]
 		_press_empty = false
 		return
+	# Leave/approach-plane Z move (all bodies) — before face stretch so the
+	# tall tip wins over the +Z face arrow on primitives.
+	var z_grip := _pick_z_move_grip(pos)
+	if not z_grip.is_empty():
+		_begin_move_body(pos, z_grip["point"])
+		_move_axis_lock = AXIS_Z
+		_press_empty = false
+		status.emit("Move ΔZ — drag to leave / approach the ground plane")
+		return
 	var resize_handle := _pick_resize_handle(pos)
 	if not resize_handle.is_empty():
 		_begin_resize(resize_handle, pos)
@@ -894,6 +915,8 @@ func _begin_move_body(pos: Vector2, hit_point: Vector3) -> void:
 	_drag_mode = DragMode.MOVE_BODY
 	_drag_accum = Vector3.ZERO
 	_move_delta_base = Vector3.ZERO
+	_drag_start_mouse = pos
+	_drag_start_point = hit_point
 	var bb := view.selection_bbox()
 	_move_start_center = bb["center"] if not bb.is_empty() else hit_point
 	var node := view.body_node(view.selected_body)
@@ -963,12 +986,21 @@ func _on_drag(pos: Vector2) -> void:
 			_box_rect = Rect2(_press_pos, pos - _press_pos).abs()
 			queue_redraw()
 		DragMode.MOVE_BODY:
-			# Drag stays on the horizontal plane; ΔZ only via typed HUD.
-			# Z-lock freezes XY at the current accum so only typed ΔZ hops.
+			# XY drag on the horizontal plane; Z-lock (ΔZ grip or tap Z) moves
+			# only along vertical; typed HUD can still hop off-plane otherwise.
 			_last_drag_pos = pos
 			var target: Vector3
 			if _move_axis_lock == AXIS_Z:
-				target = Vector3(_drag_accum.x, _drag_accum.y, _drag_accum.z)
+				var ray := _model_ray(pos)
+				var o: Vector3 = ray[0]
+				var d: Vector3 = ray[1]
+				var axis := Vector3(0, 0, 1)
+				var cross_dn := d.cross(axis)
+				var denom := cross_dn.length_squared()
+				if denom < 1e-12:
+					return
+				var dist := (o - _drag_start_point).dot(cross_dn.cross(d)) / denom
+				target = Vector3(_drag_accum.x, _drag_accum.y, dist)
 			else:
 				var plane_z := _drag_start_point.z
 				var gp = _horizontal_plane_point(pos, plane_z)
@@ -986,7 +1018,7 @@ func _on_drag(pos: Vector2) -> void:
 				AXIS_X: lock_hint = " [X locked]"
 				AXIS_Y: lock_hint = " [Y locked]"
 				AXIS_Z: lock_hint = " [Z locked]"
-			status.emit("Move Δ (%.2f, %.2f, %.2f)%s — tap X/Y/Z to lock axis, type ΔZ to leave plane" \
+			status.emit("Move Δ (%.2f, %.2f, %.2f)%s — tap X/Y/Z to lock axis" \
 					% [target.x, target.y, target.z, lock_hint])
 			queue_redraw()
 		DragMode.ROTATE_BODY:
@@ -1496,9 +1528,9 @@ func _model_to_screen(model_pt: Vector3) -> Vector2:
 	return camera.unproject_position(world)
 
 
-## Pick an AABB resize handle near `screen_pos`.
-## Pick/test points are pushed slightly outside the AABB so a face/corner
-## grab can miss the mesh (body hits always move — see `_on_press`).
+## Pick an AABB face stretch handle near `screen_pos` (primitives only).
+## Pick points sit just outside each face so a grab can miss the mesh
+## (body hits always XY-move — see `_on_press`).
 func _pick_resize_handle(screen_pos: Vector2) -> Dictionary:
 	if view.selected_body == "" or not view.is_primitive_body(view.selected_body):
 		return {}
@@ -1509,11 +1541,9 @@ func _pick_resize_handle(screen_pos: Vector2) -> Dictionary:
 		return {}
 	var mn: Vector3 = bb["min"]
 	var mx: Vector3 = bb["max"]
-	var center: Vector3 = bb["center"]
 	var pad := maxf(maxf(bb["size"].x, bb["size"].y), bb["size"].z) * 0.06 + 2.0
 	var best := {}
 	var best_d := HANDLE_PX
-	# Face centers (dimension-line style, single-axis).
 	var face_handles := [
 		{"point": Vector3(mx.x, (mn.y + mx.y) * 0.5, (mn.z + mx.z) * 0.5),
 			"signs": Vector3(1, 0, 0), "hint": "ΔX"},
@@ -1535,23 +1565,6 @@ func _pick_resize_handle(screen_pos: Vector2) -> Dictionary:
 		if d < best_d:
 			best_d = d
 			best = h
-	# Corners (multi-axis).
-	var corners: Array[Vector3] = [
-		Vector3(mn.x, mn.y, mn.z), Vector3(mx.x, mn.y, mn.z),
-		Vector3(mx.x, mx.y, mn.z), Vector3(mn.x, mx.y, mn.z),
-		Vector3(mn.x, mn.y, mx.z), Vector3(mx.x, mn.y, mx.z),
-		Vector3(mx.x, mx.y, mx.z), Vector3(mn.x, mx.y, mx.z),
-	]
-	for c in corners:
-		var signs2 := Vector3(
-			1.0 if c.x > center.x else -1.0,
-			1.0 if c.y > center.y else -1.0,
-			1.0 if c.z > center.z else -1.0)
-		var pick_c: Vector3 = c + signs2.normalized() * pad
-		var d2: float = _model_to_screen(pick_c).distance_to(screen_pos)
-		if d2 < best_d:
-			best_d = d2
-			best = {"point": c, "signs": signs2, "hint": "Δ"}
 	if best.is_empty():
 		return {}
 	best["min"] = mn
@@ -1559,58 +1572,61 @@ func _pick_resize_handle(screen_pos: Vector2) -> Dictionary:
 	return best
 
 
+## Tall +Z tip: leave / approach the ground plane (all bodies).
+func _z_move_grip_anchor() -> Dictionary:
+	if view == null or view.selected_body == "" or view.selection_size() != 1:
+		return {}
+	if view.selected_face != "" or view.selected_instance != "":
+		return {}
+	var bb := view.selection_bbox()
+	if bb.is_empty():
+		return {}
+	var c: Vector3 = bb["center"]
+	var half_z: float = float(bb["size"].z) * 0.5
+	var tip_len := maxf(_axis_len() * 0.9, 18.0)
+	var tip := Vector3(c.x, c.y, c.z + half_z + tip_len)
+	return {"point": tip, "center": c, "base": Vector3(c.x, c.y, c.z + half_z)}
+
+
+func _pick_z_move_grip(screen_pos: Vector2) -> Dictionary:
+	var h := _z_move_grip_anchor()
+	if h.is_empty():
+		return {}
+	if _model_to_screen(h["point"]).distance_to(screen_pos) > AXIS_HANDLE_PX:
+		return {}
+	return h
+
+
 func _update_resize_drag(screen_pos: Vector2) -> void:
 	var ray := _model_ray(screen_pos)
 	var o: Vector3 = ray[0]
 	var d: Vector3 = ray[1]
-	# For single-axis handles, project along that axis; for corners, use the
-	# dominant screen-space axis of motion.
+	# Face stretch is always single-axis (outward normal).
 	var signs := _resize_signs
-	var axis_count := int(absf(signs.x) > 0.5) + int(absf(signs.y) > 0.5) + int(absf(signs.z) > 0.5)
-	var delta_vec := Vector3.ZERO
-	if axis_count == 1:
-		var axis := Vector3(signs.x, signs.y, signs.z).normalized()
-		var cross_dn := d.cross(axis)
-		var denom := cross_dn.length_squared()
-		if denom < 1e-12:
-			return
-		var dist := (o - _drag_start_point).dot(cross_dn.cross(d)) / denom
-		delta_vec = axis * dist
-		_resize_distance = dist
-	else:
-		# Corner: intersect with plane through start point facing the camera.
-		var world_fwd: Vector3 = -camera.global_transform.basis.z
-		var inv: Transform3D = model_space.global_transform.affine_inverse()
-		var cam_dir: Vector3 = (inv.basis * world_fwd).normalized()
-		var denom2 := d.dot(cam_dir)
-		if absf(denom2) < 1e-9:
-			return
-		var t := (_drag_start_point - o).dot(cam_dir) / denom2
-		var hit_pt: Vector3 = o + d * t
-		delta_vec = hit_pt - _drag_start_point
-		# Only move along signed axes.
-		delta_vec = Vector3(
-			delta_vec.x if absf(signs.x) > 0.5 else 0.0,
-			delta_vec.y if absf(signs.y) > 0.5 else 0.0,
-			delta_vec.z if absf(signs.z) > 0.5 else 0.0)
-		_resize_distance = delta_vec.length() * (1.0 if delta_vec.dot(signs) >= 0.0 else -1.0)
+	var axis := Vector3(signs.x, signs.y, signs.z).normalized()
+	var cross_dn := d.cross(axis)
+	var denom := cross_dn.length_squared()
+	if denom < 1e-12:
+		return
+	var dist := (o - _drag_start_point).dot(cross_dn.cross(d)) / denom
+	var delta_vec := axis * dist
+	_resize_distance = dist
 	_resize_min = _resize_start_min
 	_resize_max = _resize_start_max
-	for axis in range(3):
-		var s: float = signs[axis]
+	for ai in range(3):
+		var s: float = signs[ai]
 		if absf(s) < 0.5:
 			continue
 		if s > 0.0:
-			_resize_max[axis] = _resize_start_max[axis] + delta_vec[axis]
+			_resize_max[ai] = _resize_start_max[ai] + delta_vec[ai]
 		else:
-			_resize_min[axis] = _resize_start_min[axis] + delta_vec[axis]
-	# Keep a minimum size.
-	for axis in range(3):
-		if _resize_max[axis] - _resize_min[axis] < 0.1:
-			if signs[axis] > 0.0:
-				_resize_max[axis] = _resize_min[axis] + 0.1
-			elif signs[axis] < 0.0:
-				_resize_min[axis] = _resize_max[axis] - 0.1
+			_resize_min[ai] = _resize_start_min[ai] + delta_vec[ai]
+		# Keep a tiny positive extent.
+		if _resize_max[ai] - _resize_min[ai] < 0.1:
+			if s > 0.0:
+				_resize_max[ai] = _resize_min[ai] + 0.1
+			else:
+				_resize_min[ai] = _resize_max[ai] - 0.1
 	if transform_hud != null:
 		var size := _resize_max - _resize_min
 		transform_hud.set_values((_resize_min + _resize_max) * 0.5, size, true)
@@ -1777,6 +1793,11 @@ func _refresh_selection_strip() -> void:
 	if not has:
 		return
 	# Instances get a slim strip: Delete only (modeling ops act on bodies).
+	var multi_body := not has_instance and view.selected_bodies.size() >= 2 \
+			and view.selected_face == ""
+	_strip_fuse.visible = multi_body
+	_strip_cut.visible = multi_body
+	_strip_common.visible = multi_body
 	_strip_fillet.visible = not has_instance
 	_strip_sketch.visible = not has_instance and view.selected_face != ""
 	_strip_look.visible = not has_instance and view.selected_face != ""
@@ -1836,6 +1857,34 @@ func _ctx_fillet() -> void:
 		ops_panel._fillet_all()
 	else:
 		status.emit("Fillet: open Modify panel")
+
+
+## Instant pairwise boolean: primary keeps the result; other selected bodies
+## are tools (consumed). Chains left→right when more than two are selected.
+func _ctx_boolean(op: String) -> void:
+	if view == null or view.selected_bodies.size() < 2:
+		status.emit("%s needs two or more bodies selected" % op.capitalize())
+		return
+	var primary: String = view.selected_body
+	if primary == "":
+		primary = str(view.selected_bodies[view.selected_bodies.size() - 1])
+	var tools: Array = []
+	for id in view.selected_bodies:
+		if str(id) != primary:
+			tools.append(str(id))
+	var ok_count := 0
+	for tool in tools:
+		if view.doc.boolean_op(primary, tool, op, false):
+			ok_count += 1
+		else:
+			status.emit("Boolean %s failed on tool %s" % [op, str(tool).left(8)])
+			view.graph_changed()
+			view.select_entity(primary, "")
+			return
+	view.graph_changed()
+	view.select_entity(primary, "")
+	status.emit("Boolean %s applied (%d tool%s)" % [
+			op, ok_count, "" if ok_count == 1 else "s"])
 
 
 func _ctx_hide() -> void:
@@ -2039,39 +2088,38 @@ func _draw_selection_gizmos() -> void:
 		return
 	if camera == null or model_space == null:
 		return
-	# Stretch grips (face centers + corners) for primitives.
+	# Face stretch arrows (primitives only) — pointing outward from each face.
 	if view.is_primitive_body(view.selected_body) and view.selection_size() == 1:
 		var bb := view.selection_bbox()
 		if not bb.is_empty():
 			var mn: Vector3 = bb["min"]
 			var mx: Vector3 = bb["max"]
-			var faces: Array[Vector3] = [
-				Vector3(mx.x, (mn.y + mx.y) * 0.5, (mn.z + mx.z) * 0.5),
-				Vector3(mn.x, (mn.y + mx.y) * 0.5, (mn.z + mx.z) * 0.5),
-				Vector3((mn.x + mx.x) * 0.5, mx.y, (mn.z + mx.z) * 0.5),
-				Vector3((mn.x + mx.x) * 0.5, mn.y, (mn.z + mx.z) * 0.5),
-				Vector3((mn.x + mx.x) * 0.5, (mn.y + mx.y) * 0.5, mx.z),
-				Vector3((mn.x + mx.x) * 0.5, (mn.y + mx.y) * 0.5, mn.z),
+			var pad := maxf(maxf(bb["size"].x, bb["size"].y), bb["size"].z) * 0.06 + 2.0
+			var faces: Array[Dictionary] = [
+				{"p": Vector3(mx.x, (mn.y + mx.y) * 0.5, (mn.z + mx.z) * 0.5), "n": Vector3(1, 0, 0)},
+				{"p": Vector3(mn.x, (mn.y + mx.y) * 0.5, (mn.z + mx.z) * 0.5), "n": Vector3(-1, 0, 0)},
+				{"p": Vector3((mn.x + mx.x) * 0.5, mx.y, (mn.z + mx.z) * 0.5), "n": Vector3(0, 1, 0)},
+				{"p": Vector3((mn.x + mx.x) * 0.5, mn.y, (mn.z + mx.z) * 0.5), "n": Vector3(0, -1, 0)},
+				{"p": Vector3((mn.x + mx.x) * 0.5, (mn.y + mx.y) * 0.5, mx.z), "n": Vector3(0, 0, 1)},
+				{"p": Vector3((mn.x + mx.x) * 0.5, (mn.y + mx.y) * 0.5, mn.z), "n": Vector3(0, 0, -1)},
 			]
-			for p in faces:
-				var sp := _model_to_screen(p)
-				draw_rect(Rect2(sp - Vector2(5, 5), Vector2(10, 10)), Color(0.2, 0.65, 1.0, 0.95), true)
-				draw_rect(Rect2(sp - Vector2(5, 5), Vector2(10, 10)), Color(1, 1, 1, 0.9), false, 1.0)
-			var corners: Array[Vector3] = [
-				Vector3(mn.x, mn.y, mn.z), Vector3(mx.x, mn.y, mn.z),
-				Vector3(mx.x, mx.y, mn.z), Vector3(mn.x, mx.y, mn.z),
-				Vector3(mn.x, mn.y, mx.z), Vector3(mx.x, mn.y, mx.z),
-				Vector3(mx.x, mx.y, mx.z), Vector3(mn.x, mx.y, mx.z),
-			]
-			for cpt in corners:
-				var cp := _model_to_screen(cpt)
-				var diamond := PackedVector2Array([
-					cp + Vector2(0, -6), cp + Vector2(6, 0),
-					cp + Vector2(0, 6), cp + Vector2(-6, 0),
-				])
-				draw_colored_polygon(diamond, Color(0.15, 0.75, 1.0, 0.95))
-				draw_polyline(diamond + PackedVector2Array([diamond[0]]), Color(1, 1, 1, 0.85), 1.0)
-	# Rotate arcs (no move triad — body itself is the move grip).
+			for f in faces:
+				var tip_m: Vector3 = f["p"] + f["n"] * pad
+				var base_s := _model_to_screen(f["p"])
+				var tip_s := _model_to_screen(tip_m)
+				_draw_outward_arrow(base_s, tip_s, Color(0.2, 0.65, 1.0, 0.95))
+	# Leave/approach-plane Z move grip (all bodies).
+	var z_grip := _z_move_grip_anchor()
+	if not z_grip.is_empty():
+		var zb: Vector2 = _model_to_screen(z_grip["base"])
+		var zt: Vector2 = _model_to_screen(z_grip["point"])
+		var zcol := Color(1.0, 0.78, 0.2, 0.95)
+		# Double-headed arrow along Z.
+		_draw_outward_arrow(zb, zt, zcol)
+		_draw_outward_arrow(zt, zb, zcol)
+		draw_string(ThemeDB.fallback_font, zt + Vector2(8, -6), "ΔZ",
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 11, zcol)
+	# Rotate arcs (body mesh itself is the XY move grip).
 	for g in _rotate_grips():
 		_draw_rotate_arc(g)
 	# During move: old center, new center, connecting segment + locked-axis cue.
@@ -2097,6 +2145,25 @@ func _draw_selection_gizmos() -> void:
 		draw_line(a, t, col2, 3.0)
 		draw_circle(t, 6.0, col2)
 		draw_string(ThemeDB.fallback_font, t + Vector2(8, -8), "Pull", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, col2)
+
+
+## Arrow from `base` to `tip` in screen space (shaft + filled head).
+func _draw_outward_arrow(base: Vector2, tip: Vector2, color: Color) -> void:
+	var delta := tip - base
+	if delta.length_squared() < 4.0:
+		# Degenerate projection — still show a tip marker.
+		draw_circle(tip, 5.0, color)
+		return
+	var dir := delta.normalized()
+	var shaft_end := tip - dir * 8.0
+	draw_line(base, shaft_end, color, 2.5)
+	var perp := Vector2(-dir.y, dir.x)
+	var head := PackedVector2Array([
+		tip,
+		shaft_end + perp * 5.0,
+		shaft_end - perp * 5.0,
+	])
+	draw_colored_polygon(head, color)
 
 
 func _draw_center_mark(screen: Vector2, color: Color) -> void:

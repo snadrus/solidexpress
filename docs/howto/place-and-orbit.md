@@ -20,14 +20,14 @@ Goal: drop one solid that sits on the ground plane, keep it selected, and orbit 
    - **Shift + click** → add / toggle multi-select (Shift+empty keeps selection)
    - **Empty click** → clear selection
    - **F** frames the **selection** (or all if none); **Shift+F** always frames all; **Space** opens the orientation panel; **1 / 2 / 3 / 7** jump to front / right / top / isometric
-5. Drag on the solid to **move** it on the horizontal plane (old/new centers + editable Δ appear; tap **X**/**Y**/**Z** mid-drag to lock that axis — a highlighted axis line shows the lock; **Z** freezes XY and pairs with typed **ΔZ** for vertical-only moves). Grab a stretch tick/corner or a colored **rotate arc** just outside the silhouette to stretch/rotate. On release, refine the focused **Δ** / **Δ°** field and press Enter.
+5. Drag on the solid to **move** it on the horizontal plane (old/new centers + editable Δ). Grab the yellow **ΔZ** arrow above the solid to leave / approach the plane. Tap **X**/**Y**/**Z** mid-drag to lock that axis. Blue **stretch arrows** on each face (primitives) or a **rotate arc** reshape / rotate — Enter refines the focused Δ / Δ°.
 6. To cancel a place before committing, press **Esc** (or right-click without dragging). Click empty space to deselect and bring **Primitives** back.
 
 ## What “good” looks like
 
 - The ghost tracks the pointer after you arm place (not stuck at screen center).
 - Snap-to-grid + position/size HUD are visible while place is armed.
-- The box sits on the ground (`z = 0` floor, top at 10 for the default 10 mm cube).
+- The box sits on the ground (`z = 0` floor, top at 5 for the default 5 mm cube).
 - After the place click, the box remains selected with clear corner brackets; left chrome shows Modify tools, not Primitives.
 - Empty-space drag and Alt-drag orbit even when side panels are open.
 - Scrolling a dock with a scrollbar does not zoom the 3D view.
