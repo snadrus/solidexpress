@@ -7,6 +7,10 @@ config_version=5
 config/name="solidexpress"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.7")
+# CAD-style: only present frames when something changes (idle GPU near zero).
+run/low_processor_mode=true
+# Cap active redraw ~60 FPS while orbiting / dragging (1000000/16666).
+run/low_processor_mode_sleep_usec=16666
 
 [display]
 

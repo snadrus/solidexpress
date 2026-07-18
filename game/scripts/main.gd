@@ -81,24 +81,16 @@ func _build_world() -> void:
 	add_child(camera)
 	# view/model_space wired after they exist (end of _build_world).
 
+	# Soft key light for crisp shadows; canyon HDRI supplies most illumination
+	# and the specular/reflection content metals need.
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-45, -30, 0)
+	sun.light_energy = 0.55
 	sun.shadow_enabled = true
 	add_child(sun)
 
-	var fill := DirectionalLight3D.new()
-	fill.rotation_degrees = Vector3(30, 140, 0)
-	fill.light_energy = 0.4
-	add_child(fill)
-
 	var env := WorldEnvironment.new()
-	var e := Environment.new()
-	e.background_mode = Environment.BG_COLOR
-	e.background_color = Color(0.16, 0.17, 0.20)
-	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	e.ambient_light_color = Color(0.55, 0.57, 0.62)
-	e.ambient_light_energy = 0.7
-	env.environment = e
+	env.environment = _make_canyon_environment()
 	add_child(env)
 
 	# Kernel is Z-up; Godot is Y-up. ModelSpace maps kernel +Z to world +Y.
@@ -119,6 +111,47 @@ func _build_world() -> void:
 	# Grid + origin triad now come from WorldGizmos (mounted by ViewportInteraction).
 	camera.view = view
 	camera.model_space = model_space
+
+
+## Canyon HDRI as infinite background + IBL. The sky shader pins the workplane
+## to the bottom of the panorama so scenic detail sits above the active plane.
+func _make_canyon_environment() -> Environment:
+	var panorama: Texture2D = load("res://canyon_hdri/textures/canyon_lighting_4k.hdr") as Texture2D
+	var sky_shader: Shader = load("res://canyon_hdri/resources/canyon_floor_sky.gdshader") as Shader
+	if panorama == null or sky_shader == null:
+		push_warning("Canyon HDRI assets missing — falling back to flat ambient")
+		var fallback := Environment.new()
+		fallback.background_mode = Environment.BG_COLOR
+		fallback.background_color = Color(0.16, 0.17, 0.20)
+		fallback.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+		fallback.ambient_light_color = Color(0.55, 0.57, 0.62)
+		fallback.ambient_light_energy = 0.7
+		return fallback
+
+	var mat := ShaderMaterial.new()
+	mat.shader = sky_shader
+	mat.set_shader_parameter("source_panorama", panorama)
+	mat.set_shader_parameter("energy_multiplier", 1.0)
+	# Keep the polar-stretched nadir under the workplane (not on the horizon).
+	mat.set_shader_parameter("underside_v_frac", 0.32)
+
+	var sky := Sky.new()
+	sky.sky_material = mat
+	# Match the pack defaults (radiance_size = 5 → 1024, quality process).
+	sky.radiance_size = Sky.RADIANCE_SIZE_1024
+	sky.process_mode = Sky.PROCESS_MODE_QUALITY
+
+	var e := Environment.new()
+	e.background_mode = Environment.BG_SKY
+	e.sky = sky
+	e.background_energy_multiplier = 1.0
+	e.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	e.ambient_light_energy = 0.75
+	e.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
+	e.tonemap_mode = Environment.TONE_MAPPER_ACES
+	e.tonemap_exposure = 1.0
+	e.ssr_enabled = true
+	return e
 
 
 func _build_ui() -> void:
@@ -186,18 +219,26 @@ func _build_ui() -> void:
 	insert_popup.add_item("Datum Point at Origin", 6)
 	insert_popup.id_pressed.connect(_on_insert_menu)
 
-	# View menu: entry points for panels that auto-hide when they have no data.
+	# View menu: entry points for panels that auto-hide when they have no data,
+	# plus active-plane pick / reset.
 	var view_btn := MenuButton.new()
 	view_btn.text = "View"
 	view_btn.flat = false
 	menu_row.add_child(view_btn)
 	var view_popup := view_btn.get_popup()
 	view_popup.add_check_item("Variables Panel", 0)
+	view_popup.add_separator()
+	view_popup.add_item("Set Active Plane…", 1)
+	view_popup.add_item("Reset Active Plane (ground)", 2)
 	view_popup.id_pressed.connect(func(id: int) -> void:
 		if id == 0:
 			show_variables = not show_variables
 			view_popup.set_item_checked(view_popup.get_item_index(0), show_variables)
-			_update_panel_visibility())
+			_update_panel_visibility()
+		elif id == 1:
+			interaction.arm_pick_active_plane()
+		elif id == 2:
+			interaction.reset_active_plane())
 
 	file_dialog = FileDialog.new()
 	file_dialog.access = FileDialog.ACCESS_FILESYSTEM
@@ -376,7 +417,7 @@ func _build_ui() -> void:
 	variables_panel.offset_left = 280
 	variables_panel.offset_right = 540
 	variables_panel.offset_top = -420
-	# Ends above the bottom-center TransformHud band (-130..-16 when lifted).
+	# Ends above the bottom status bar (+ occasional transform fine-tune blanks).
 	variables_panel.offset_bottom = -140
 	ui.add_child(variables_panel)
 	variables_panel.status.connect(_on_status)
@@ -388,7 +429,7 @@ func _build_ui() -> void:
 	status_bar.offset_top = -30
 	ui.add_child(status_bar)
 	status_label = Label.new()
-	status_label.text = "empty-drag / Alt-drag / middle-drag orbit · shift+pan · wheel zoom · F fit · 1/2/3/7 views · click select · drag to move · drag face to push/pull · Del delete · Ctrl+Z/Y undo · Ctrl+S save"
+	status_label.text = "empty-drag / Alt-drag / two-finger orbit · middle / 3-finger pan · wheel zoom · F fit · 1/2/3/7 views · click select · drag to move · drag face to push/pull · Del delete · Ctrl+Z/Y undo · Ctrl+S save"
 	status_label.add_theme_font_size_override("font_size", 12)
 	status_bar.add_child(status_label)
 
@@ -400,8 +441,8 @@ func _build_ui() -> void:
 	sketch_toolbar.anchor_left = 0.5
 	sketch_toolbar.anchor_right = 0.5
 	# Biased slightly left of center so the grown content clears the ViewHud.
-	sketch_toolbar.offset_left = -340
-	sketch_toolbar.offset_right = 180
+	sketch_toolbar.offset_left = -400
+	sketch_toolbar.offset_right = 220
 	sketch_toolbar.offset_top = 8
 	# The toolbar's content is wider than its nominal offsets; grow evenly so
 	# it stays centered instead of spilling off to one side.
@@ -414,11 +455,11 @@ func _build_ui() -> void:
 	var hbox := HBoxContainer.new()
 	hbox.alignment = BoxContainer.ALIGNMENT_CENTER
 	rows.add_child(hbox)
-	for entry in [[SketchMode.Tool.SELECT, "select", "Select tool (S)"],
-			[SketchMode.Tool.LINE, "line", "Line tool (L)"],
-			[SketchMode.Tool.RECT, "rect", "Rectangle tool (R)"],
-			[SketchMode.Tool.CIRCLE, "circle", "Circle tool (C)"]]:
-		var b := UIIcons.button(entry[1], "", entry[2])
+	for entry in [[SketchMode.Tool.SELECT, "select", "Select", "Select tool (S)"],
+			[SketchMode.Tool.LINE, "line", "Line", "Line tool (L)"],
+			[SketchMode.Tool.RECT, "rect", "Rect", "Rectangle tool (R)"],
+			[SketchMode.Tool.CIRCLE, "circle", "Circle", "Circle tool (C)"]]:
+		var b := UIIcons.button(entry[1], entry[2], entry[3])
 		b.pressed.connect(sketch_mode.set_tool.bind(entry[0]))
 		hbox.add_child(b)
 	hbox.add_child(VSeparator.new())
@@ -505,6 +546,9 @@ func _build_ui() -> void:
 	sketch_mode.cancelled.connect(func() -> void: sketch_toolbar.visible = false)
 	sketch_mode.selection_changed.connect(_on_sketch_selection)
 	sketch_mode.solve_updated.connect(_on_sketch_solve)
+
+	# Tone down wheel/trackpad jumps on docks and PopupMenus (~45% slower).
+	UiScroll.soften_tree(ui)
 
 
 func _on_sketch_solve(dofs: int, solve_status: String, conflicts: int) -> void:

@@ -44,7 +44,9 @@ test-godot: build import
 	$(GODOT) --headless --path game --script tests/run_voice_tests.gd
 	$(GODOT) --headless --path game --script tests/run_howto_tests.gd
 	$(GODOT) --headless --path game --script tests/run_visual_ux_tests.gd
+	$(GODOT) --headless --path game --script tests/run_move_snap_tests.gd
 	$(GODOT) --headless --path game --script tests/run_timeline_ux_tests.gd
+	$(GODOT) --headless --path game --script tests/run_measure_overlay_tests.gd
 
 test: test-kernel test-godot
 	@echo "ALL TESTS PASSED"

@@ -278,8 +278,8 @@ func test_snap_endpoint(main) -> void:
 	sm.click(a)
 	sm.click(b)
 	sm.end_chain()
-	# Start a second line near the first line's end endpoint.
-	var near_end := b + Vector2(2.0, 1.5)  # within SNAP_RADIUS (5)
+	# Start a second line near the first line's end endpoint (within SNAP_RADIUS 1.25).
+	var near_end := b + Vector2(0.8, 0.6)
 	sm.click(near_end)
 	sm.click(Vector2(40, 30))
 	var ids: PackedStringArray = sm.sketch.entity_ids()
@@ -287,6 +287,11 @@ func test_snap_endpoint(main) -> void:
 	var info: Dictionary = sm.sketch.entity_info(ids[1])
 	check(info["start"].distance_to(b) < 1e-6,
 		"second line start snaps to first line endpoint")
+	# ~2 mm away must not snap (radius is 1.25).
+	sm.end_chain()
+	var far := b + Vector2(2.0, 0.0)
+	check(sm.snap_point(far).distance_to(far) < 1e-9,
+		"point 2 mm from endpoint does not snap")
 	sm.cancel()
 
 
@@ -299,7 +304,7 @@ func test_snap_midpoint(main) -> void:
 	sm.set_tool(SketchMode.Tool.LINE)
 	sm.sketch.add_line(0, 0, 20, 0)
 	var mid := Vector2(10, 0)
-	var near_mid := mid + Vector2(1.0, 2.0)
+	var near_mid := mid + Vector2(0.5, 0.8)
 	var snapped: Vector2 = sm.snap_point(near_mid)
 	check(snapped.distance_to(mid) < 1e-6, "snap_point hits exact midpoint")
 	sm.click(near_mid)
@@ -320,7 +325,7 @@ func test_snap_circle_center(main) -> void:
 	sm.set_tool(SketchMode.Tool.LINE)
 	var center := Vector2(15, 15)
 	sm.sketch.add_circle(center.x, center.y, 10.0)
-	var near_c := center + Vector2(3.0, -2.0)
+	var near_c := center + Vector2(0.7, -0.5)
 	var snapped: Vector2 = sm.snap_point(near_c)
 	check(snapped.distance_to(center) < 1e-6, "snap_point hits circle center")
 	sm.click(near_c)
@@ -347,8 +352,8 @@ func test_snap_axis_horizontal(main) -> void:
 	sm.set_tool(SketchMode.Tool.LINE)
 	var p0 := Vector2(0, 10)
 	sm.click(p0)
-	# y offset within SNAP_RADIUS → should snap to same y (exact horizontal)
-	sm.click(Vector2(50, 10 + 3.0))
+	# y offset within SNAP_RADIUS (1.25) → should snap to same y (exact horizontal)
+	sm.click(Vector2(50, 10 + 0.9))
 	var ids: PackedStringArray = sm.sketch.entity_ids()
 	check(ids.size() == 1, "axis snap created one line")
 	var info: Dictionary = sm.sketch.entity_info(ids[0])
@@ -366,7 +371,7 @@ func test_snap_disabled(main) -> void:
 	sm.set_tool(SketchMode.Tool.LINE)
 	sm.sketch.add_line(0, 0, 40, 0)
 	sm.set_snap(false)
-	var raw := Vector2(40 + 2.0, 1.5)
+	var raw := Vector2(40 + 0.8, 0.6)
 	var out: Vector2 = sm.snap_point(raw)
 	check(out.distance_to(raw) < 1e-9, "snap_point returns raw when disabled")
 	sm.click(raw)

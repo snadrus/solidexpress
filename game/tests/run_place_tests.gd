@@ -37,6 +37,7 @@ func _init() -> void:
 	test_place_snap_ui_and_coords(main)
 	await test_transform_hud_and_resize(main)
 	test_cylinder_radial_stretch(main)
+	await test_place_on_active_plane(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -218,20 +219,22 @@ func test_stack_on_face(main) -> void:
 
 
 func test_orbit_over_ops_panel(main) -> void:
-	print("- orbit via middle / Alt-left / pan gesture")
+	print("- nav via middle / Alt-left / pan gesture")
 	var ix: ViewportInteraction = main.interaction
 	var cam: OrbitCamera = main.camera
 	main.view.new_document()
 	main.view.insert_primitive("box", Vector3.ZERO)
 	await process_frame
 	check(main.ops_panel.visible, "ops panel visible after select")
+	var pivot0: Vector3 = cam.pivot
 	var yaw0: float = cam.yaw
 	var mm := InputEventMouseMotion.new()
 	mm.button_mask = MOUSE_BUTTON_MASK_MIDDLE
 	mm.relative = Vector2(40, 0)
 	mm.position = Vector2(1400, 400)
 	ix._input(mm)
-	check(absf(cam.yaw - yaw0) > 1e-4, "yaw changed from middle-drag in _input")
+	check(cam.pivot.distance_to(pivot0) > 1e-4, "pivot changed from middle-drag (SX pan)")
+	check(is_equal_approx(cam.yaw, yaw0), "middle-drag does not orbit under SX")
 
 	yaw0 = cam.yaw
 	var alt := InputEventMouseMotion.new()
@@ -362,7 +365,7 @@ func test_transform_hud_and_resize(main) -> void:
 	await process_frame
 	view.select_entity(id, "")
 	main._update_panel_visibility()
-	check(ix.transform_hud.visible, "HUD visible when body selected")
+	check(not ix.transform_hud.visible, "transform HUD idle-hidden when body selected")
 	check(not main.palette.visible, "palette hidden when body selected")
 	check(main.ops_panel.offset_left == 12.0, "modify tools docked left")
 	var bb0: Dictionary = view.selection_bbox()
@@ -506,3 +509,58 @@ func test_cylinder_radial_stretch(main) -> void:
 
 func _resize_extent(ix: ViewportInteraction, axis: int) -> float:
 	return ix._resize_max[axis] - ix._resize_min[axis]
+
+
+func test_place_on_active_plane(main) -> void:
+	print("- place maps to active plane (not ground)")
+	var ix: ViewportInteraction = main.interaction
+	var view: DocumentView = main.view
+	view.new_document()
+	# Seed body so we can pick a vertical face as the active plane.
+	var seed_id: String = view.insert_primitive("box", Vector3.ZERO)
+	await process_frame
+	var faces: PackedStringArray = view.doc.get_face_ids(seed_id)
+	var side := ""
+	for f in faces:
+		var plane: Dictionary = SketchMode.derive_face_plane(view.doc, f, seed_id)
+		if bool(plane.get("ok", false)) and absf((plane["normal"] as Vector3).x) > 0.9:
+			side = f
+			view.select_entity(seed_id, f)
+			check(ix.set_active_plane_from_selection(), "active plane from +X face")
+			break
+	check(side != "", "found +X face for active plane")
+	check(ix.active_plane_is_custom(), "custom plane armed for place")
+
+	ix.insert_at_center("box")
+	var center := _center(ix)
+	_move(ix, center)
+	var ghost := _ghost(main)
+	var target: Dictionary = ix._place_target(center)
+	check(not target.is_empty(), "place target on active plane")
+	var floor_pt: Vector3 = target["point"]
+	# Floor must lie on the active plane (not z=0 ground).
+	var n: Vector3 = ix.active_plane_normal.normalized()
+	var dist := absf((floor_pt - ix.active_plane_origin).dot(n))
+	check(dist < 0.05, "place floor on active plane (dist=%.3f)" % dist)
+	check(absf(floor_pt.z) > 0.5 or absf(n.z) < 0.1,
+		"floor is not forced onto ground z=0 when plane is vertical")
+	if ghost != null:
+		var sit: Vector3 = ix._place_sit_normal()
+		var expect_c: Vector3 = floor_pt + sit * (DocumentView.DEFAULT_PRIMITIVE_MM * 0.5)
+		check(ghost.position.distance_to(expect_c) < 0.1,
+			"ghost sits on camera side of plane (got %s want %s)" % [ghost.position, expect_c])
+		check(ghost.transform.basis.z.dot(sit) > 0.9,
+			"ghost height axis follows sit normal")
+
+	_lmb(ix, center, true)
+	_lmb(ix, center, false)
+	await process_frame
+	check(view.doc.body_ids().size() == 2, "placed second body on active plane")
+	var placed: String = view.selected_body
+	check(placed != "" and placed != seed_id, "new body selected after place")
+	var bb: Dictionary = view.doc.measure_bbox(placed)
+	if not bb.is_empty():
+		var c: Vector3 = (bb["min"] + bb["max"]) * 0.5
+		# Center should be offset from the plane along ±X, not sitting on z-mid ground stack.
+		check(absf(c.x) > 2.0, "placed body center offset along plane normal (x=%.2f)" % c.x)
+	ix.reset_active_plane()

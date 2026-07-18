@@ -1,8 +1,7 @@
 class_name TransformHud
 extends PanelContainer
-## Bottom-of-viewport editable X/Y/Z position and W×H×D size for place mode
-## and body selection. Move drag shows editable Δ (ΔZ hops off the plane).
-## Resize/rotate show a focused precision distance/angle field.
+## Compact fine-tune blanks for place / move / stretch. Idle selection keeps the
+## bottom of the viewport clear; adjustment rows surface only while useful.
 
 signal position_committed(pos: Vector3)
 signal size_committed(size: Vector3)
@@ -11,6 +10,7 @@ signal precision_committed(distance: float)
 ## Live or post-drag move Δ from the pre-drag center (mm).
 signal move_delta_committed(delta: Vector3)
 
+var _dims_row: HBoxContainer
 var _pos_x: SpinBox
 var _pos_y: SpinBox
 var _pos_z: SpinBox
@@ -32,23 +32,26 @@ func _ready() -> void:
 	visible = false
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	offset_left = -320
-	offset_right = 320
-	offset_top = -72
+	offset_left = -280
+	offset_right = 280
+	offset_top = -56
 	offset_bottom = -16
 	var root := VBoxContainer.new()
 	root.add_theme_constant_override("separation", 4)
 	add_child(root)
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
-	root.add_child(row)
-	_pos_x = _spin(row, "X", -1e6, 1e6, 0.1, 0.0)
-	_pos_y = _spin(row, "Y", -1e6, 1e6, 0.1, 0.0)
-	_pos_z = _spin(row, "Z", -1e6, 1e6, 0.1, 0.0)
-	row.add_child(VSeparator.new())
-	_size_w = _spin(row, "W", 0.1, 1e6, 0.1, 5.0)
-	_size_h = _spin(row, "H", 0.1, 1e6, 0.1, 5.0)
-	_size_d = _spin(row, "D", 0.1, 1e6, 0.1, 5.0)
+
+	# Place-mode only: absolute position + size.
+	_dims_row = HBoxContainer.new()
+	_dims_row.visible = false
+	_dims_row.add_theme_constant_override("separation", 6)
+	root.add_child(_dims_row)
+	_pos_x = _spin(_dims_row, "X", -1e6, 1e6, 0.1, 0.0)
+	_pos_y = _spin(_dims_row, "Y", -1e6, 1e6, 0.1, 0.0)
+	_pos_z = _spin(_dims_row, "Z", -1e6, 1e6, 0.1, 0.0)
+	_dims_row.add_child(VSeparator.new())
+	_size_w = _spin(_dims_row, "W", 0.1, 1e6, 0.1, 5.0)
+	_size_h = _spin(_dims_row, "H", 0.1, 1e6, 0.1, 5.0)
+	_size_d = _spin(_dims_row, "D", 0.1, 1e6, 0.1, 5.0)
 	for s in [_pos_x, _pos_y, _pos_z]:
 		s.value_changed.connect(_on_pos_changed)
 		s.get_line_edit().text_submitted.connect(func(_t: String) -> void:
@@ -130,6 +133,7 @@ func _spin(parent: Container, label: String, mn: float, mx: float, step: float,
 	return spin
 
 
+## Sync cached numbers without forcing the dims row on (idle selection stays clear).
 func set_values(pos: Vector3, size: Vector3, size_editable := true) -> void:
 	_syncing = true
 	_pos_x.value = pos.x
@@ -143,6 +147,18 @@ func set_values(pos: Vector3, size: Vector3, size_editable := true) -> void:
 	_size_h.editable = size_editable
 	_size_d.editable = size_editable
 	_syncing = false
+
+
+## Place mode: surface absolute X/Y/Z + W×H×D blanks.
+func show_dims(pos: Vector3, size: Vector3, size_editable := true) -> void:
+	set_values(pos, size, size_editable)
+	_dims_row.visible = true
+	_refresh_panel()
+
+
+func hide_dims() -> void:
+	_dims_row.visible = false
+	_refresh_panel()
 
 
 func current_position() -> Vector3:
@@ -160,17 +176,16 @@ func current_move_delta() -> Vector3:
 ## Live update during planar move (does not steal focus).
 func set_move_delta(delta: Vector3) -> void:
 	_move_row.visible = true
-	_lift_for_extra_row()
 	_syncing = true
 	_delta_x.value = delta.x
 	_delta_y.value = delta.y
 	_delta_z.value = delta.z
 	_syncing = false
+	_refresh_panel()
 
 
 func show_move_delta(delta: Vector3, focus_axis := "x") -> void:
 	set_move_delta(delta)
-	visible = true
 	await get_tree().process_frame
 	var spin := _delta_x
 	match focus_axis:
@@ -184,18 +199,22 @@ func show_move_delta(delta: Vector3, focus_axis := "x") -> void:
 
 func hide_move_delta() -> void:
 	_move_row.visible = false
-	_restore_height()
+	_refresh_panel()
 
 
-func show_precision(distance: float, axis_hint := "Δ", unit := "mm") -> void:
+## Live stretch/rotate readout (no focus steal).
+func set_precision(distance: float, axis_hint := "Δ", unit := "mm") -> void:
 	_precision_row.visible = true
 	_precision_label.text = axis_hint
 	_precision_spin.suffix = unit
 	_syncing = true
 	_precision_spin.value = distance
 	_syncing = false
-	_lift_for_extra_row()
-	visible = true
+	_refresh_panel()
+
+
+func show_precision(distance: float, axis_hint := "Δ", unit := "mm") -> void:
+	set_precision(distance, axis_hint, unit)
 	await get_tree().process_frame
 	_precision_spin.get_line_edit().grab_focus()
 	_precision_spin.get_line_edit().select_all()
@@ -203,24 +222,28 @@ func show_precision(distance: float, axis_hint := "Δ", unit := "mm") -> void:
 
 func hide_precision() -> void:
 	_precision_row.visible = false
-	_restore_height()
+	_refresh_panel()
+
+
+func dismiss() -> void:
+	_dims_row.visible = false
+	_move_row.visible = false
+	_precision_row.visible = false
+	_refresh_panel()
 
 
 func is_pointer_over(global_pos: Vector2) -> bool:
 	return visible and get_global_rect().has_point(global_pos)
 
 
-func _lift_for_extra_row() -> void:
-	offset_top = -130
+func _refresh_panel() -> void:
+	var any := _dims_row.visible or _move_row.visible or _precision_row.visible
+	visible = any
+	mouse_filter = Control.MOUSE_FILTER_STOP if any else Control.MOUSE_FILTER_IGNORE
+	offset_top = -56
 	offset_bottom = -16
-
-
-func _restore_height() -> void:
-	if _move_row.visible or _precision_row.visible:
-		_lift_for_extra_row()
-	else:
-		offset_top = -72
-		offset_bottom = -16
+	if int(_dims_row.visible) + int(_move_row.visible) + int(_precision_row.visible) > 1:
+		offset_top = -96
 
 
 func _on_pos_changed(_v: float) -> void:
@@ -266,6 +289,9 @@ func _gui_input(event: InputEvent) -> void:
 				accept_event()
 			elif _move_row.visible:
 				hide_move_delta()
+				accept_event()
+			elif _dims_row.visible:
+				hide_dims()
 				accept_event()
 		elif k.keycode == KEY_ENTER or k.keycode == KEY_KP_ENTER:
 			if _precision_row.visible:

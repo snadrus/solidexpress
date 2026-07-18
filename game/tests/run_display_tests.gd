@@ -228,3 +228,17 @@ func test_world_gizmos() -> void:
 
 	gizmos.set_gizmos_visible(true)
 	check(gizmos.gizmos_visible and triad.visible and grid.visible, "set_gizmos_visible(true) restores")
+
+	# Active plane relocates the grid; triad stays at the world origin.
+	gizmos.set_active_plane(Vector3(0, 0, 10), Vector3(0, 0, 1))
+	check(grid.position.is_equal_approx(Vector3(0, 0, 10)),
+		"grid origin follows active plane (z=10)")
+	check(triad.position.is_equal_approx(Vector3.ZERO), "triad stays at world origin")
+	gizmos.set_active_plane(Vector3(5, 0, 2.5), Vector3(1, 0, 0))
+	var gx: Vector3 = grid.transform.basis.x
+	var gz: Vector3 = grid.transform.basis.z
+	check(absf(gz.x) > 0.9, "grid +Z maps to active normal (+X)")
+	check(absf(gx.dot(gz)) < 1e-4, "grid basis stays orthonormal")
+	gizmos.set_active_plane(Vector3.ZERO, Vector3(0, 0, 1))
+	check(grid.transform.is_equal_approx(Transform3D.IDENTITY),
+		"reset active plane restores grid at ground")

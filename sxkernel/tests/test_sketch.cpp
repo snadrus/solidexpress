@@ -133,3 +133,39 @@ TEST_CASE("construction geometry is excluded from profiles", "[sketch][profile]"
     TopoDS_Shape face = sk.profile_face(&err);
     REQUIRE(!face.IsNull());  // circle alone forms the profile
 }
+
+TEST_CASE("multi-wire profile: outer rect minus inner hole", "[sketch][profile]") {
+    Sketch sk("Frame");
+    // Outer 40x30
+    sk.add_line(0, 0, 40, 0);
+    sk.add_line(40, 0, 40, 30);
+    sk.add_line(40, 30, 0, 30);
+    sk.add_line(0, 30, 0, 0);
+    // Inner 20x10 centered hole
+    sk.add_line(10, 10, 30, 10);
+    sk.add_line(30, 10, 30, 20);
+    sk.add_line(30, 20, 10, 20);
+    sk.add_line(10, 20, 10, 10);
+
+    std::string err;
+    TopoDS_Shape face = sk.profile_face(&err);
+    REQUIRE(!face.IsNull());
+    REQUIRE(err.empty());
+    REQUIRE(shape::area(face) == Approx(40.0 * 30.0 - 20.0 * 10.0).epsilon(1e-6));
+}
+
+TEST_CASE("multi-wire profile: open leftover fails", "[sketch][profile]") {
+    Sketch sk("OpenHole");
+    sk.add_line(0, 0, 40, 0);
+    sk.add_line(40, 0, 40, 30);
+    sk.add_line(40, 30, 0, 30);
+    sk.add_line(0, 30, 0, 0);
+    // Incomplete inner loop
+    sk.add_line(10, 10, 30, 10);
+    sk.add_line(30, 10, 30, 20);
+
+    std::string err;
+    TopoDS_Shape face = sk.profile_face(&err);
+    REQUIRE(face.IsNull());
+    REQUIRE(!err.empty());
+}

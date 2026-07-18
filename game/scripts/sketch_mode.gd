@@ -12,8 +12,8 @@ enum Tool { NONE, LINE, RECT, CIRCLE, ARC, POLYGON, SELECT, TRIM }
 
 signal selection_changed(ids: Array)
 
-const PICK_TOLERANCE := 5.0  # model units (mm)
-const SNAP_RADIUS := PICK_TOLERANCE
+const PICK_TOLERANCE := 2.5  # model units (mm) — selection hit radius
+const SNAP_RADIUS := 1.25  # tighter magnet (Fusion/Onshape-scale at typical zoom)
 const GLYPH_PICK_RADIUS := 2.0  # constraint badges are small, precise targets
 
 var sketch: SxSketch
@@ -225,7 +225,7 @@ func begin(origin: Vector3, normal: Vector3, x_hint: Vector3 = Vector3.ZERO) -> 
 	dimensions.clear()
 	_clear_dimension_labels()
 	_redraw()
-	status.emit("Sketch: L line · R rect · C circle · Enter finish+extrude · Esc cancel")
+	status.emit("Sketch: Select · Line · Rect · Circle · Extrude · Esc cancel")
 
 
 func cancel() -> void:
@@ -1515,7 +1515,7 @@ func _update_preview() -> void:
 					im.surface_add_vertex(_to3(verts[(i + 1) % n]))
 	if _snap_marker != null:
 		var m: Vector2 = _snap_marker
-		const MARK := 1.5
+		const MARK := 0.6
 		im.surface_add_vertex(_to3(m + Vector2(-MARK, 0)))
 		im.surface_add_vertex(_to3(m + Vector2(MARK, 0)))
 		im.surface_add_vertex(_to3(m + Vector2(0, -MARK)))

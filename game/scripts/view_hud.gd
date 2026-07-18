@@ -40,9 +40,10 @@ func _ready() -> void:
 	col.add_child(_fit_btn)
 	_nav_option = OptionButton.new()
 	_nav_option.tooltip_text = (
-		"Mouse nav preset:\n"
-		+ "SX/SW — middle orbit, Shift+middle pan\n"
-		+ "Fusion — middle pan, Shift+middle orbit"
+		"Mouse / trackpad nav preset:\n"
+		+ "SX — middle/3-finger pans; Alt-drag orbits; Shift+middle orbits\n"
+		+ "SW — middle orbits, Shift+middle pans\n"
+		+ "Fusion — middle pans, Shift+middle orbits (Alt matches middle)"
 	)
 	_nav_option.add_item("Nav: SX", OrbitCamera.NavPreset.SOLIDEXPRESS)
 	_nav_option.add_item("Nav: SW", OrbitCamera.NavPreset.SOLIDWORKS)

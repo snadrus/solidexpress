@@ -11,7 +11,7 @@ using namespace sx;
 
 TEST_CASE("standard material table has sane entries", "[materials]") {
     const auto& table = materials::standard();
-    REQUIRE(table.size() >= 15);
+    REQUIRE(table.size() == 13);
     REQUIRE(table.front().name == "Unspecified");
     REQUIRE(table.front().density_g_cm3 == Approx(1.0));
     for (const auto& m : table) {
@@ -19,10 +19,11 @@ TEST_CASE("standard material table has sane entries", "[materials]") {
         CHECK(m.density_g_cm3 > 0.0);
         CHECK(m.density_g_cm3 < 25.0);
     }
-    auto steel = materials::find("Steel");
-    REQUIRE(steel.has_value());
-    CHECK(steel->density_g_cm3 == Approx(7.85));
+    auto pla = materials::find("PLA");
+    REQUIRE(pla.has_value());
+    CHECK(pla->density_g_cm3 == Approx(1.24));
     CHECK(!materials::find("Unobtainium").has_value());
+    CHECK(!materials::find("Oak").has_value());
 }
 
 TEST_CASE("body material assignment validates against the table", "[materials]") {
@@ -30,18 +31,18 @@ TEST_CASE("body material assignment validates against the table", "[materials]")
     auto id = doc.add_body(shape::make_box(10, 10, 10), "Box");
     CHECK(doc.body(id)->material == "Unspecified");
 
-    REQUIRE(doc.set_body_material(id, "Aluminum 6061"));
-    CHECK(doc.body(id)->material == "Aluminum 6061");
+    REQUIRE(doc.set_body_material(id, "PC"));
+    CHECK(doc.body(id)->material == "PC");
 
     CHECK(!doc.set_body_material(id, "Unobtainium"));
-    CHECK(doc.body(id)->material == "Aluminum 6061");
-    CHECK(!doc.set_body_material(EntityId::generate(), "Steel"));
+    CHECK(doc.body(id)->material == "PC");
+    CHECK(!doc.set_body_material(EntityId::generate(), "PLA"));
 }
 
 TEST_CASE("material survives sxp round-trip", "[materials][sxp]") {
     Document doc;
     auto id = doc.add_body(shape::make_box(10, 10, 10), "Box");
-    REQUIRE(doc.set_body_material(id, "Brass"));
+    REQUIRE(doc.set_body_material(id, "TPU"));
 
     std::string path = "/tmp/sx_material_roundtrip.sxp";
     std::string err;
@@ -51,6 +52,6 @@ TEST_CASE("material survives sxp round-trip", "[materials][sxp]") {
     REQUIRE(load_sxp(loaded, path, &err));
     const Body* b = loaded.body(id);
     REQUIRE(b != nullptr);
-    CHECK(b->material == "Brass");
+    CHECK(b->material == "TPU");
     std::remove(path.c_str());
 }

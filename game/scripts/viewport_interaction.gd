@@ -15,6 +15,7 @@ var camera: OrbitCamera
 var model_space: Node3D  # kernel Z-up frame
 var sketch_mode: SketchMode  # optional; when active, input goes to sketching
 var world_gizmos: WorldGizmos
+var measure_overlay: MeasureOverlay
 var transform_hud: TransformHud
 var ops_panel: OpsPanel
 
@@ -67,6 +68,7 @@ var _strip_hide: Button
 var _strip_delete: Button
 var _strip_sketch: Button
 var _strip_look: Button
+var _strip_plane: Button
 var _strip_fuse: Button
 var _strip_cut: Button
 var _strip_common: Button
@@ -101,12 +103,23 @@ var place_size := Vector3(
 		DocumentView.DEFAULT_PRIMITIVE_MM)
 ## After a place commit, skip the matching LMB release select (avoids clear-on-miss).
 var _ignore_select_release := false
-## Place-mode snap UI (shown while armed).
+## Snap-to-grid UI (shown while place is armed or during body move).
 var place_snap_enabled := true
 var place_snap_mm := 0.1
 var _place_snap_panel: PanelContainer
 var _place_snap_check: CheckBox
 var _place_snap_spin: SpinBox
+## Body-move magnets: active snap guide, hover-preferred target, start AABB.
+var _move_snap_active: Dictionary = {}
+var _move_snap_hover_body := ""
+var _move_start_bb: Dictionary = {}
+## Active move plane (default = world XY). Body drag stays on this plane; the
+## yellow lift grip moves along its normal. Set via View menu pick or face RMB.
+var active_plane_origin := Vector3.ZERO
+var active_plane_normal := Vector3(0, 0, 1)
+var _active_plane_custom := false
+## One-shot: next face click sets the active plane (View → Set Active Plane…).
+var _picking_active_plane := false
 
 ## Resize-drag state (AABB corner / face-center handles).
 var _resize_min := Vector3.ZERO
@@ -134,6 +147,8 @@ const AXIS_HANDLE_PX := 26.0
 const AXIS_LEN_FRAC := 0.35
 ## Grip arrows cap at this fraction of screen width (horizontal) or height (vertical).
 const GRIP_SCREEN_FRAC := 0.10
+## Screen-space magnet hold for grid / object snap during body move.
+const SNAP_HOLD_PX := 6.0
 const GHOST_NAME := "PlaceGhost"
 ## Kernel primitive sizes used for sit-on-plane ghost offsets (half-heights).
 const PLACE_HALF_Z := {
@@ -153,6 +168,7 @@ func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	focus_mode = Control.FOCUS_ALL
 	_mount_world_gizmos()
+	_mount_measure_overlay()
 	_build_place_snap_ui()
 	_build_transform_hud()
 	_build_context_menu()
@@ -167,6 +183,9 @@ func _ready() -> void:
 	if view != null:
 		view.selection_changed.connect(_on_view_selection_changed)
 		view.document_changed.connect(_on_view_document_changed)
+	if camera != null:
+		camera.view_changed.connect(_on_camera_view_changed)
+	resized.connect(queue_redraw)
 
 
 func is_placing() -> bool:
@@ -179,8 +198,8 @@ func refresh_selection_chrome() -> void:
 	_refresh_selection_strip()
 
 
-func _process(_delta: float) -> void:
-	# Keep gizmo screen projections tracking the camera.
+func _on_camera_view_changed() -> void:
+	# Gizmo screen projections only need a redraw when the camera moves.
 	if view != null and view.selected_body != "" and _place_kind == "":
 		queue_redraw()
 
@@ -200,6 +219,7 @@ func _build_context_menu() -> void:
 	_context_menu.name = "SelectionContext"
 	add_child(_context_menu)
 	_context_menu.id_pressed.connect(_on_context_id)
+	UiScroll.soften_menu(_context_menu)
 
 
 func _build_selection_strip() -> void:
@@ -208,8 +228,8 @@ func _build_selection_strip() -> void:
 	_selection_strip.visible = false
 	_selection_strip.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_selection_strip.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	_selection_strip.offset_left = -360
-	_selection_strip.offset_right = 360
+	_selection_strip.offset_left = -420
+	_selection_strip.offset_right = 420
 	_selection_strip.offset_top = 8
 	_selection_strip.offset_bottom = 44
 	add_child(_selection_strip)
@@ -240,6 +260,11 @@ func _build_selection_strip() -> void:
 	_strip_look.tooltip_text = "Orient the camera normal to the selected face"
 	_strip_look.pressed.connect(func() -> void: _ctx_look_at())
 	row.add_child(_strip_look)
+	_strip_plane = Button.new()
+	_strip_plane.text = "Active plane"
+	_strip_plane.tooltip_text = "Use the selected flat face as the body-move plane"
+	_strip_plane.pressed.connect(func() -> void: _ctx_set_active_plane())
+	row.add_child(_strip_plane)
 	_strip_hide = Button.new()
 	_strip_hide.text = "Hide"
 	_strip_hide.pressed.connect(func() -> void: _ctx_hide())
@@ -358,10 +383,316 @@ func _build_place_snap_ui() -> void:
 
 
 func _snap_point(p: Vector3) -> Vector3:
+	# World-axis snap (legacy / move magnets). Place uses `_snap_on_active_plane`.
 	if not place_snap_enabled:
 		return p
 	var s := maxf(place_snap_mm, 0.01)
 	return Vector3(snappedf(p.x, s), snappedf(p.y, s), snappedf(p.z, s))
+
+
+## Snap in the active plane's UV, keeping the point on that plane.
+func _snap_on_active_plane(p: Vector3) -> Vector3:
+	var n := _active_plane_n()
+	var o := active_plane_origin
+	var x := _active_plane_x()
+	var y := n.cross(x).normalized()
+	p = p - n * (p - o).dot(n)
+	if not place_snap_enabled:
+		return p
+	var s := maxf(place_snap_mm, 0.01)
+	var u := snappedf((p - o).dot(x), s)
+	var v := snappedf((p - o).dot(y), s)
+	return o + x * u + y * v
+
+
+## In-plane +X for the active plane (matches the white grid axes).
+func _active_plane_x() -> Vector3:
+	var n := _active_plane_n()
+	var x := n.cross(Vector3(0, 0, 1))
+	if x.length_squared() < 1e-12:
+		x = Vector3.RIGHT
+	else:
+		x = x.normalized()
+	return x
+
+
+## Active-plane normal flipped so +N points toward the camera ("my side").
+func _place_sit_normal() -> Vector3:
+	var n := _active_plane_n()
+	if camera == null or model_space == null:
+		return n
+	var inv: Transform3D = model_space.global_transform.affine_inverse()
+	var cam_pos: Vector3 = inv * camera.global_position
+	if (cam_pos - active_plane_origin).dot(n) < 0.0:
+		return -n
+	return n
+
+
+## Half-extent along sit normal for the place ghost / insert floor offset.
+func _place_half_height(kind: String) -> float:
+	match kind:
+		"box", "cylinder", "cone":
+			return place_size.z * 0.5
+		"sphere":
+			return place_size.x * 0.5
+		"torus":
+			return place_size.y * 0.5
+		_:
+			return float(PLACE_HALF_Z.get(kind, 25.0))
+
+
+func _show_snap_bar() -> void:
+	if _place_snap_panel == null:
+		return
+	_place_snap_panel.visible = true
+	_place_snap_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_place_snap_check.button_pressed = place_snap_enabled
+	_place_snap_spin.value = place_snap_mm
+
+
+func _hide_snap_bar_unless_placing() -> void:
+	if _place_kind != "":
+		return
+	if _place_snap_panel == null:
+		return
+	_place_snap_panel.visible = false
+	_place_snap_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+
+## Normalize a kernel bbox ({min,max}) to include center/size.
+func _bb_with_center(bb: Dictionary) -> Dictionary:
+	if bb.is_empty() or not bb.has("min") or not bb.has("max"):
+		return {}
+	var mn: Vector3 = bb["min"]
+	var mx: Vector3 = bb["max"]
+	return {
+		"min": mn,
+		"max": mx,
+		"center": (mn + mx) * 0.5,
+		"size": mx - mn,
+	}
+
+
+## Center + 6 AABB face midpoints for snap matching.
+func _aabb_snap_anchors(bb: Dictionary) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	var full := _bb_with_center(bb)
+	if full.is_empty():
+		return out
+	var mn: Vector3 = full["min"]
+	var mx: Vector3 = full["max"]
+	var c: Vector3 = full["center"]
+	out.append({"point": c, "kind": "center", "axis": -1, "sign": 0})
+	out.append({"point": Vector3(mx.x, c.y, c.z), "kind": "face", "axis": 0, "sign": 1})
+	out.append({"point": Vector3(mn.x, c.y, c.z), "kind": "face", "axis": 0, "sign": -1})
+	out.append({"point": Vector3(c.x, mx.y, c.z), "kind": "face", "axis": 1, "sign": 1})
+	out.append({"point": Vector3(c.x, mn.y, c.z), "kind": "face", "axis": 1, "sign": -1})
+	out.append({"point": Vector3(c.x, c.y, mx.z), "kind": "face", "axis": 2, "sign": 1})
+	out.append({"point": Vector3(c.x, c.y, mn.z), "kind": "face", "axis": 2, "sign": -1})
+	return out
+
+
+func _snap_kind_priority(src_kind: String, dst_kind: String, src_axis: int, dst_axis: int) -> int:
+	if src_kind == "center" and dst_kind == "center":
+		return 0
+	if src_kind == "face" and dst_kind == "face" and src_axis == dst_axis and src_axis >= 0:
+		return 1
+	if src_kind == "center" or dst_kind == "center":
+		return 2
+	return 3
+
+
+## Constrain a snap candidate to the active move axis lock (Blender-style).
+func _apply_axis_lock_to_snap(cand: Vector3, raw: Vector3) -> Vector3:
+	match _move_axis_lock:
+		AXIS_X:
+			return Vector3(cand.x, 0.0, raw.z)
+		AXIS_Y:
+			return Vector3(0.0, cand.y, raw.z)
+		AXIS_Z:
+			return Vector3(raw.x, raw.y, cand.z)
+		_:
+			return Vector3(cand.x, cand.y, raw.z)
+
+
+func _screen_delta_px(a: Vector3, b: Vector3) -> float:
+	if camera == null:
+		return 1e9
+	var wa: Vector3 = model_space.to_global(a)
+	var wb: Vector3 = model_space.to_global(b)
+	if camera.is_position_behind(wa) or camera.is_position_behind(wb):
+		return 1e9
+	return camera.unproject_position(wa).distance_to(camera.unproject_position(wb))
+
+
+## Closest AABB surface pair along `axis` (0=X,1=Y,2=Z). Returns gap segment + mm.
+func _closest_surface_gap(sel_bb: Dictionary, other_bb: Dictionary, axis: int) -> Dictionary:
+	var empty := {"gap_a": Vector3.ZERO, "gap_b": Vector3.ZERO, "gap_mm": 0.0}
+	if sel_bb.is_empty() or other_bb.is_empty() or axis < 0 or axis > 2:
+		return empty
+	var smn: Vector3 = sel_bb["min"]
+	var smx: Vector3 = sel_bb["max"]
+	var omn: Vector3 = other_bb["min"]
+	var omx: Vector3 = other_bb["max"]
+	var sc: Vector3 = sel_bb["center"]
+	var oc: Vector3 = other_bb["center"]
+	# Lateral mid in the other two axes (overlap slab mid, else average of centers).
+	var mid := Vector3(
+			(sc.x + oc.x) * 0.5, (sc.y + oc.y) * 0.5, (sc.z + oc.z) * 0.5)
+	for a in [0, 1, 2]:
+		if a == axis:
+			continue
+		var s0 := smn[a]
+		var s1 := smx[a]
+		var o0 := omn[a]
+		var o1 := omx[a]
+		var lo := maxf(s0, o0)
+		var hi := minf(s1, o1)
+		if hi >= lo:
+			mid[a] = (lo + hi) * 0.5
+		else:
+			mid[a] = (sc[a] + oc[a]) * 0.5
+	var a_pt := mid
+	var b_pt := mid
+	var gap := 0.0
+	if smx[axis] <= omn[axis]:
+		gap = omn[axis] - smx[axis]
+		a_pt[axis] = smx[axis]
+		b_pt[axis] = omn[axis]
+	elif omx[axis] <= smn[axis]:
+		gap = smn[axis] - omx[axis]
+		a_pt[axis] = omx[axis]
+		b_pt[axis] = smn[axis]
+	else:
+		# Overlap / flush: align through shared plane at contact mid.
+		var plane := (minf(smx[axis], omx[axis]) + maxf(smn[axis], omn[axis])) * 0.5
+		a_pt[axis] = plane
+		b_pt[axis] = plane
+		gap = 0.0
+	return {"gap_a": a_pt, "gap_b": b_pt, "gap_mm": gap}
+
+
+func _move_snap_target_body(live_center: Vector3) -> String:
+	var selected := _selected_body_ids()
+	if _move_snap_hover_body != "" and not selected.has(_move_snap_hover_body):
+		var hbb := _bb_with_center(view.doc.measure_bbox(_move_snap_hover_body))
+		if not hbb.is_empty():
+			return _move_snap_hover_body
+	var best_id := ""
+	var best_d := INF
+	for id in view.doc.body_ids():
+		if selected.has(id):
+			continue
+		var bb := _bb_with_center(view.doc.measure_bbox(id))
+		if bb.is_empty():
+			continue
+		var d: float = live_center.distance_squared_to(bb["center"])
+		if d < best_d:
+			best_d = d
+			best_id = id
+	return best_id
+
+
+func _update_move_snap_hover(screen_pos: Vector2) -> void:
+	_move_snap_hover_body = ""
+	var ray := _model_ray(screen_pos)
+	var hit: Dictionary = view.pick_info(ray[0], ray[1])
+	if hit.is_empty():
+		return
+	var body := str(hit.get("body", ""))
+	if body == "" or _selected_body_ids().has(body):
+		return
+	_move_snap_hover_body = body
+
+
+## Resolve object / grid snap for a free move delta. Returns {delta, ...guide} or {}.
+func _resolve_move_snap(raw_delta: Vector3) -> Dictionary:
+	_move_snap_active = {}
+	if _move_start_bb.is_empty():
+		return {}
+	var raw_center := _move_start_center + raw_delta
+	var target_id := _move_snap_target_body(raw_center)
+	var best: Dictionary = {}
+	var best_pri := 99
+	var best_err := SNAP_HOLD_PX + 1.0
+	if target_id != "":
+		var other_bb := _bb_with_center(view.doc.measure_bbox(target_id))
+		if not other_bb.is_empty():
+			var srcs := _aabb_snap_anchors(_move_start_bb)
+			var dsts := _aabb_snap_anchors(other_bb)
+			for src in srcs:
+				for dst in dsts:
+					var cand: Vector3 = dst["point"] - src["point"]
+					cand = _apply_axis_lock_to_snap(cand, raw_delta)
+					var err := _screen_delta_px(raw_center, _move_start_center + cand)
+					if err > SNAP_HOLD_PX:
+						continue
+					var pri := _snap_kind_priority(
+							str(src["kind"]), str(dst["kind"]),
+							int(src["axis"]), int(dst["axis"]))
+					if pri > best_pri or (pri == best_pri and err >= best_err):
+						continue
+					best_pri = pri
+					best_err = err
+					var gap_axis := int(dst["axis"]) if int(dst["axis"]) >= 0 \
+							else (int(src["axis"]) if int(src["axis"]) >= 0 else -1)
+					var live_bb := {
+						"min": _move_start_bb["min"] + cand,
+						"max": _move_start_bb["max"] + cand,
+						"center": _move_start_bb["center"] + cand,
+						"size": _move_start_bb["size"],
+					}
+					if gap_axis < 0:
+						var sep: Vector3 = other_bb["center"] - live_bb["center"]
+						if absf(sep.x) >= absf(sep.y) and absf(sep.x) >= absf(sep.z):
+							gap_axis = 0
+						elif absf(sep.y) >= absf(sep.z):
+							gap_axis = 1
+						else:
+							gap_axis = 2
+						# Coincident centers: pick axis with largest face-to-face gap.
+						if sep.length_squared() < 1e-10:
+							var best_gap := -1.0
+							for ax in [0, 1, 2]:
+								var g := _closest_surface_gap(live_bb, other_bb, ax)
+								if float(g["gap_mm"]) > best_gap:
+									best_gap = float(g["gap_mm"])
+									gap_axis = ax
+					var gap := _closest_surface_gap(live_bb, other_bb, gap_axis)
+					best = {
+						"kind": "%s→%s" % [src["kind"], dst["kind"]],
+						"src": src["point"] + cand,
+						"dst": dst["point"],
+						"delta": cand,
+						"gap_a": gap["gap_a"],
+						"gap_b": gap["gap_b"],
+						"gap_mm": gap["gap_mm"],
+						"body": target_id,
+						"priority": pri,
+					}
+	if not best.is_empty():
+		_move_snap_active = best
+		return best
+	# Grid snap when no object magnet holds.
+	if place_snap_enabled:
+		var snapped_c := _snap_point(raw_center)
+		var grid_delta := _apply_axis_lock_to_snap(snapped_c - _move_start_center, raw_delta)
+		var gerr := _screen_delta_px(raw_center, _move_start_center + grid_delta)
+		if gerr <= SNAP_HOLD_PX and grid_delta.distance_squared_to(raw_delta) > 1e-14:
+			best = {
+				"kind": "grid",
+				"src": _move_start_center + grid_delta,
+				"dst": _move_start_center + grid_delta,
+				"delta": grid_delta,
+				"gap_a": _move_start_center + grid_delta,
+				"gap_b": _move_start_center + grid_delta,
+				"gap_mm": 0.0,
+				"body": "",
+				"priority": 10,
+			}
+			_move_snap_active = best
+			return best
+	return {}
 
 
 ## Origin triad + ground grid as a sibling of DocumentView under ModelSpace.
@@ -374,6 +705,24 @@ func _mount_world_gizmos() -> void:
 	world_gizmos = WorldGizmos.new()
 	world_gizmos.name = "WorldGizmos"
 	model_space.add_child(world_gizmos)
+
+
+func _mount_measure_overlay() -> void:
+	# Lives on this Control (not ModelSpace) — drawn in screen space on top.
+	if get_node_or_null("MeasureOverlay") != null:
+		measure_overlay = get_node("MeasureOverlay") as MeasureOverlay
+	else:
+		measure_overlay = MeasureOverlay.new()
+		measure_overlay.name = "MeasureOverlay"
+		add_child(measure_overlay)
+	measure_overlay.view = view
+	if not measure_overlay.changed.is_connected(_on_measure_overlay_changed):
+		measure_overlay.changed.connect(_on_measure_overlay_changed)
+	measure_overlay.refresh_bounds()
+
+
+func _on_measure_overlay_changed() -> void:
+	queue_redraw()
 
 
 func _model_ray(screen_pos: Vector2) -> Array:
@@ -389,15 +738,106 @@ func ground_point(screen_pos: Vector2) -> Variant:
 	return _horizontal_plane_point(screen_pos, 0.0)
 
 
-## Intersection with a horizontal plane at model height `z` (active move plane).
+## Intersection with a horizontal plane at model height `z`.
 func _horizontal_plane_point(screen_pos: Vector2, z: float) -> Variant:
-	var ray := _model_ray(screen_pos)
-	var origin: Vector3 = ray[0]
-	var dir: Vector3 = ray[1]
-	if absf(dir.z) < 1e-9:
+	return _plane_point(screen_pos, Vector3(0, 0, z), Vector3(0, 0, 1))
+
+
+## Ray ∩ plane through `origin` with unit-ish `normal` (model space). Null if
+## parallel or behind the camera.
+func _plane_point(screen_pos: Vector2, origin: Vector3, normal: Vector3) -> Variant:
+	var n := normal.normalized()
+	if n.length_squared() < 1e-12:
 		return null
-	var t := (z - origin.z) / dir.z
-	return null if t < 0 else origin + dir * t
+	var ray := _model_ray(screen_pos)
+	var o: Vector3 = ray[0]
+	var dir: Vector3 = ray[1]
+	var denom := dir.dot(n)
+	if absf(denom) < 1e-9:
+		return null
+	var t := (origin - o).dot(n) / denom
+	return null if t < 0 else o + dir * t
+
+
+func active_plane_is_custom() -> bool:
+	return _active_plane_custom
+
+
+func reset_active_plane() -> void:
+	_active_plane_custom = false
+	active_plane_origin = Vector3.ZERO
+	active_plane_normal = Vector3(0, 0, 1)
+	_picking_active_plane = false
+	_sync_grid_to_active_plane()
+	status.emit("Active plane: ground (XY)")
+	queue_redraw()
+
+
+## Arm one-shot face pick (View → Set Active Plane…). Esc / RMB cancels.
+func arm_pick_active_plane() -> void:
+	if _place_kind != "":
+		_disarm_place(false)
+	_picking_active_plane = true
+	grab_focus()
+	status.emit("Click a flat face to set the active plane (Esc to cancel)")
+
+
+func cancel_pick_active_plane() -> void:
+	if not _picking_active_plane:
+		return
+	_picking_active_plane = false
+	status.emit("Set active plane cancelled")
+
+
+func _commit_pick_active_plane(screen_pos: Vector2) -> void:
+	var ray := _model_ray(screen_pos)
+	var hit: Dictionary = view.pick_info(ray[0], ray[1])
+	if not hit.is_empty() and str(hit.get("face", "")) != "":
+		var face_id := str(hit["face"])
+		var body_id := str(hit.get("body", ""))
+		view.select_entity(body_id, face_id)
+		_set_active_plane_from_face(face_id, body_id)
+		return
+	# Empty ground click → back to world XY.
+	if hit.is_empty() and ground_point(screen_pos) != null:
+		reset_active_plane()
+		return
+	status.emit("Click a flat face (or empty ground) to set the active plane")
+
+
+## Set the move plane from the current face selection (axis-aligned flat faces).
+func set_active_plane_from_selection() -> bool:
+	if view == null or view.selected_face == "" or view.selected_body == "":
+		status.emit("Select a flat face first")
+		return false
+	return _set_active_plane_from_face(view.selected_face, view.selected_body)
+
+
+func _set_active_plane_from_face(face_id: String, body_id: String) -> bool:
+	var plane: Dictionary = SketchMode.derive_face_plane(view.doc, face_id, body_id)
+	if not bool(plane.get("ok", false)):
+		status.emit(str(plane.get("message", "Face is not a flat axis-aligned plane")))
+		return false
+	_active_plane_custom = true
+	active_plane_origin = plane["origin"]
+	active_plane_normal = (plane["normal"] as Vector3).normalized()
+	_picking_active_plane = false
+	_sync_grid_to_active_plane()
+	status.emit("Active plane set — " + str(plane.get("message", "")))
+	queue_redraw()
+	return true
+
+
+func _active_plane_n() -> Vector3:
+	var n := active_plane_normal.normalized()
+	return n if n.length_squared() > 1e-12 else Vector3(0, 0, 1)
+
+
+## Keep the white WorldGizmos grid on the active move plane.
+func _sync_grid_to_active_plane() -> void:
+	if world_gizmos == null:
+		return
+	world_gizmos.set_active_plane(active_plane_origin, _active_plane_n())
 
 
 func _can_drop_data(_at: Vector2, data: Variant) -> bool:
@@ -407,7 +847,8 @@ func _can_drop_data(_at: Vector2, data: Variant) -> bool:
 func _drop_data(at: Vector2, data: Variant) -> void:
 	var target := _place_target(at)
 	var kind: String = str(data["sx_primitive"])
-	view.insert_primitive(kind, target["point"], DocumentView.default_primitive_size(kind))
+	view.insert_primitive(kind, target["point"], DocumentView.default_primitive_size(kind),
+			_place_sit_normal(), _active_plane_x())
 	_ignore_select_release = true
 	if target.get("stacked", false):
 		status.emit("Stacked " + kind + " — Alt-drag or two-finger drag to orbit")
@@ -429,40 +870,52 @@ func _screen_center() -> Vector2:
 	return get_viewport().get_visible_rect().size * 0.5
 
 
-## Half-height offset so a centered Godot mesh sits with its floor on z=floor.
+## Offset from floor point to centered ghost along the place sit normal.
 func _ghost_sit_offset(kind: String) -> Vector3:
-	match kind:
-		"box", "cylinder", "cone":
-			return Vector3(0, 0, place_size.z * 0.5)
-		"sphere":
-			return Vector3(0, 0, place_size.x * 0.5)
-		"torus":
-			return Vector3(0, 0, place_size.y * 0.5)
-		_:
-			var hz: float = float(PLACE_HALF_Z.get(kind, 25.0))
-			return Vector3(0, 0, hz)
+	return _place_sit_normal() * _place_half_height(kind)
 
 
-## Resolve place floor: body hit → sit on that point's height; else ground z=0.
+## Basis mapping model Z-up local (+X,+Y,+Z) onto the active place frame.
+func _place_basis() -> Basis:
+	var n := _place_sit_normal()
+	var x := _active_plane_x()
+	x = (x - n * x.dot(n)).normalized()
+	if x.length_squared() < 1e-12:
+		x = Vector3.RIGHT if absf(n.dot(Vector3.RIGHT)) < 0.9 else Vector3(0, 0, -1)
+		x = (x - n * x.dot(n)).normalized()
+	var y := n.cross(x).normalized()
+	return Basis(x, y, n)
+
+
+## Mesh-local basis so Godot primitives (cylinder Y-up) become model Z-up.
+func _ghost_mesh_basis(kind: String) -> Basis:
+	if kind == "cylinder" or kind == "cone":
+		# Rx(90°): mesh +Y (height) → model +Z.
+		return Basis(Vector3(1, 0, 0), Vector3(0, 0, 1), Vector3(0, -1, 0))
+	return Basis.IDENTITY
+
+
+## Resolve place floor: body hit → sit there; else ray ∩ active plane.
 func _place_target(screen_pos: Vector2) -> Dictionary:
 	var ray := _model_ray(screen_pos)
 	var hit: Dictionary = view.pick_info(ray[0], ray[1])
 	if not hit.is_empty() and hit.has("point"):
 		var pt: Vector3 = hit["point"]
-		# Snap soft stacking to the hit body's top when the click is near it.
-		var body: String = str(hit.get("body", ""))
-		if body != "":
-			var bb: Dictionary = view.doc.measure_bbox(body)
-			if not bb.is_empty():
-				var mx: Vector3 = bb["max"]
-				if pt.z >= float(mx.z) - 2.0:
-					pt = Vector3(pt.x, pt.y, float(mx.z))
-		pt = _snap_point(pt)
+		# Ground-plane stacking: soft-snap to the hit body's top face.
+		if not _active_plane_custom:
+			var body: String = str(hit.get("body", ""))
+			if body != "":
+				var bb: Dictionary = view.doc.measure_bbox(body)
+				if not bb.is_empty():
+					var mx: Vector3 = bb["max"]
+					if pt.z >= float(mx.z) - 2.0:
+						pt = Vector3(pt.x, pt.y, float(mx.z))
+		pt = _snap_on_active_plane(pt)
 		return {"point": pt, "stacked": true, "need_frame": false}
-	var gp = ground_point(screen_pos)
+	var gp = _plane_point(screen_pos, active_plane_origin, _active_plane_n())
 	if gp == null:
-		return {"point": Vector3.ZERO, "stacked": false, "need_frame": true}
-	return {"point": _snap_point(gp), "stacked": false, "need_frame": false}
+		return {"point": active_plane_origin, "stacked": false, "need_frame": true}
+	return {"point": _snap_on_active_plane(gp), "stacked": false, "need_frame": false}
 
 
 func _arm_place(kind: String) -> void:
@@ -472,12 +925,9 @@ func _arm_place(kind: String) -> void:
 	_place_kind = kind
 	place_size = DocumentView.default_primitive_size(kind)
 	grab_focus()
-	if _place_snap_panel != null:
-		_place_snap_panel.visible = true
-		_place_snap_panel.mouse_filter = Control.MOUSE_FILTER_STOP
-		_place_snap_check.button_pressed = place_snap_enabled
-		_place_snap_spin.value = place_snap_mm
-	status.emit("Click ground or a face to place %s (Esc to cancel)" % kind)
+	_show_snap_bar()
+	var plane_hint := "active plane" if _active_plane_custom else "ground"
+	status.emit("Click %s or a face to place %s (Esc to cancel)" % [plane_hint, kind])
 	_place_ghost = _make_ghost(kind)
 	model_space.add_child(_place_ghost)
 	_update_ghost(_screen_center())
@@ -499,7 +949,8 @@ func _make_ghost(kind: String) -> MeshInstance3D:
 
 
 func _apply_ghost_mesh(mi: MeshInstance3D, kind: String, s: Vector3) -> void:
-	mi.rotation_degrees = Vector3.ZERO
+	# Mesh stays unrotated; `_ghost_world_xform` applies mesh→Z-up→active plane.
+	mi.transform = Transform3D.IDENTITY
 	var mesh: Mesh
 	match kind:
 		"box":
@@ -512,8 +963,6 @@ func _apply_ghost_mesh(mi: MeshInstance3D, kind: String, s: Vector3) -> void:
 			cm.bottom_radius = s.x * 0.5
 			cm.height = s.z
 			mesh = cm
-			# Godot cylinder is Y-up; model space is Z-up.
-			mi.rotation_degrees.x = 90.0
 		"sphere":
 			var sm := SphereMesh.new()
 			sm.radius = s.x * 0.5
@@ -531,16 +980,156 @@ func _apply_ghost_mesh(mi: MeshInstance3D, kind: String, s: Vector3) -> void:
 	mi.mesh = mesh
 
 
+func _ghost_world_xform(kind: String, floor_pt: Vector3) -> Transform3D:
+	var basis := _place_basis() * _ghost_mesh_basis(kind)
+	return Transform3D(basis, floor_pt + _ghost_sit_offset(kind))
+
+
 func _update_ghost(screen_pos: Vector2) -> void:
 	if _place_ghost == null:
 		return
 	var target := _place_target(screen_pos)
 	var floor_pt: Vector3 = target["point"]
 	_place_ghost.visible = true
-	_place_ghost.position = floor_pt + _ghost_sit_offset(_place_kind)
+	_place_ghost.transform = _ghost_world_xform(_place_kind, floor_pt)
 	# Don't clobber typed values while a HUD SpinBox has focus.
-	if transform_hud != null and transform_hud.visible and not _hud_editing():
-		transform_hud.set_values(floor_pt, place_size, true)
+	if transform_hud != null and not _hud_editing():
+		transform_hud.show_dims(floor_pt, place_size, true)
+	_update_transport_measure(screen_pos)
+
+
+## Eight corners of an AABB in model space.
+func _aabb_corners(mn: Vector3, mx: Vector3) -> Array[Vector3]:
+	var out: Array[Vector3] = []
+	for x in [mn.x, mx.x]:
+		for y in [mn.y, mx.y]:
+			for z in [mn.z, mx.z]:
+				out.append(Vector3(x, y, z))
+	return out
+
+
+## Eight corners of the place ghost AABB in model space (active-plane frame).
+func _ghost_corners() -> Array[Vector3]:
+	var out: Array[Vector3] = []
+	if _place_ghost == null:
+		return out
+	var center: Vector3 = _place_ghost.position
+	var half := place_size * 0.5
+	var B := _place_basis()
+	for sx in [-1.0, 1.0]:
+		for sy in [-1.0, 1.0]:
+			for sz in [-1.0, 1.0]:
+				out.append(center + B * Vector3(sx * half.x, sy * half.y, sz * half.z))
+	return out
+
+
+## Subject being placed or moved — corners used as the measure B end.
+func _transport_subject_corners() -> Array[Vector3]:
+	if _place_kind != "" and _place_ghost != null:
+		return _ghost_corners()
+	if _drag_mode == DragMode.MOVE_BODY and not _move_start_bb.is_empty():
+		var mn: Vector3 = _move_start_bb["min"] + _drag_accum
+		var mx: Vector3 = _move_start_bb["max"] + _drag_accum
+		return _aabb_corners(mn, mx)
+	# Idle selection (about to move): current bbox corners.
+	if view != null and view.selected_body != "" and view.selection_size() >= 1 \
+			and _drag_mode == DragMode.NONE and _place_kind == "":
+		var bb := view.selection_bbox()
+		if not bb.is_empty():
+			return _aabb_corners(bb["min"], bb["max"])
+	return []
+
+
+## Bodies the measure X must not plant on (the thing being moved / selected).
+func _transport_skip_bodies() -> Dictionary:
+	var skip := {}
+	if view == null:
+		return skip
+	if _drag_mode == DragMode.MOVE_BODY and view.selected_body != "":
+		skip[view.selected_body] = true
+	elif _place_kind == "" and view.selected_body != "":
+		for b in view.selected_bodies:
+			skip[str(b)] = true
+		if view.selected_body != "":
+			skip[view.selected_body] = true
+	return skip
+
+
+## Pick a solid under the cursor, skipping `skip` body ids (and hidden).
+func _pick_measure_target(screen_pos: Vector2, skip: Dictionary) -> Dictionary:
+	if view == null:
+		return {}
+	var ray := _model_ray(screen_pos)
+	var o: Vector3 = ray[0]
+	var d: Vector3 = ray[1]
+	if d.length_squared() < 1e-12:
+		return {}
+	d = d.normalized()
+	for _i in range(32):
+		var hit: Dictionary = view.doc.pick(o, d)
+		if hit.is_empty():
+			return {}
+		var body := str(hit.get("body", ""))
+		if body != "" and not skip.has(body) and not view.hidden_bodies.has(body):
+			return hit
+		var pt: Vector3 = hit.get("point", o)
+		o = pt + d * 0.05
+	return {}
+
+
+func _closest_corner_of(corners: Array[Vector3], from: Vector3) -> Variant:
+	var best: Variant = null
+	var best_d := INF
+	for c in corners:
+		var d := from.distance_squared_to(c)
+		if d < best_d:
+			best_d = d
+			best = c
+	return best
+
+
+## Place / move / selected-body transport measure: touch another solid to plant
+## the X (corner); otherwise dim from X to the subject's nearest corner.
+func _update_transport_measure(screen_pos: Vector2 = Vector2.INF) -> void:
+	if measure_overlay == null or view == null:
+		return
+	var pos := screen_pos
+	if not pos.is_finite():
+		pos = get_local_mouse_position()
+	var skip := _transport_skip_bodies()
+	var hit := _pick_measure_target(pos, skip)
+	if not hit.is_empty():
+		var body := str(hit.get("body", ""))
+		measure_overlay.relocate_anchor(body, hit.get("point", Vector3.ZERO))
+		view.set_hover(body, str(hit.get("face", "")), str(hit.get("edge", "")))
+		if _place_kind != "":
+			status.emit("Measure X on target — move ghost to compare · click places")
+		elif _drag_mode == DragMode.MOVE_BODY:
+			status.emit("Measure X on target — drag to compare · release commits move")
+		else:
+			status.emit("Measure X on target — drag body to compare")
+		return
+	view.clear_hover()
+	if not measure_overlay.has_anchor():
+		return
+	var corners := _transport_subject_corners()
+	if corners.is_empty():
+		measure_overlay.clear_live_target()
+		return
+	var corner = _closest_corner_of(corners, measure_overlay.anchor_point as Vector3)
+	if corner == null:
+		measure_overlay.clear_live_target()
+		return
+	measure_overlay.set_live_target(corner as Vector3)
+
+
+## @deprecated name kept for call sites — forwards to transport measure.
+func _update_place_measure(screen_pos: Vector2 = Vector2.INF) -> void:
+	_update_transport_measure(screen_pos)
+
+
+func _closest_ghost_corner(from: Vector3) -> Variant:
+	return _closest_corner_of(_ghost_corners(), from)
 
 
 func _hud_editing() -> bool:
@@ -562,6 +1151,8 @@ func _disarm_place(emit_cancel: bool) -> void:
 	if _place_snap_panel != null:
 		_place_snap_panel.visible = false
 		_place_snap_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if measure_overlay != null:
+		measure_overlay.clear_live_target()
 	if emit_cancel:
 		status.emit("Placement cancelled")
 	_refresh_transform_hud()
@@ -576,8 +1167,11 @@ func _commit_place(screen_pos: Vector2) -> void:
 	if _place_snap_panel != null:
 		_place_snap_panel.visible = false
 		_place_snap_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	if measure_overlay != null:
+		measure_overlay.clear_live_target()
 	_ignore_select_release = true
-	view.insert_primitive(kind, target["point"], place_size)
+	view.insert_primitive(kind, target["point"], place_size,
+			_place_sit_normal(), _active_plane_x())
 	if target.get("stacked", false):
 		status.emit("Stacked %s on face — drag empty space or Alt-drag to orbit" % kind)
 	else:
@@ -618,13 +1212,33 @@ func _gui_input(event: InputEvent) -> void:
 			accept_event()
 		return
 	# Place is owned entirely by `_input` — do not swallow `_gui_input` here.
-	if _place_kind != "":
+	if _place_kind != "" or _picking_active_plane:
 		return
 	if sketch_mode != null and sketch_mode.active:
 		_sketch_input(event)
 		return
 	if _handle_model_pointer(event):
 		accept_event()
+
+
+## True when a LineEdit / TextEdit / SpinBox editor has focus — sketch hotkeys
+## must not steal keystrokes from extrude distance / dimension fields.
+func _sketch_keys_blocked() -> bool:
+	var vp := get_viewport()
+	if vp == null:
+		return false
+	var focus: Control = vp.gui_get_focus_owner()
+	if focus == null:
+		return false
+	if focus is LineEdit or focus is TextEdit:
+		return true
+	# SpinBox focuses its internal LineEdit; also treat the SpinBox itself.
+	var p: Node = focus
+	while p != null:
+		if p is SpinBox:
+			return true
+		p = p.get_parent()
+	return false
 
 
 ## True when model LMB/motion should run from `_input`, not blocked by chrome/docks.
@@ -733,15 +1347,26 @@ func _over_chrome(global_mouse: Vector2) -> bool:
 func _update_hover(screen_pos: Vector2) -> void:
 	if view == null or _place_kind != "" or (_drag_mode != DragMode.NONE):
 		return
+	if sketch_mode != null and sketch_mode.active:
+		return
 	if OrbitCamera.pointer_over_scrollable_ui():
 		view.clear_hover()
 		_last_hover_key = ""
 		mouse_default_cursor_shape = Control.CURSOR_ARROW
+		_measure_hover_miss()
+		return
+	# Selected body (about to move): same marks as place — touch others to
+	# plant X; otherwise dim to the selection's nearest corner.
+	if view.selected_body != "" and view.selection_size() >= 1:
+		_update_transport_measure(screen_pos)
+		mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND \
+				if view.hovered_body != "" else Control.CURSOR_ARROW
 		return
 	var ray := _model_ray(screen_pos)
 	var hit: Dictionary = view.pick_info(ray[0], ray[1])
 	if hit.is_empty():
 		view.clear_hover()
+		_measure_hover_miss()
 		if _last_hover_key != "":
 			_last_hover_key = ""
 			mouse_default_cursor_shape = Control.CURSOR_ARROW
@@ -749,18 +1374,39 @@ func _update_hover(screen_pos: Vector2) -> void:
 	var body := str(hit.get("body", ""))
 	var face := str(hit.get("face", ""))
 	var edge := str(hit.get("edge", ""))
+	var hit_pt: Vector3 = hit.get("point", Vector3.ZERO)
 	view.set_hover(body, face, edge)
-	var key := "%s|%s|%s" % [body, face, edge]
+	_update_measure_hover(body, hit_pt)
+	var key := "%s|%s|%s|%.3f,%.3f,%.3f" % [body, face, edge, hit_pt.x, hit_pt.y, hit_pt.z]
 	if key == _last_hover_key:
 		return
 	_last_hover_key = key
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	if edge != "":
+	if measure_overlay != null and measure_overlay.has_anchor() and not measure_overlay.following:
+		status.emit("Measure — diagonal + Δx/Δy/Δz to nearest edge · Esc clears")
+	elif edge != "":
 		status.emit("Edge — click to select · Ctrl/Shift+click adds")
 	elif face != "":
 		status.emit("Face — click selects body first, click again for face · then Pull arrow")
 	else:
 		status.emit("Body — click to select · drag empty space / Alt / two-finger to orbit")
+
+
+func _update_measure_hover(body: String, hit_point: Vector3) -> void:
+	if measure_overlay == null:
+		return
+	measure_overlay.update_hover(body, hit_point)
+
+
+func _measure_hover_miss() -> void:
+	if measure_overlay == null:
+		return
+	# With a selection, miss still dims to the selection corners (place-like).
+	if view != null and view.selected_body != "" and view.selection_size() >= 1 \
+			and _drag_mode == DragMode.NONE and _place_kind == "":
+		_update_transport_measure(Vector2.INF)
+		return
+	measure_overlay.update_hover("", Vector3.ZERO)
 
 
 func _sketch_input(event: InputEvent) -> void:
@@ -874,9 +1520,11 @@ func _on_press(pos: Vector2) -> void:
 			_drag_mode = DragMode.PUSH_PULL
 			_drag_normal = view.selected_face_normal()
 			_drag_pp_applied = 0.0
+			queue_redraw()
 		else:
 			_pending_body_move = true
 			_pending_move_point = hit["point"]
+			queue_redraw()
 		return
 
 	var rotate_handle := _pick_rotate_grip(pos)
@@ -892,15 +1540,16 @@ func _on_press(pos: Vector2) -> void:
 		_drag_start_mouse = pos
 		_drag_start_point = pp_handle["point"]
 		_press_empty = false
+		queue_redraw()
 		return
-	# Leave/approach-plane Z move (all bodies) — before face stretch so the
-	# tall tip wins over the +Z face arrow on primitives.
+	# Leave/approach-plane lift (all bodies) — before face stretch so the
+	# tip wins over the outward face arrow on primitives.
 	var z_grip := _pick_z_move_grip(pos)
 	if not z_grip.is_empty():
 		_begin_move_body(pos, z_grip["point"])
 		_move_axis_lock = AXIS_Z
 		_press_empty = false
-		status.emit("Move ΔZ — drag to leave / approach the ground plane")
+		status.emit("Move lift — drag to leave / approach the active plane")
 		return
 	var resize_handle := _pick_resize_handle(pos)
 	if not resize_handle.is_empty():
@@ -917,15 +1566,20 @@ func _begin_move_body(pos: Vector2, hit_point: Vector3) -> void:
 	_drag_mode = DragMode.MOVE_BODY
 	_drag_accum = Vector3.ZERO
 	_move_delta_base = Vector3.ZERO
+	_move_snap_active = {}
+	_move_snap_hover_body = ""
 	_drag_start_mouse = pos
 	_drag_start_point = hit_point
 	var bb := view.selection_bbox()
-	_move_start_center = bb["center"] if not bb.is_empty() else hit_point
+	_move_start_bb = _bb_with_center(bb) if not bb.is_empty() else {}
+	_move_start_center = _move_start_bb["center"] if not _move_start_bb.is_empty() else hit_point
 	var node := view.body_node(view.selected_body)
 	_move_start_node_xform = node.transform if node != null else Transform3D.IDENTITY
+	_show_snap_bar()
 	if transform_hud != null:
 		transform_hud.hide_precision()
 		transform_hud.set_move_delta(Vector3.ZERO)
+	queue_redraw()
 
 
 func _begin_rotate(handle: Dictionary, pos: Vector2) -> void:
@@ -940,6 +1594,7 @@ func _begin_rotate(handle: Dictionary, pos: Vector2) -> void:
 	if transform_hud != null:
 		transform_hud.hide_move_delta()
 		transform_hud.hide_precision()
+	queue_redraw()
 
 
 func _begin_resize(handle: Dictionary, pos: Vector2) -> void:
@@ -959,6 +1614,7 @@ func _begin_resize(handle: Dictionary, pos: Vector2) -> void:
 	if transform_hud != null:
 		transform_hud.hide_move_delta()
 		transform_hud.hide_precision()
+	queue_redraw()
 
 
 func _on_drag(pos: Vector2) -> void:
@@ -991,40 +1647,53 @@ func _on_drag(pos: Vector2) -> void:
 			_box_rect = Rect2(_press_pos, pos - _press_pos).abs()
 			queue_redraw()
 		DragMode.MOVE_BODY:
-			# XY drag on the horizontal plane; Z-lock (ΔZ grip or tap Z) moves
-			# only along vertical; typed HUD can still hop off-plane otherwise.
+			# Drag on the active plane; Z-lock (lift grip or tap Z) moves along
+			# the plane normal; typed HUD can still hop off-plane otherwise.
 			_last_drag_pos = pos
 			var target: Vector3
+			var plane_n := _active_plane_n()
 			if _move_axis_lock == AXIS_Z:
 				var ray := _model_ray(pos)
 				var o: Vector3 = ray[0]
 				var d: Vector3 = ray[1]
-				var axis := Vector3(0, 0, 1)
-				var cross_dn := d.cross(axis)
+				var cross_dn := d.cross(plane_n)
 				var denom := cross_dn.length_squared()
 				if denom < 1e-12:
 					return
 				var dist := (o - _drag_start_point).dot(cross_dn.cross(d)) / denom
-				target = Vector3(_drag_accum.x, _drag_accum.y, dist)
+				var planar := _drag_accum - plane_n * _drag_accum.dot(plane_n)
+				target = planar + plane_n * dist
 			else:
-				var plane_z := _drag_start_point.z
-				var gp = _horizontal_plane_point(pos, plane_z)
-				var gp0 = _horizontal_plane_point(_drag_start_mouse, plane_z)
+				var gp = _plane_point(pos, _drag_start_point, plane_n)
+				var gp0 = _plane_point(_drag_start_mouse, _drag_start_point, plane_n)
 				if gp == null or gp0 == null:
 					return
 				target = gp - gp0
 				match _move_axis_lock:
 					AXIS_X: target.y = 0.0
 					AXIS_Y: target.x = 0.0
-				target.z = _drag_accum.z  # preserve typed off-plane hop
+				# Preserve typed / prior hop along the plane normal.
+				var along := _drag_accum.dot(plane_n)
+				target = target - plane_n * target.dot(plane_n) + plane_n * along
+			_update_move_snap_hover(pos)
+			var snap := _resolve_move_snap(target)
+			if not snap.is_empty():
+				target = snap["delta"]
+			else:
+				_move_snap_active = {}
 			_apply_live_move(target)
+			_update_transport_measure(pos)
 			var lock_hint := ""
 			match _move_axis_lock:
 				AXIS_X: lock_hint = " [X locked]"
 				AXIS_Y: lock_hint = " [Y locked]"
-				AXIS_Z: lock_hint = " [Z locked]"
-			status.emit("Move Δ (%.2f, %.2f, %.2f)%s — tap X/Y/Z to lock axis" \
-					% [target.x, target.y, target.z, lock_hint])
+				AXIS_Z: lock_hint = " [lift locked]"
+			var snap_hint := ""
+			if not _move_snap_active.is_empty():
+				snap_hint = " [snap %s]" % str(_move_snap_active.get("kind", ""))
+			if measure_overlay == null or not measure_overlay.is_showing_pair():
+				status.emit("Move Δ (%.2f, %.2f, %.2f)%s%s — tap X/Y/Z to lock axis" \
+						% [target.x, target.y, target.z, lock_hint, snap_hint])
 			queue_redraw()
 		DragMode.ROTATE_BODY:
 			var ang := _angle_about_axis(pos, _rotate_axis, _rotate_center)
@@ -1066,6 +1735,102 @@ func _draw() -> void:
 	_draw_selection_gizmos()
 	if _drag_mode == DragMode.PUSH_PULL and absf(_pp_preview_dist) > 1e-3:
 		_draw_push_pull_preview()
+	# Measure chrome last so it sits above other 2D/3D viewport chrome.
+	_draw_measure_overlay()
+
+
+## True while a body/face mod or camera drag is active.
+func _is_modifying() -> bool:
+	return _drag_mode != DragMode.NONE or _pending_body_move or _pending_instance_move
+
+
+## Measure chrome stays up during place and body move (same marks); other mods hide it.
+func _hide_measure_chrome() -> bool:
+	if _place_kind != "":
+		return false
+	if _drag_mode == DragMode.MOVE_BODY or _pending_body_move:
+		return false
+	if _drag_mode != DragMode.NONE or _pending_instance_move:
+		return true
+	return false
+
+
+## Screen-space measure dims: fixed size (~1/40 viewport height), always on top.
+## Hidden during stretch/rotate/pull/orbit; kept during place and body move.
+func _draw_measure_overlay() -> void:
+	if measure_overlay == null or camera == null or model_space == null:
+		return
+	if _hide_measure_chrome():
+		return
+	var font_px := maxi(int(round(size.y * MeasureOverlay.SCREEN_FRAC)), 10)
+	var mark_half := float(font_px) * 0.45
+	var tick := float(font_px) * 0.28
+	var line_w := maxf(font_px * 0.08, 1.25)
+	var font := ThemeDB.fallback_font
+
+	for seg in measure_overlay.segments:
+		var a := _model_to_screen(seg["a"])
+		var b := _model_to_screen(seg["b"])
+		var col: Color = seg["color"]
+		if camera.is_position_behind(model_space.to_global(seg["a"])) \
+				and camera.is_position_behind(model_space.to_global(seg["b"])):
+			continue
+		draw_line(a, b, col, line_w, true)
+		var ab := b - a
+		if ab.length_squared() > 1.0:
+			var n := Vector2(-ab.y, ab.x).normalized() * tick
+			draw_line(a - n, a + n, col, line_w, true)
+			draw_line(b - n, b + n, col, line_w, true)
+
+	for m in measure_overlay.marks:
+		var p: Vector3 = m["p"]
+		if camera.is_position_behind(model_space.to_global(p)):
+			continue
+		var s := _model_to_screen(p)
+		var col2: Color = m["color"]
+		draw_line(s + Vector2(-mark_half, -mark_half), s + Vector2(mark_half, mark_half),
+				col2, line_w * 1.35, true)
+		draw_line(s + Vector2(-mark_half, mark_half), s + Vector2(mark_half, -mark_half),
+				col2, line_w * 1.35, true)
+
+	# Project labels, then push overlapping plates apart in screen space.
+	var plates: Array = []  # {rect, text, color}
+	for lab in measure_overlay.labels:
+		var lp: Vector3 = lab["p"]
+		if camera.is_position_behind(model_space.to_global(lp)):
+			continue
+		var sp := _model_to_screen(lp)
+		var text: String = lab["text"]
+		var col3: Color = lab["color"]
+		var tw := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_px)
+		var pad := Vector2(font_px * 0.22, font_px * 0.12)
+		var rect := Rect2(sp - Vector2(tw.x * 0.5, tw.y * 0.65) - pad, tw + pad * 2.0)
+		# Prefer a stable order (diagonal first, then Δx/Δy/Δz) so nudges are predictable.
+		var rank: int = int(lab.get("rank", 9))
+		plates.append({"rect": rect, "text": text, "color": col3, "rank": rank})
+	plates.sort_custom(func(a, b): return int(a["rank"]) < int(b["rank"]))
+	var placed: Array[Rect2] = []
+	var step := float(font_px) * 0.95
+	for plate in plates:
+		var rect: Rect2 = plate["rect"]
+		for _i in range(16):
+			var clash := false
+			for other in placed:
+				if rect.grow(3.0).intersects(other):
+					clash = true
+					break
+			if not clash:
+				break
+			rect.position.y += step
+			# Alternate sideways after a few vertical steps so stacks fan out.
+			if _i == 4 or _i == 9:
+				rect.position.x += step * (1.0 if (_i % 2) == 0 else -1.0)
+		placed.append(rect)
+		draw_rect(rect, Color(0.06, 0.07, 0.09, 0.72), true)
+		draw_string(font, rect.position + Vector2(rect.size.x * 0.5 - font.get_string_size(
+				plate["text"], HORIZONTAL_ALIGNMENT_LEFT, -1, font_px).x * 0.5,
+				font_px * 0.78),
+				plate["text"], HORIZONTAL_ALIGNMENT_LEFT, -1, font_px, plate["color"])
 
 
 func _clear_box_band() -> void:
@@ -1150,9 +1915,16 @@ func _on_release(pos: Vector2) -> void:
 				if transform_hud != null:
 					transform_hud.hide_move_delta()
 			_drag_mode = DragMode.NONE
+			_move_snap_active = {}
+			_move_snap_hover_body = ""
+			_move_start_bb = {}
+			_hide_snap_bar_unless_placing()
 			_box_drag = false
 			_additive_click = false
 			_refresh_transform_hud()
+			# Resume idle transport measure against the committed pose.
+			if measure_overlay != null:
+				_update_transport_measure(pos)
 			queue_redraw()
 			_press_travel = 0.0
 			return
@@ -1281,6 +2053,13 @@ func _gui_key(event: InputEventKey) -> bool:
 			if _place_kind != "":
 				_disarm_place(true)
 				return true
+			if _picking_active_plane:
+				cancel_pick_active_plane()
+				return true
+			if measure_overlay != null and measure_overlay.has_anchor():
+				measure_overlay.clear_pair()
+				status.emit("")
+				return true
 			view.clear_selection()
 			status.emit("")
 			return true
@@ -1371,12 +2150,17 @@ func _selected_body_ids() -> Array:
 func _on_view_selection_changed(_body: String, _face: String) -> void:
 	_refresh_transform_hud()
 	_refresh_selection_strip()
+	if measure_overlay != null:
+		measure_overlay.refresh_bounds()
 	queue_redraw()
 
 
 func _on_view_document_changed() -> void:
 	_refresh_transform_hud()
 	_refresh_selection_strip()
+	if measure_overlay != null:
+		measure_overlay.clear_all()
+		measure_overlay.refresh_bounds()
 	queue_redraw()
 
 
@@ -1386,10 +2170,6 @@ func _apply_live_move(delta: Vector3) -> void:
 	if node != null:
 		node.transform = _move_start_node_xform.translated(delta)
 	if transform_hud != null:
-		var bb := view.selection_bbox()
-		var size: Vector3 = bb["size"] if not bb.is_empty() else Vector3(50, 50, 50)
-		transform_hud.set_values(_move_start_center + delta, size,
-				view.is_primitive_body(view.selected_body))
 		transform_hud.set_move_delta(delta)
 
 
@@ -1410,31 +2190,27 @@ func _refresh_transform_hud() -> void:
 	if _place_kind != "":
 		var center := _screen_center()
 		var target := _place_target(center)
-		transform_hud.visible = true
-		transform_hud.mouse_filter = Control.MOUSE_FILTER_STOP
-		transform_hud.set_values(target["point"], place_size, true)
+		# Place keeps absolute X/Y/Z + W×H×D blanks for typed fine-tune.
+		transform_hud.show_dims(target["point"], place_size, true)
 		return
+	# Idle selection: clear the bottom band. Move/stretch blanks stay up on their own.
+	transform_hud.hide_dims()
 	if view.selected_body == "" or view.selection_size() != 1:
-		transform_hud.visible = false
-		transform_hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		transform_hud.hide_precision()
 		transform_hud.hide_move_delta()
 		return
 	var bb := view.selection_bbox()
 	if bb.is_empty():
-		transform_hud.visible = false
-		transform_hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		return
-	transform_hud.visible = true
-	transform_hud.mouse_filter = Control.MOUSE_FILTER_STOP
 	transform_hud.set_values(bb["center"], bb["size"], view.is_primitive_body(view.selected_body))
 
 
 func _on_hud_position(pos: Vector3) -> void:
 	if _place_kind != "":
-		# Jump the ghost floor to the typed position.
+		# Jump the ghost floor to the typed position (on the active plane).
 		if _place_ghost != null:
-			_place_ghost.position = pos + _ghost_sit_offset(_place_kind)
+			_place_ghost.transform = _ghost_world_xform(_place_kind, _snap_on_active_plane(pos))
+			_update_place_measure(_screen_center())
 		return
 	if view.selected_body == "":
 		return
@@ -1451,16 +2227,14 @@ func _on_hud_position(pos: Vector3) -> void:
 func _on_hud_size(size: Vector3) -> void:
 	if _place_kind != "":
 		# Keep the ghost's floor contact while rebuilding the mesh.
-		var floor_z := 0.0
-		var floor_xy := Vector2.ZERO
+		var floor_pt := active_plane_origin
 		if _place_ghost != null:
-			floor_xy = Vector2(_place_ghost.position.x, _place_ghost.position.y)
-			floor_z = _place_ghost.position.z - _ghost_sit_offset(_place_kind).z
+			floor_pt = _place_ghost.position - _ghost_sit_offset(_place_kind)
 		place_size = size
 		if _place_ghost != null:
 			_apply_ghost_mesh(_place_ghost, _place_kind, place_size)
-			_place_ghost.position = Vector3(floor_xy.x, floor_xy.y, floor_z) \
-					+ _ghost_sit_offset(_place_kind)
+			_place_ghost.transform = _ghost_world_xform(_place_kind, floor_pt)
+			_update_place_measure(_screen_center())
 		return
 	if view.selected_body == "" or not view.is_primitive_body(view.selected_body):
 		return
@@ -1605,7 +2379,8 @@ func _pick_resize_handle(screen_pos: Vector2) -> Dictionary:
 	return best
 
 
-## Tall +Z tip: leave / approach the ground plane (all bodies).
+## Lift grip along the active-plane normal. Base is inset into the solid so
+## the yellow elevator clears the blue outward stretch chevron on that face.
 ## Tip length is screen-capped so the grip never dwarfs the selection.
 func _z_move_grip_anchor() -> Dictionary:
 	if view == null or view.selected_body == "" or view.selection_size() != 1:
@@ -1616,11 +2391,16 @@ func _z_move_grip_anchor() -> Dictionary:
 	if bb.is_empty():
 		return {}
 	var c: Vector3 = bb["center"]
-	var half_z: float = float(bb["size"].z) * 0.5
-	var base := Vector3(c.x, c.y, c.z + half_z)
-	var tip_guess := base + Vector3(0, 0, maxf(_axis_len() * 0.9, 18.0))
+	var half: Vector3 = bb["size"] * 0.5
+	var n := _active_plane_n()
+	# AABB support distance along ±n (L1 of |half| weighted by |n|).
+	var extent_n := absf(half.x * n.x) + absf(half.y * n.y) + absf(half.z * n.z)
+	# Sit ~45% of the way from center to the outer face — inside the solid.
+	var inset_from_face := extent_n * 0.55
+	var base := c + n * (extent_n - inset_from_face)
+	var tip_guess := base + n * maxf(_axis_len() * 0.9, 18.0)
 	var tip := _screen_capped_tip(base, tip_guess)
-	return {"point": tip, "center": c, "base": base}
+	return {"point": tip, "center": c, "base": base, "normal": n}
 
 
 func _pick_z_move_grip(screen_pos: Vector2) -> Dictionary:
@@ -1734,8 +2514,7 @@ func _update_resize_drag(screen_pos: Vector2) -> void:
 	var dist := (o - _drag_start_point).dot(cross_dn.cross(d)) / denom
 	_apply_resize_delta(dist)
 	if transform_hud != null:
-		var size := _resize_max - _resize_min
-		transform_hud.set_values((_resize_min + _resize_max) * 0.5, size, true)
+		transform_hud.set_precision(_resize_distance, _resize_axis_hint)
 	status.emit("Resize: %.1f mm" % _resize_distance)
 
 
@@ -1808,6 +2587,31 @@ func _input(event: InputEvent) -> void:
 	# cursor is "over" a sibling Control or Interaction fails hit-tests.
 	if _place_kind != "" and sketch_mode != null and sketch_mode.active:
 		_disarm_place(false)
+	# One-shot: click a flat face to set the active move plane.
+	if _picking_active_plane:
+		if event is InputEventMouseButton or event is InputEventMouseMotion:
+			var mouse_pos := (event as InputEventMouse).position
+			if _over_chrome(mouse_pos):
+				return
+		if event is InputEventMouseButton:
+			var mb := event as InputEventMouseButton
+			if not mb.pressed:
+				get_viewport().set_input_as_handled()
+				return
+			if mb.button_index == MOUSE_BUTTON_LEFT and not mb.alt_pressed:
+				_commit_pick_active_plane(mb.position)
+				get_viewport().set_input_as_handled()
+				return
+			if mb.button_index == MOUSE_BUTTON_RIGHT:
+				cancel_pick_active_plane()
+				get_viewport().set_input_as_handled()
+				return
+		if event is InputEventKey and event.pressed and not event.echo:
+			if (event as InputEventKey).keycode == KEY_ESCAPE:
+				cancel_pick_active_plane()
+				get_viewport().set_input_as_handled()
+				return
+		return
 	if _place_kind != "":
 		# Don't steal clicks aimed at the snap / transform chrome.
 		if event is InputEventMouseButton or event is InputEventMouseMotion:
@@ -1842,8 +2646,19 @@ func _input(event: InputEvent) -> void:
 		return
 
 	# Sketch: same `_input` ownership so it works if Interaction isn't hovered.
+	# Do not steal clicks aimed at the sketch toolbar / docks / spinboxes —
+	# Fusion/Onshape chrome owns the pointer there.
 	if sketch_mode != null and sketch_mode.active:
-		if event is InputEventMouse or (event is InputEventKey and event.pressed):
+		if event is InputEventMouse:
+			var mouse_pos := (event as InputEventMouse).position
+			if not _viewport_owns_pointer(mouse_pos):
+				return
+			_sketch_input(event)
+			get_viewport().set_input_as_handled()
+			return
+		if event is InputEventKey and event.pressed:
+			if _sketch_keys_blocked():
+				return
 			_sketch_input(event)
 			get_viewport().set_input_as_handled()
 			return
@@ -1944,6 +2759,7 @@ func _refresh_selection_strip() -> void:
 	_strip_fillet.visible = not has_instance
 	_strip_sketch.visible = not has_instance and view.selected_face != ""
 	_strip_look.visible = not has_instance and view.selected_face != ""
+	_strip_plane.visible = not has_instance and view.selected_face != ""
 	_strip_hide.visible = not has_instance
 	_strip_delete.visible = true
 
@@ -1957,6 +2773,7 @@ func _open_context_menu(screen_pos: Vector2) -> void:
 		_context_menu.add_item("Fillet", 1)
 		if view.selected_face != "":
 			_context_menu.add_item("Sketch on face…", 2)
+			_context_menu.add_item("Set as active plane", 8)
 			_context_menu.add_item("Look at face", 6)
 			_context_menu.add_item("Push/Pull (drag orange arrow)", 7)
 		_context_menu.add_item("Hide", 3)
@@ -1964,6 +2781,9 @@ func _open_context_menu(screen_pos: Vector2) -> void:
 		_context_menu.add_item("Delete", 5)
 		_context_menu.add_item("Fit selection", 12)
 	else:
+		_context_menu.add_item("Set Active Plane… (click face)", 14)
+		if _active_plane_custom:
+			_context_menu.add_item("Reset Active Plane (ground)", 15)
 		_context_menu.add_item("Fit all", 10)
 		_context_menu.add_item("Unhide all", 11)
 		_context_menu.add_item("Orientation… (Space)", 13)
@@ -1982,6 +2802,7 @@ func _on_context_id(id: int) -> void:
 		6: _ctx_look_at()
 		7:
 			status.emit("Drag the orange Pull arrow on the face to push/pull")
+		8: _ctx_set_active_plane()
 		10:
 			if camera != null:
 				camera.frame_contents()
@@ -1993,6 +2814,14 @@ func _on_context_id(id: int) -> void:
 				camera.frame_selection_or_all(false)
 		13:
 			_show_orient_popup()
+		14:
+			arm_pick_active_plane()
+		15:
+			reset_active_plane()
+
+
+func _ctx_set_active_plane() -> void:
+	set_active_plane_from_selection()
 
 
 func _ctx_fillet() -> void:
@@ -2234,54 +3063,113 @@ func _draw_selection_gizmos() -> void:
 		return
 	if camera == null or model_space == null:
 		return
-	# Face stretch arrows (primitives only) — short outward single chevrons.
-	if view.is_primitive_body(view.selected_body) and view.selection_size() == 1:
-		var bb := view.selection_bbox()
-		if not bb.is_empty():
-			var mn: Vector3 = bb["min"]
-			var mx: Vector3 = bb["max"]
-			var pad := maxf(maxf(bb["size"].x, bb["size"].y), bb["size"].z) * 0.06 + 2.0
-			var faces: Array[Dictionary] = [
-				{"p": Vector3(mx.x, (mn.y + mx.y) * 0.5, (mn.z + mx.z) * 0.5), "n": Vector3(1, 0, 0)},
-				{"p": Vector3(mn.x, (mn.y + mx.y) * 0.5, (mn.z + mx.z) * 0.5), "n": Vector3(-1, 0, 0)},
-				{"p": Vector3((mn.x + mx.x) * 0.5, mx.y, (mn.z + mx.z) * 0.5), "n": Vector3(0, 1, 0)},
-				{"p": Vector3((mn.x + mx.x) * 0.5, mn.y, (mn.z + mx.z) * 0.5), "n": Vector3(0, -1, 0)},
-				{"p": Vector3((mn.x + mx.x) * 0.5, (mn.y + mx.y) * 0.5, mx.z), "n": Vector3(0, 0, 1)},
-				{"p": Vector3((mn.x + mx.x) * 0.5, (mn.y + mx.y) * 0.5, mn.z), "n": Vector3(0, 0, -1)},
-			]
-			var stretch_col := Color(0.25, 0.75, 1.0, 0.95)
-			for f in faces:
-				var tip_m := _screen_capped_tip(f["p"], f["p"] + f["n"] * maxf(pad * 3.0, 8.0))
-				_draw_stretch_arrow(_model_to_screen(f["p"]), _model_to_screen(tip_m), stretch_col)
-	# Leave/approach-plane lift grip — distinct “elevator” symbol (not a stretch arrow).
+	# Orbit / box-select: no mod chrome.
+	if _drag_mode == DragMode.ORBIT_VIEW or _drag_mode == DragMode.BOX_SELECT:
+		return
+
+	# Active mod: only that mod's controls (minimalism).
+	match _drag_mode:
+		DragMode.RESIZE_BODY:
+			_draw_active_stretch_only()
+			return
+		DragMode.ROTATE_BODY:
+			for g in _rotate_grips():
+				if (g["axis"] as Vector3).distance_squared_to(_rotate_axis) < 1e-8:
+					_draw_rotate_arc(g)
+			return
+		DragMode.MOVE_BODY, DragMode.MOVE_INSTANCE:
+			_draw_move_feedback()
+			return
+		DragMode.PUSH_PULL:
+			_draw_pull_handle()
+			return
+
+	# Idle: full affordance set for the current selection.
+	_draw_idle_stretch_grips()
 	var z_grip := _z_move_grip_anchor()
 	if not z_grip.is_empty():
 		_draw_lift_grip(_model_to_screen(z_grip["base"]), _model_to_screen(z_grip["point"]))
-	# Rotate arcs (body mesh itself is the XY move grip).
+	if _active_plane_custom and view.selection_size() >= 1:
+		_draw_active_plane_hint()
 	for g in _rotate_grips():
 		_draw_rotate_arc(g)
-	# During move: old center, new center, connecting segment + locked-axis cue.
-	if _drag_mode == DragMode.MOVE_BODY:
-		if _drag_accum.length() > 1e-4:
-			var old_s := _model_to_screen(_move_start_center)
-			var new_s := _model_to_screen(_move_start_center + _drag_accum)
-			draw_line(old_s, new_s, Color(1.0, 0.85, 0.2, 0.9), 1.5)
-			_draw_center_mark(old_s, Color(0.85, 0.85, 0.9, 0.95))
-			_draw_center_mark(new_s, Color(1.0, 0.75, 0.15, 0.95))
-			draw_string(ThemeDB.fallback_font, old_s + Vector2(8, -8), "old",
-					HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.85, 0.85, 0.9))
-			draw_string(ThemeDB.fallback_font, new_s + Vector2(8, -8), "new",
-					HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1.0, 0.75, 0.15))
-		if _move_axis_lock >= 0:
-			_draw_move_lock_axis()
-	# Face push/pull arrow (also screen-capped via _face_pull_anchor).
+	_draw_pull_handle()
+
+
+func _draw_idle_stretch_grips() -> void:
+	if not view.is_primitive_body(view.selected_body) or view.selection_size() != 1:
+		return
+	var bb := view.selection_bbox()
+	if bb.is_empty():
+		return
+	var mn: Vector3 = bb["min"]
+	var mx: Vector3 = bb["max"]
+	var pad := maxf(maxf(bb["size"].x, bb["size"].y), bb["size"].z) * 0.06 + 2.0
+	var faces: Array[Dictionary] = [
+		{"p": Vector3(mx.x, (mn.y + mx.y) * 0.5, (mn.z + mx.z) * 0.5), "n": Vector3(1, 0, 0)},
+		{"p": Vector3(mn.x, (mn.y + mx.y) * 0.5, (mn.z + mx.z) * 0.5), "n": Vector3(-1, 0, 0)},
+		{"p": Vector3((mn.x + mx.x) * 0.5, mx.y, (mn.z + mx.z) * 0.5), "n": Vector3(0, 1, 0)},
+		{"p": Vector3((mn.x + mx.x) * 0.5, mn.y, (mn.z + mx.z) * 0.5), "n": Vector3(0, -1, 0)},
+		{"p": Vector3((mn.x + mx.x) * 0.5, (mn.y + mx.y) * 0.5, mx.z), "n": Vector3(0, 0, 1)},
+		{"p": Vector3((mn.x + mx.x) * 0.5, (mn.y + mx.y) * 0.5, mn.z), "n": Vector3(0, 0, -1)},
+	]
+	var stretch_col := Color(0.25, 0.75, 1.0, 0.95)
+	for f in faces:
+		var tip_m := _screen_capped_tip(f["p"], f["p"] + f["n"] * maxf(pad * 3.0, 8.0))
+		_draw_stretch_arrow(_model_to_screen(f["p"]), _model_to_screen(tip_m), stretch_col)
+
+
+## Only the stretch face being dragged (hides rotate / other stretches / pull).
+func _draw_active_stretch_only() -> void:
+	if not view.is_primitive_body(view.selected_body):
+		return
+	var bb := view.selection_bbox()
+	if bb.is_empty():
+		return
+	var mn: Vector3 = bb["min"]
+	var mx: Vector3 = bb["max"]
+	var pad := maxf(maxf(bb["size"].x, bb["size"].y), bb["size"].z) * 0.06 + 2.0
+	var s := _resize_signs
+	var p := Vector3(
+		mx.x if s.x > 0.0 else (mn.x if s.x < 0.0 else (mn.x + mx.x) * 0.5),
+		mx.y if s.y > 0.0 else (mn.y if s.y < 0.0 else (mn.y + mx.y) * 0.5),
+		mx.z if s.z > 0.0 else (mn.z if s.z < 0.0 else (mn.z + mx.z) * 0.5))
+	var n := Vector3(signf(s.x), signf(s.y), signf(s.z))
+	if n.length_squared() < 1e-8:
+		return
+	n = n.normalized()
+	var tip_m := _screen_capped_tip(p, p + n * maxf(pad * 3.0, 8.0))
+	_draw_stretch_arrow(_model_to_screen(p), _model_to_screen(tip_m), Color(0.25, 0.75, 1.0, 0.95))
+
+
+func _draw_move_feedback() -> void:
+	if _drag_mode != DragMode.MOVE_BODY:
+		return
+	if _drag_accum.length() > 1e-4:
+		var old_s := _model_to_screen(_move_start_center)
+		var new_s := _model_to_screen(_move_start_center + _drag_accum)
+		draw_line(old_s, new_s, Color(1.0, 0.85, 0.2, 0.9), 1.5)
+		_draw_center_mark(old_s, Color(0.85, 0.85, 0.9, 0.95))
+		_draw_center_mark(new_s, Color(1.0, 0.75, 0.15, 0.95))
+		draw_string(ThemeDB.fallback_font, old_s + Vector2(8, -8), "old",
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.85, 0.85, 0.9))
+		draw_string(ThemeDB.fallback_font, new_s + Vector2(8, -8), "new",
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(1.0, 0.75, 0.15))
+	if not _move_snap_active.is_empty():
+		_draw_move_snap_guide()
+	if _move_axis_lock >= 0:
+		_draw_move_lock_axis()
+
+
+func _draw_pull_handle() -> void:
 	var pull := _face_pull_anchor()
-	if not pull.is_empty():
-		var a: Vector2 = _model_to_screen(pull["anchor"])
-		var t: Vector2 = _model_to_screen(pull["point"])
-		var col2 := Color(1.0, 0.62, 0.15, 0.95)
-		_draw_stretch_arrow(a, t, col2)
-		draw_string(ThemeDB.fallback_font, t + Vector2(8, -8), "Pull", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, col2)
+	if pull.is_empty():
+		return
+	var a: Vector2 = _model_to_screen(pull["anchor"])
+	var t: Vector2 = _model_to_screen(pull["point"])
+	var col2 := Color(1.0, 0.62, 0.15, 0.95)
+	_draw_stretch_arrow(a, t, col2)
+	draw_string(ThemeDB.fallback_font, t + Vector2(8, -8), "Pull", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, col2)
 
 
 ## Stretch / pull: single chevron pointing away from the face.
@@ -2299,7 +3187,7 @@ func _draw_stretch_arrow(base: Vector2, tip: Vector2, color: Color) -> void:
 	]), color)
 
 
-## Lift / approach plane: double-headed vertical with a mid “floor plate”.
+## Lift / approach plane: double-headed along the shaft with a mid “floor plate”.
 ## Visually distinct from stretch chevrons.
 func _draw_lift_grip(base: Vector2, tip: Vector2) -> void:
 	var col := Color(1.0, 0.82, 0.2, 0.95)
@@ -2319,12 +3207,42 @@ func _draw_lift_grip(base: Vector2, tip: Vector2) -> void:
 	draw_colored_polygon(PackedVector2Array([
 		base, base + dir * 9.0 + perp * 5.5, base + dir * 9.0 - perp * 5.5,
 	]), col)
-	# Mid plate = “ground plane” cue (horizontal bar + small square).
+	# Mid plate = “active plane” cue (horizontal bar + small square).
 	var plate := 9.0
 	draw_line(mid - perp * plate, mid + perp * plate, Color(0.95, 0.95, 0.98, 0.95), 2.5)
 	draw_rect(Rect2(mid - Vector2(4, 4), Vector2(8, 8)), col, false, 1.5)
 	draw_string(ThemeDB.fallback_font, tip + perp * 8.0 + Vector2(2, -4), "lift",
 			HORIZONTAL_ALIGNMENT_LEFT, -1, 11, col)
+
+
+## Screen-space outline of the active move plane near the selection.
+func _draw_active_plane_hint() -> void:
+	var bb := view.selection_bbox()
+	if bb.is_empty():
+		return
+	var c: Vector3 = bb["center"]
+	var n := _active_plane_n()
+	# Project center onto the plane (keeps the hint on the chosen face height).
+	var origin := active_plane_origin
+	c = c - n * (c - origin).dot(n)
+	var x := n.cross(Vector3(0, 0, 1))
+	if x.length_squared() < 1e-12:
+		x = Vector3(1, 0, 0)
+	else:
+		x = x.normalized()
+	var y := n.cross(x).normalized()
+	var half := maxf(maxf(bb["size"].x, bb["size"].y), bb["size"].z) * 0.55 + 4.0
+	var corners: Array[Vector3] = [
+		c + (x + y) * half,
+		c + (x - y) * half,
+		c + (-x - y) * half,
+		c + (-x + y) * half,
+	]
+	var col := Color(1.0, 0.82, 0.25, 0.55)
+	for i in range(4):
+		var a := _model_to_screen(corners[i])
+		var b := _model_to_screen(corners[(i + 1) % 4])
+		draw_dashed_line(a, b, col, 1.5, 6.0, true)
 
 
 func _draw_center_mark(screen: Vector2, color: Color) -> void:
@@ -2333,7 +3251,41 @@ func _draw_center_mark(screen: Vector2, color: Color) -> void:
 	draw_line(screen + Vector2(0, -8), screen + Vector2(0, 8), color, 1.5)
 
 
-## Highlight the locked principal axis through the live move center.
+## Dotted snap guide: source→target anchors + gap length between closest surfaces.
+func _draw_move_snap_guide() -> void:
+	if _move_snap_active.is_empty():
+		return
+	var col := Color(0.35, 0.9, 0.85, 0.95)
+	var src: Vector3 = _move_snap_active["src"]
+	var dst: Vector3 = _move_snap_active["dst"]
+	var a := _model_to_screen(src)
+	var b := _model_to_screen(dst)
+	if a.distance_squared_to(b) > 1.0:
+		draw_dashed_line(a, b, col, 1.5, 5.0, true)
+	else:
+		draw_circle(a, 3.5, col)
+	_draw_center_mark(a, col)
+	_draw_center_mark(b, col)
+	var gap_a: Vector3 = _move_snap_active.get("gap_a", src)
+	var gap_b: Vector3 = _move_snap_active.get("gap_b", dst)
+	var gap_mm: float = float(_move_snap_active.get("gap_mm", 0.0))
+	var ga := _model_to_screen(gap_a)
+	var gb := _model_to_screen(gap_b)
+	if gap_mm > 1e-3 and ga.distance_squared_to(gb) > 1.0:
+		var gap_col := Color(0.95, 0.85, 0.35, 0.95)
+		draw_dashed_line(ga, gb, gap_col, 1.25, 4.0, true)
+		var mid := ga.lerp(gb, 0.5)
+		draw_string(ThemeDB.fallback_font, mid + Vector2(6, -6),
+				"%.2f mm" % gap_mm, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, gap_col)
+	elif str(_move_snap_active.get("kind", "")) != "grid":
+		var mid2 := a.lerp(b, 0.5)
+		var label := "0 mm" if gap_mm <= 1e-3 else ("%.2f mm" % gap_mm)
+		draw_string(ThemeDB.fallback_font, mid2 + Vector2(6, -6), label,
+				HORIZONTAL_ALIGNMENT_LEFT, -1, 11, col)
+
+
+## Highlight the locked principal axis (or active-plane normal for lift) through
+## the live move center.
 func _draw_move_lock_axis() -> void:
 	var dir := Vector3.ZERO
 	var col := Color(1, 1, 1, 0.95)
@@ -2345,8 +3297,8 @@ func _draw_move_lock_axis() -> void:
 			dir = Vector3(0, 1, 0)
 			col = Color(0.3, 0.85, 0.3, 0.95)
 		AXIS_Z:
-			dir = Vector3(0, 0, 1)
-			col = Color(0.3, 0.55, 1.0, 0.95)
+			dir = _active_plane_n()
+			col = Color(1.0, 0.82, 0.2, 0.95)
 		_:
 			return
 	var c := _move_start_center + _drag_accum

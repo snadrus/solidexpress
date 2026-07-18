@@ -71,8 +71,10 @@ Bindings verified in `game/scripts/orbit_camera.gd`, `viewport_interaction.gd`, 
 
 | Input | Action |
 |-------|--------|
-| Middle-drag | Orbit about pivot |
-| Shift + middle-drag | Pan |
+| Middle-drag / 3-finger grip | Pan (SX/Fusion default; SW preset orbits) |
+| Shift + middle-drag | Orbit (SX/Fusion); pan under SW preset |
+| Two-finger drag | Orbit (trackpad) |
+| Shift + two-finger | Pan (trackpad) |
 | Mouse wheel | Zoom toward / away from pivot |
 | `F` | Zoom to fit (frame all bodies) |
 | `1` / `2` / `3` / `7` | Front / right / top / isometric |

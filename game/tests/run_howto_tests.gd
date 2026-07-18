@@ -26,6 +26,7 @@ func _init() -> void:
 	await howto_place_and_orbit(main)
 	await howto_stack_three_blocks(main)
 	await howto_extrude_s_shape(main)
+	await howto_extrude_letter_a(main)
 	await howto_horizontal_hole(main)
 
 	print("%d checks, %d failures" % [checks, failures])
@@ -68,7 +69,7 @@ func howto_place_and_orbit(main) -> void:
 	main._update_panel_visibility()
 	check(not main.palette.visible, "primitives hidden after select")
 	check(main.ops_panel.offset_left == 12.0, "modify tools in left rail")
-	check(ix.transform_hud.visible, "transform HUD after place")
+	check(not ix.transform_hud.visible, "transform HUD idle-hidden after place")
 	var id: String = view.doc.body_ids()[0]
 	var bb: Dictionary = view.doc.measure_bbox(id)
 	check(absf(float(bb["min"].z)) < 1e-2, "box sits on ground (z=0)")
@@ -143,6 +144,46 @@ func howto_extrude_s_shape(main) -> void:
 	var mp: Dictionary = view.doc.measure_mass(id)
 	var vol: float = float(mp.get("volume", 0.0))
 	check(vol > 100.0, "S extrusion has substantial volume (got %s)" % vol)
+
+
+## docs/howto/extrude-letter-a.md
+func howto_extrude_letter_a(main) -> void:
+	print("- howto_extrude_letter_a")
+	var view: DocumentView = main.view
+	var sk: SketchMode = main.sketch_mode
+	view.new_document()
+
+	sk.begin(Vector3.ZERO, Vector3(0, 0, 1))
+	sk.set_snap(false)
+	sk.infer_enabled = false
+	sk.set_tool(SketchMode.Tool.LINE)
+	# Outer A silhouette
+	var outer: Array[Vector2] = [
+		Vector2(0, 0), Vector2(12, 0), Vector2(18, 22), Vector2(32, 22),
+		Vector2(38, 0), Vector2(50, 0), Vector2(30, 55), Vector2(20, 55),
+		Vector2(0, 0),
+	]
+	for p in outer:
+		sk.click(p)
+	sk.end_chain()
+	# Inner triangular counter
+	var inner: Array[Vector2] = [
+		Vector2(20, 28), Vector2(30, 28), Vector2(25, 42), Vector2(20, 28),
+	]
+	for p in inner:
+		sk.click(p)
+	sk.end_chain()
+	check(sk.sketch.entity_ids().size() >= 10, "A outline has outer + inner lines")
+	sk.finish_extrude(10.0, "new")
+	await process_frame
+	check(view.doc.body_ids().size() == 1, "one solid after A extrude")
+	var id: String = view.doc.body_ids()[0]
+	var mp: Dictionary = view.doc.measure_mass(id)
+	var vol: float = float(mp.get("volume", 0.0))
+	# Outer silhouette area is well above 1000 mm²; triangle hole ~70 mm²;
+	# at 10 mm depth expect thousands of mm³, below a no-hole ceiling.
+	check(vol > 5000.0, "A extrusion has substantial volume (got %s)" % vol)
+	check(vol < 14000.0, "A volume reflects the counter hole (got %s)" % vol)
 
 
 ## docs/howto/horizontal-hole.md

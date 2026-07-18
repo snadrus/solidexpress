@@ -1,8 +1,10 @@
 #include "sx/sketch.hpp"
+#include "sx/shape_utils.hpp"
 
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
+#include <TopoDS.hxx>
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Wire.hxx>
@@ -16,6 +18,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace sx {
 
@@ -261,43 +264,102 @@ TopoDS_Shape Sketch::profile_face(std::string* err) const {
         return {};
     }
 
-    // Greedy chaining from the first segment.
+    // Greedy-chain every unused segment group into a closed wire (outer + holes).
     constexpr double tol = 1e-6;
-    BRepBuilderAPI_MakeWire wire;
-    wire.Add(segs[0].edge);
-    segs[0].used = true;
-    gp_Pnt loop_start = segs[0].start;
-    gp_Pnt cursor = segs[0].end;
-    size_t added = 1;
-    bool progressing = true;
-    while (progressing && cursor.Distance(loop_start) > tol) {
-        progressing = false;
-        for (auto& s : segs) {
-            if (s.used) continue;
-            if (s.start.Distance(cursor) < tol) {
-                wire.Add(s.edge);
-                cursor = s.end;
-            } else if (s.end.Distance(cursor) < tol) {
-                wire.Add(s.edge);
-                cursor = s.start;
-            } else {
-                continue;
+    std::vector<TopoDS_Wire> wires;
+    auto unused = [&]() -> Segment* {
+        for (auto& s : segs)
+            if (!s.used) return &s;
+        return nullptr;
+    };
+    while (Segment* seed = unused()) {
+        BRepBuilderAPI_MakeWire wire;
+        wire.Add(seed->edge);
+        seed->used = true;
+        gp_Pnt loop_start = seed->start;
+        gp_Pnt cursor = seed->end;
+        bool progressing = true;
+        while (progressing && cursor.Distance(loop_start) > tol) {
+            progressing = false;
+            for (auto& s : segs) {
+                if (s.used) continue;
+                if (s.start.Distance(cursor) < tol) {
+                    wire.Add(s.edge);
+                    cursor = s.end;
+                } else if (s.end.Distance(cursor) < tol) {
+                    wire.Add(s.edge);
+                    cursor = s.start;
+                } else {
+                    continue;
+                }
+                s.used = true;
+                progressing = true;
+                break;
             }
-            s.used = true;
-            ++added;
-            progressing = true;
-            break;
+        }
+        if (cursor.Distance(loop_start) > tol) {
+            if (err) *err = "profile has an open loop";
+            return {};
+        }
+        if (!wire.IsDone()) {
+            if (err) *err = "wire construction failed";
+            return {};
+        }
+        wires.push_back(wire.Wire());
+    }
+    if (wires.empty()) {
+        if (err) *err = "no closed profile";
+        return {};
+    }
+    if (wires.size() == 1) {
+        return BRepBuilderAPI_MakeFace(pln, wires[0]).Face();
+    }
+
+    // Largest-area wire is the outer; remaining wires are holes (Fusion/Onshape).
+    size_t outer_i = 0;
+    double best_area = -1.0;
+    for (size_t i = 0; i < wires.size(); ++i) {
+        BRepBuilderAPI_MakeFace mf(pln, wires[i]);
+        if (!mf.IsDone()) continue;
+        double a = shape::area(mf.Face());
+        if (a > best_area) {
+            best_area = a;
+            outer_i = i;
         }
     }
-    if (cursor.Distance(loop_start) > tol || added != segs.size()) {
-        if (err) *err = "profile is not a single closed loop";
+    if (best_area <= 0.0) {
+        if (err) *err = "could not measure outer profile wire";
         return {};
     }
-    if (!wire.IsDone()) {
-        if (err) *err = "wire construction failed";
+
+    auto make_with_holes = [&](bool reverse_holes) -> TopoDS_Shape {
+        BRepBuilderAPI_MakeFace mk(pln, wires[outer_i]);
+        for (size_t i = 0; i < wires.size(); ++i) {
+            if (i == outer_i) continue;
+            TopoDS_Wire hole = wires[i];
+            if (reverse_holes) hole = TopoDS::Wire(hole.Reversed());
+            mk.Add(hole);
+        }
+        if (!mk.IsDone()) return {};
+        return mk.Face();
+    };
+
+    TopoDS_Shape face = make_with_holes(true);
+    if (face.IsNull()) face = make_with_holes(false);
+    if (face.IsNull()) {
+        if (err) *err = "face with holes failed";
         return {};
     }
-    return BRepBuilderAPI_MakeFace(pln, wire.Wire()).Face();
+    // Holes must reduce area vs the solid outer silhouette.
+    if (shape::area(face) >= best_area - 1e-6) {
+        TopoDS_Shape alt = make_with_holes(false);
+        if (!alt.IsNull() && shape::area(alt) < best_area - 1e-6) face = alt;
+    }
+    if (shape::area(face) >= best_area - 1e-6) {
+        if (err) *err = "inner loops did not form holes";
+        return {};
+    }
+    return face;
 }
 
 }  // namespace sx

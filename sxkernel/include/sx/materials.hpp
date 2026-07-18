@@ -13,8 +13,9 @@ struct Material {
     double density_g_cm3 = 1.0;
 };
 
-// Common engineering materials, alphabetical. The first entry is the
-// "Unspecified" default (density 1.0 so mass == volume/1000 in grams).
+// Common printable materials (FDM filament + metal AM), alphabetical.
+// The first entry is the "Unspecified" default (density 1.0 so mass ==
+// volume/1000 in grams).
 const std::vector<Material>& standard();
 
 std::optional<Material> find(const std::string& name);

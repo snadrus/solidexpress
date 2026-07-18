@@ -150,7 +150,8 @@ func _build_body_ops() -> void:
 		"Bevel the selected edges (or all edges) by the distance above")
 
 	_body_ops.add_child(HSeparator.new())
-	_pattern_spacing = _labeled_spin(_body_ops, "Spacing", 1.0, 1000.0, 1.0, 60.0)
+	# Default ~body width of the 10 mm palette primitives (was 60 — flung copies away).
+	_pattern_spacing = _labeled_spin(_body_ops, "Spacing", 0.1, 1000.0, 0.5, 12.0)
 	_pattern_count = _labeled_spin(_body_ops, "Count", 2, 36, 1, 3)
 	var pat_row := HBoxContainer.new()
 	_body_ops.add_child(pat_row)

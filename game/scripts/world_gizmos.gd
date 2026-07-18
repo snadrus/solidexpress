@@ -1,7 +1,8 @@
 class_name WorldGizmos
 extends Node3D
-## Origin triad (RGB XYZ) and reference grid on the model XY ground plane
-## (kernel Z-up). Sibling of DocumentView under ModelSpace.
+## Origin triad (RGB XYZ) and reference grid. The grid sits on the active
+## move plane (default: model XY / Z = 0). Sibling of DocumentView under
+## ModelSpace.
 
 const TRIAD_LEN := 5.0
 const TRIAD_RADIUS := 0.12
@@ -24,6 +25,8 @@ var grid_visible := true
 
 var _triad: Node3D
 var _grid: MeshInstance3D
+## Stash if set_active_plane runs before _ready builds the grid.
+var _pending_plane: Dictionary = {}
 
 
 func _ready() -> void:
@@ -39,6 +42,9 @@ func _ready() -> void:
 	_grid.mesh = _make_grid_mesh()
 	_grid.material_override = _unshaded_vertex_color_material()
 	add_child(_grid)
+	if not _pending_plane.is_empty():
+		set_active_plane(_pending_plane["origin"], _pending_plane["normal"])
+		_pending_plane.clear()
 
 	_apply_visibility()
 
@@ -56,6 +62,25 @@ func set_triad_visible(on: bool) -> void:
 func set_grid_visible(on: bool) -> void:
 	grid_visible = on
 	_apply_visibility()
+
+
+## Place the white reference grid on `origin` with in-plane axes derived from
+## `normal` (mesh is authored on local XY). Triad stays at the world origin.
+func set_active_plane(origin: Vector3, normal: Vector3) -> void:
+	var n := normal.normalized()
+	if n.length_squared() < 1e-12:
+		n = Vector3(0, 0, 1)
+	var x := n.cross(Vector3(0, 0, 1))
+	if x.length_squared() < 1e-12:
+		x = Vector3.RIGHT
+	else:
+		x = x.normalized()
+	var y := n.cross(x).normalized()
+	if _grid == null:
+		# Called before _ready in some headless setups — stash for _ready.
+		_pending_plane = {"origin": origin, "normal": n}
+		return
+	_grid.transform = Transform3D(Basis(x, y, n), origin)
 
 
 func _apply_visibility() -> void:
@@ -100,7 +125,7 @@ func _make_axis_cylinder(dir: Vector3, color: Color, node_name: String) -> MeshI
 	return mi
 
 
-## Reference grid on the model XY plane (Z = 0).
+## Reference grid on local XY (Z = 0); transform places it on the active plane.
 func _make_grid_mesh() -> ImmediateMesh:
 	var im := ImmediateMesh.new()
 	im.surface_begin(Mesh.PRIMITIVE_LINES)

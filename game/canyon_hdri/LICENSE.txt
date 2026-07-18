@@ -1,0 +1,1 @@
+Generated synthetic environment asset for use in the requesting user's projects.

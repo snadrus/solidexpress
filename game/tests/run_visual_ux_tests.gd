@@ -26,8 +26,10 @@ func _init() -> void:
 
 	test_hover_distinct(main)
 	await test_rotate_stretch_and_pull_handles(main)
+	await test_mod_hides_other_gizmos(main)
 	await test_move_delta_hud(main)
 	test_selection_strip_and_context(main)
+	test_active_plane(main)
 	await test_view_hud(main)
 	test_push_pull_preview_state(main)
 	test_rmb_orbit_and_peer_chrome(main)
@@ -103,6 +105,14 @@ func test_rotate_stretch_and_pull_handles(main) -> void:
 	if not z_grip.is_empty():
 		check(not ix._pick_z_move_grip(ix._model_to_screen(z_grip["point"])).is_empty(),
 			"lift grip pickable at tip")
+		# Base sits inside the solid (below the top face) so it clears +Z stretch.
+		check(float(z_grip["base"].z) < float(bb["max"].z) - 0.01,
+			"lift grip base inset below AABB top (base.z=%.2f max.z=%.2f)" \
+					% [z_grip["base"].z, bb["max"].z])
+		check(not ix._pick_z_move_grip(ix._model_to_screen(z_grip["base"])).is_empty()
+				or not ix._pick_z_move_grip(ix._model_to_screen(
+					(z_grip["base"] as Vector3).lerp(z_grip["point"], 0.55))).is_empty(),
+			"lift grip pickable at inset base or mid plate")
 		# Tip must stay within ~10% of viewport height (vertical grip).
 		var zb: Vector2 = ix._model_to_screen(z_grip["base"])
 		var zt: Vector2 = ix._model_to_screen(z_grip["point"])
@@ -121,6 +131,36 @@ func test_rotate_stretch_and_pull_handles(main) -> void:
 		if not pull.is_empty():
 			var ps: Vector2 = ix._model_to_screen(pull["point"])
 			check(not ix._pick_push_pull_handle(ps).is_empty(), "pick_push_pull_handle near tip")
+
+
+func test_mod_hides_other_gizmos(main) -> void:
+	print("- active mod hides other mod controls")
+	var view: DocumentView = main.view
+	var ix: ViewportInteraction = main.interaction
+	view.new_document()
+	var id: String = view.insert_primitive("box", Vector3.ZERO)
+	view.select_entity(id, "")
+	main.camera.frame_contents()
+	await process_frame
+	check(ix._drag_mode == ViewportInteraction.DragMode.NONE, "idle before mod")
+	check(ix._rotate_grips().size() == 3, "idle has rotate grips available")
+	# Stretch mod: only the active face control should be conceptually active.
+	ix._drag_mode = ViewportInteraction.DragMode.RESIZE_BODY
+	ix._resize_signs = Vector3(1, 0, 0)
+	check(ix._is_modifying(), "resize is modifying")
+	check(ix._drag_mode == ViewportInteraction.DragMode.RESIZE_BODY, "resize mode set")
+	# Rotate mod: axis locked to one ring.
+	ix._drag_mode = ViewportInteraction.DragMode.ROTATE_BODY
+	ix._rotate_axis = Vector3(0, 0, 1)
+	var matching := 0
+	for g in ix._rotate_grips():
+		if (g["axis"] as Vector3).distance_squared_to(ix._rotate_axis) < 1e-8:
+			matching += 1
+	check(matching == 1, "only one rotate ring matches active axis")
+	ix._drag_mode = ViewportInteraction.DragMode.MOVE_BODY
+	check(ix._is_modifying(), "move is modifying")
+	ix._drag_mode = ViewportInteraction.DragMode.NONE
+	check(not ix._is_modifying(), "idle clears modifying")
 
 
 func test_move_delta_hud(main) -> void:
@@ -186,9 +226,66 @@ func test_selection_strip_and_context(main) -> void:
 		ix._refresh_selection_strip()
 		check(ix._strip_look.visible, "Look at visible with face selected")
 		check(ix._strip_sketch.visible, "Sketch visible with face selected")
+		check(ix._strip_plane.visible, "Active plane visible with face selected")
+		ix._open_context_menu(Vector2(40, 40))
+		var has_plane_item := false
+		for i in range(ix._context_menu.item_count):
+			if str(ix._context_menu.get_item_text(i)).contains("active plane"):
+				has_plane_item = true
+				break
+		check(has_plane_item, "RMB includes Set as active plane")
 	view.clear_selection()
 	ix._open_context_menu(Vector2(40, 40))
 	check(ix._context_menu.item_count >= 1, "context has Fit/Unhide when empty")
+
+
+func test_active_plane(main) -> void:
+	print("- active plane set / reset / lift along normal")
+	var view: DocumentView = main.view
+	var ix: ViewportInteraction = main.interaction
+	view.new_document()
+	var id: String = view.insert_primitive("box", Vector3.ZERO)
+	ix.reset_active_plane()
+	check(not ix.active_plane_is_custom(), "starts on ground plane")
+	var faces: PackedStringArray = view.doc.get_face_ids(id)
+	check(faces.size() > 0, "box has faces")
+	var side_face := ""
+	for f in faces:
+		var plane: Dictionary = SketchMode.derive_face_plane(view.doc, f, id)
+		if not bool(plane.get("ok", false)):
+			continue
+		var n: Vector3 = plane["normal"]
+		if absf(n.x) > 0.9:
+			side_face = f
+			view.select_entity(id, f)
+			check(ix.set_active_plane_from_selection(), "set active plane from +X face")
+			check(ix.active_plane_is_custom(), "custom plane flagged")
+			check(absf(ix.active_plane_normal.x) > 0.9, "active normal is ±X")
+			break
+	check(side_face != "", "found an axis-aligned side face")
+	view.select_entity(id, "")
+	var grip: Dictionary = ix._z_move_grip_anchor()
+	check(not grip.is_empty(), "lift grip with custom ±X plane")
+	if not grip.is_empty():
+		var gn: Vector3 = grip.get("normal", Vector3.ZERO)
+		check(absf(gn.x) > 0.9, "lift grip oriented along active normal")
+	ix.arm_pick_active_plane()
+	check(ix._picking_active_plane, "pick mode armed")
+	ix.cancel_pick_active_plane()
+	check(not ix._picking_active_plane, "pick mode cancelled")
+	var grid: MeshInstance3D = ix.world_gizmos.get_node_or_null("Grid") as MeshInstance3D
+	check(grid != null, "world grid exists")
+	if grid != null and side_face != "":
+		check(absf(grid.transform.basis.z.x) > 0.9,
+			"white grid normal follows active ±X plane")
+		check(not grid.position.is_equal_approx(Vector3.ZERO),
+			"white grid origin leaves ground when plane is custom")
+	ix.reset_active_plane()
+	check(not ix.active_plane_is_custom(), "reset restores ground")
+	check(ix.active_plane_normal.is_equal_approx(Vector3(0, 0, 1)), "ground normal +Z")
+	if grid != null:
+		check(grid.transform.is_equal_approx(Transform3D.IDENTITY),
+			"white grid returns to ground on reset")
 
 
 func test_view_hud(main) -> void:

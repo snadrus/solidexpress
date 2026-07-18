@@ -124,3 +124,26 @@ TEST_CASE("extrude open profile throws", "[extrude]") {
     auto cmd = std::make_unique<ExtrudeCommand>(sk, 10.0);
     REQUIRE_THROWS(cmd->execute(doc));
 }
+
+TEST_CASE("extrude profile with hole has outer minus inner volume", "[extrude]") {
+    auto sk = std::make_shared<Sketch>("Frame");
+    sk->add_line(0, 0, 40, 0);
+    sk->add_line(40, 0, 40, 30);
+    sk->add_line(40, 30, 0, 30);
+    sk->add_line(0, 30, 0, 0);
+    sk->add_line(10, 10, 30, 10);
+    sk->add_line(30, 10, 30, 20);
+    sk->add_line(30, 20, 10, 20);
+    sk->add_line(10, 20, 10, 10);
+
+    Document doc;
+    CommandStack stack;
+    auto cmd = std::make_unique<ExtrudeCommand>(sk, 10.0);
+    ExtrudeCommand* raw = cmd.get();
+    stack.push(doc, std::move(cmd));
+
+    const Body* b = doc.body(raw->created_body());
+    REQUIRE(b != nullptr);
+    double expected = (40.0 * 30.0 - 20.0 * 10.0) * 10.0;
+    REQUIRE(shape::volume(b->shape) == Approx(expected).epsilon(1e-6));
+}

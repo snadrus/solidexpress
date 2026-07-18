@@ -1,10 +1,15 @@
 class_name OrbitCamera
 extends Camera3D
 ## Turntable orbit camera with CAD-familiar presets (SolidWorks / Fusion /
-## SolidExpress). Middle / Alt / empty-drag / two-finger navigate; wheel zooms
-## toward the cursor. Wheel / pan over ScrollContainers are left alone.
+## SolidExpress). Two-finger orbits; middle / 3-finger grip pans under SX;
+## Alt / empty-drag navigate; wheel zooms toward the cursor. Wheel / pan over
+## ScrollContainers are left alone.
 ## F frames selection (or all); Shift+F / double-middle-click fit all / selection.
 ## 1/2/3/7 standard views; 5 toggles ortho. Named views in user://views.cfg.
+
+## Fired after yaw/pitch/distance/pivot/projection update the camera transform.
+## Overlay gizmos connect so they redraw only when the view actually moves.
+signal view_changed
 
 enum NavPreset { SOLIDEXPRESS, SOLIDWORKS, FUSION }
 
@@ -23,9 +28,14 @@ var nav_preset := NavPreset.SOLIDEXPRESS
 const DEFAULT_DISTANCE := 15.0
 const MIN_DISTANCE := 1.0
 const MAX_DISTANCE := 20000.0
+## Fraction of half-frustum height to aim above the orbit pivot so the axis
+## origin sits near the bottom of the screen (0 = centered, 1 ≈ bottom edge).
+const VIEW_PIVOT_Y_BIAS := 0.72
 const ORBIT_SPEED := 0.008
 ## Two-finger pan sensitivity. Higher so a short trackpad swipe actually turns.
 const PAN_GESTURE_SCALE := 0.045
+## Map pan-gesture deltas into `_pan_by` pixel units (≈ PAN_GESTURE_SCALE / ORBIT_SPEED).
+const PAN_GESTURE_MOVE_SCALE := 5.5
 ## Amplify near-1.0 MagnifyGesture deltas (Wayland/libinput often sends tiny factors).
 const MAGNIFY_GAIN := 4.0
 ## Ctrl/Cmd + two-finger drag vertical → zoom (fallback when MagnifyGesture is absent).
@@ -145,12 +155,21 @@ func handle_input(event: InputEvent, allow_scroll_gestures := true) -> bool:
 				and not (event as InputEventMouseButton).meta_pressed)):
 		return false
 	if event is InputEventPanGesture:
-		# Two-finger drag (with or without a click/hold). Always orbit.
+		# Two-finger drag orbits. Shift+two-finger pans. A 3-finger grip
+		# (middle-click on clickfinger trackpads) follows the nav preset.
 		var pg := event as InputEventPanGesture
+		var middle_grip := Input.is_mouse_button_pressed(MOUSE_BUTTON_MIDDLE)
+		var do_pan := false
+		if middle_grip:
+			do_pan = _want_pan(pg.shift_pressed)
+		elif pg.shift_pressed:
+			do_pan = true
+		if do_pan:
+			_pan_by(pg.delta.x * PAN_GESTURE_MOVE_SCALE, pg.delta.y * PAN_GESTURE_MOVE_SCALE)
+			return true
 		var scale := PAN_GESTURE_SCALE
-		# Click held under the fingers (LMB/MMB mask) → slightly snappier turn.
-		if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) \
-				or Input.is_mouse_button_pressed(MOUSE_BUTTON_MIDDLE):
+		# Left-click held under the fingers → slightly snappier turn.
+		if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
 			scale *= 1.35
 		yaw -= pg.delta.x * scale
 		pitch = clampf(pitch + pg.delta.y * scale, MIN_PITCH, MAX_PITCH)
@@ -180,7 +199,10 @@ func handle_input(event: InputEvent, allow_scroll_gestures := true) -> bool:
 		var alt_left := (mm.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0 and mm.alt_pressed
 		if not middle and not alt_left:
 			return false
-		if _want_pan(mm.shift_pressed):
+		# Middle / 3-finger uses the nav preset. Alt stays orbit-first under SX
+		# so trackpads keep a reliable orbit chord when middle is rebound to pan.
+		var pan := _want_pan(mm.shift_pressed) if middle else _want_alt_pan(mm.shift_pressed)
+		if pan:
 			_pan_by(mm.relative.x, mm.relative.y)
 		else:
 			_orbit_by(mm.relative.x, mm.relative.y)
@@ -212,9 +234,17 @@ func handle_input(event: InputEvent, allow_scroll_gestures := true) -> bool:
 	return false
 
 
-## Fusion: middle pans, Shift+middle orbits. SolidWorks / SX: middle orbits,
-## Shift+middle pans. Alt+left follows the same rule as middle.
+## SX / Fusion: middle (3-finger grip on clickfinger trackpads) pans,
+## Shift+middle orbits. SolidWorks: middle orbits, Shift+middle pans.
 func _want_pan(shift_held: bool) -> bool:
+	if nav_preset == NavPreset.FUSION or nav_preset == NavPreset.SOLIDEXPRESS:
+		return not shift_held
+	return shift_held
+
+
+## Alt+left: Fusion mirrors middle (pan). SX/SW keep Alt as orbit so a
+## touchpad always has an orbit chord even when middle/3-finger pans.
+func _want_alt_pan(shift_held: bool) -> bool:
 	if nav_preset == NavPreset.FUSION:
 		return not shift_held
 	return shift_held
@@ -454,9 +484,28 @@ func _update_transform() -> void:
 		cos(pitch) * cos(yaw)
 	) * distance
 	var pos := pivot + offset
+	var look_target := _look_target_for(pos)
 	if is_inside_tree():
 		global_position = pos
-		look_at(pivot, Vector3.UP)
+		look_at(look_target, Vector3.UP)
 	else:
 		# Headless / orphan nodes (e.g. unit tests) cannot use look_at().
-		look_at_from_position(pos, pivot, Vector3.UP)
+		look_at_from_position(pos, look_target, Vector3.UP)
+	view_changed.emit()
+
+
+## Aim above the orbit pivot along camera-up so the pivot projects low on screen.
+func _look_target_for(camera_pos: Vector3) -> Vector3:
+	if VIEW_PIVOT_Y_BIAS <= 0.0:
+		return pivot
+	var to_pivot := pivot - camera_pos
+	if to_pivot.length_squared() < 1e-12:
+		return pivot
+	var forward := to_pivot.normalized()
+	var right := forward.cross(Vector3.UP)
+	if right.length_squared() < 1e-10:
+		right = forward.cross(Vector3.RIGHT)
+	right = right.normalized()
+	var view_up := right.cross(forward).normalized()
+	var half_height := distance * tan(deg_to_rad(fov) * 0.5)
+	return pivot + view_up * (half_height * VIEW_PIVOT_Y_BIAS)

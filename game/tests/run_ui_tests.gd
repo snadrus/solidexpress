@@ -31,6 +31,7 @@ func _init() -> void:
 	test_push_pull(main)
 	test_undo_wiring(main)
 	test_sketch_mode(main)
+	await test_sketch_toolbar_no_clickthrough(main)
 	await test_timeline(main)
 	test_ops_panel(main)
 	test_sketch_constraints(main)
@@ -559,6 +560,83 @@ func test_sketch_mode(main) -> void:
 	sm.cancel()
 	check(not sm.active, "cancel exits sketch mode")
 	check(view.doc.body_ids().size() == count0 + 1, "cancel adds nothing")
+
+
+## Toolbar / dock chrome must own the pointer while sketching — clicks on the
+## sketch bar must not place geometry on the canvas underneath.
+func test_sketch_toolbar_no_clickthrough(main) -> void:
+	print("- sketch toolbar: no click-through to canvas")
+	var ix: ViewportInteraction = main.interaction
+	var sm: SketchMode = main.sketch_mode
+	var tb: Control = main.sketch_toolbar
+	main.view.clear_selection()
+	# Headless viewports need an explicit size for Control hit-testing (see place tests).
+	root.size = Vector2i(1280, 720)
+	ix.size = Vector2(1280, 720)
+	await process_frame
+	main._start_sketch()
+	await process_frame
+	check(tb != null and tb.visible, "sketch toolbar visible")
+	sm.set_tool(SketchMode.Tool.LINE)
+	var before: int = sm.sketch.entity_ids().size()
+
+	var at := tb.get_global_rect().get_center()
+	var hover := InputEventMouseMotion.new()
+	hover.position = at
+	ix.get_viewport().push_input(hover)
+	await process_frame
+	var h: Control = ix.get_viewport().gui_get_hovered_control()
+	check(h != null and (h == tb or tb.is_ancestor_of(h)),
+		"hover is on sketch toolbar chrome (got %s)" % (h.name if h else "null"))
+	check(not ix._viewport_owns_pointer(at),
+		"toolbar hover does not own sketch/model pointer")
+
+	for pressed in [true, false]:
+		var mb := InputEventMouseButton.new()
+		mb.button_index = MOUSE_BUTTON_LEFT
+		mb.pressed = pressed
+		mb.position = at
+		ix.get_viewport().push_input(mb)
+		await process_frame
+	check(sm.sketch.entity_ids().size() == before,
+		"LMB on toolbar did not create sketch entities")
+
+	# Click a labeled Line tool button — switches tool without a canvas point.
+	var line_btn: Button = null
+	for child in _all_buttons(tb):
+		if child.text == "Line" or (child.tooltip_text.begins_with("Line tool")):
+			line_btn = child
+			break
+	check(line_btn != null, "Line toolbar button exists")
+	if line_btn != null:
+		sm.set_tool(SketchMode.Tool.SELECT)
+		var btn_at := line_btn.get_global_rect().get_center()
+		var hov2 := InputEventMouseMotion.new()
+		hov2.position = btn_at
+		ix.get_viewport().push_input(hov2)
+		await process_frame
+		check(not ix._viewport_owns_pointer(btn_at),
+			"Line button hover does not own pointer")
+		for pressed2 in [true, false]:
+			var mb2 := InputEventMouseButton.new()
+			mb2.button_index = MOUSE_BUTTON_LEFT
+			mb2.pressed = pressed2
+			mb2.position = btn_at
+			ix.get_viewport().push_input(mb2)
+			await process_frame
+		check(sm.tool == SketchMode.Tool.LINE, "Line button selects line tool")
+		check(sm.sketch.entity_ids().size() == before,
+			"Line button click did not place a canvas point")
+	sm.cancel()
+
+
+func _all_buttons(root: Node) -> Array[Button]:
+	var out: Array[Button] = []
+	for c in root.get_children():
+		if c is Button:
+			out.append(c)
+		out.append_array(_all_buttons(c))
+	return out
 
 
 func test_graph_sweep_loft() -> void:

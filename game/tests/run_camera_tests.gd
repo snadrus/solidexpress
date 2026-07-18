@@ -49,16 +49,17 @@ func _reset_cam(cam: OrbitCamera) -> void:
 
 
 func test_zoom_at_center(cam: OrbitCamera) -> void:
-	print("- zoom at viewport center leaves pivot ~unchanged")
+	print("- zoom on projected pivot leaves pivot ~unchanged")
 	_reset_cam(cam)
-	var center := root.size * 0.5
+	# Pivot is framed low on screen (VIEW_PIVOT_Y_BIAS); zoom at its projection.
+	var pivot_screen := cam.unproject_position(cam.pivot)
 	var pivot_before := cam.pivot
-	cam.zoom_at(center, 0.9)
-	check(cam.pivot.distance_to(pivot_before) < 1e-3, "center zoom-in pivot unchanged")
-	check(is_equal_approx(cam.distance, 400.0 * 0.9), "center zoom-in scales distance")
-	cam.zoom_at(center, 1.0 / 0.9)
-	check(cam.pivot.distance_to(pivot_before) < 1e-3, "center zoom-out pivot unchanged")
-	check(is_equal_approx(cam.distance, 400.0), "center zoom-out restores distance")
+	cam.zoom_at(pivot_screen, 0.9)
+	check(cam.pivot.distance_to(pivot_before) < 1e-3, "pivot-screen zoom-in pivot unchanged")
+	check(is_equal_approx(cam.distance, 400.0 * 0.9), "pivot-screen zoom-in scales distance")
+	cam.zoom_at(cam.unproject_position(cam.pivot), 1.0 / 0.9)
+	check(cam.pivot.distance_to(pivot_before) < 1e-3, "pivot-screen zoom-out pivot unchanged")
+	check(is_equal_approx(cam.distance, 400.0), "pivot-screen zoom-out restores distance")
 
 
 func test_zoom_off_center_moves_pivot(cam: OrbitCamera) -> void:
@@ -194,14 +195,50 @@ func test_scroll_gestures_gated(cam: OrbitCamera) -> void:
 
 func test_nav_presets_and_fit(cam: OrbitCamera) -> void:
 	print("- nav presets + selection fit helpers")
-	check(cam._want_pan(false) == false, "SX: middle without shift = orbit")
-	check(cam._want_pan(true) == true, "SX: Shift+middle = pan")
+	check(cam._want_pan(false) == true, "SX: middle / 3-finger grip = pan")
+	check(cam._want_pan(true) == false, "SX: Shift+middle = orbit")
+	check(cam._want_alt_pan(false) == false, "SX: Alt-drag orbits")
+	check(cam._want_alt_pan(true) == true, "SX: Alt+Shift pans")
 	cam.nav_preset = OrbitCamera.NavPreset.FUSION
 	check(cam._want_pan(false) == true, "Fusion: middle without shift = pan")
 	check(cam._want_pan(true) == false, "Fusion: Shift+middle = orbit")
+	check(cam._want_alt_pan(false) == true, "Fusion: Alt matches middle (pan)")
 	cam.nav_preset = OrbitCamera.NavPreset.SOLIDWORKS
 	check(cam._want_pan(false) == false, "SW: middle = orbit")
+	check(cam._want_pan(true) == true, "SW: Shift+middle = pan")
+	check(cam._want_alt_pan(false) == false, "SW: Alt-drag orbits")
 	cam.nav_preset = OrbitCamera.NavPreset.SOLIDEXPRESS
+
+	# Shift+two-finger pans; plain two-finger still orbits.
+	_reset_cam(cam)
+	var pivot0 := cam.pivot
+	var yaw0 := cam.yaw
+	var shift_pan := InputEventPanGesture.new()
+	shift_pan.shift_pressed = true
+	shift_pan.delta = Vector2(20, 0)
+	check(cam.handle_input(shift_pan, true), "Shift+pan gesture handled")
+	check(cam.pivot.distance_to(pivot0) > 1e-4, "Shift+two-finger pans pivot")
+	check(is_equal_approx(cam.yaw, yaw0), "Shift+two-finger does not orbit")
+
+	_reset_cam(cam)
+	yaw0 = cam.yaw
+	pivot0 = cam.pivot
+	var orbit_pan := InputEventPanGesture.new()
+	orbit_pan.delta = Vector2(20, 0)
+	check(cam.handle_input(orbit_pan, true), "two-finger pan gesture handled")
+	check(absf(cam.yaw - yaw0) > 1e-4, "two-finger drag orbits")
+	check(cam.pivot.is_equal_approx(pivot0), "two-finger drag does not pan")
+
+	# Middle-drag pans under SX (3-finger grip on clickfinger trackpads).
+	_reset_cam(cam)
+	pivot0 = cam.pivot
+	yaw0 = cam.yaw
+	var mid := InputEventMouseMotion.new()
+	mid.button_mask = MOUSE_BUTTON_MASK_MIDDLE
+	mid.relative = Vector2(30, 0)
+	check(cam.handle_input(mid, true), "middle-drag handled")
+	check(cam.pivot.distance_to(pivot0) > 1e-4, "SX middle-drag pans")
+	check(is_equal_approx(cam.yaw, yaw0), "SX middle-drag does not orbit")
 
 	# Double-middle is claimed as a nav event.
 	var dbl := InputEventMouseButton.new()

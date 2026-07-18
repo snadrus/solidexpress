@@ -15,11 +15,14 @@ func _ready() -> void:
 	custom_minimum_size = Vector2(WIDGET_SIZE, WIDGET_SIZE)
 	size = Vector2(WIDGET_SIZE, WIDGET_SIZE)
 	mouse_filter = Control.MOUSE_FILTER_STOP
+	if camera != null:
+		camera.view_changed.connect(queue_redraw)
 	queue_redraw()
 
 
-func _process(_delta: float) -> void:
-	queue_redraw()
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_RESIZED:
+		queue_redraw()
 
 
 ## Hit-test a local point; returns zone name or "" if outside / empty cell.

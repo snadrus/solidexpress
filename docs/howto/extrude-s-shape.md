@@ -18,6 +18,7 @@ Goal: sketch a closed S-shaped profile and extrude it into a solid.
 - The profile must be **closed** or extrude fails — check that the last point meets the first.
 - **R** draws rectangles; **C** circles; **S** returns to select for constraints.
 - Esc cancels the sketch without creating a body.
+- For a letter with a hole (outer + inner loop), see [extrude-letter-a.md](extrude-letter-a.md).
 
 ## What “good” looks like
 

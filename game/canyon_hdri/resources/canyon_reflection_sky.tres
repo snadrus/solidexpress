@@ -1,0 +1,13 @@
+[gd_resource type="Sky" load_steps=3 format=3]
+
+[ext_resource type="Texture2D" path="res://canyon_hdri/textures/canyon_reflection_4k.hdr" id="1_panorama"]
+
+[sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_reflection"]
+panorama = ExtResource("1_panorama")
+filter = true
+energy_multiplier = 1.0
+
+[resource]
+sky_material = SubResource("PanoramaSkyMaterial_reflection")
+radiance_size = 5
+process_mode = 1

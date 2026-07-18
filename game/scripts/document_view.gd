@@ -9,6 +9,9 @@ signal document_changed
 signal selection_changed(body_id: String, face_id: String)
 
 const BODY_COLOR := Color(0.72, 0.74, 0.78)
+## Cold brushed-metal defaults so canyon HDRI reflections read on bodies.
+const BODY_METALLIC := 0.92
+const BODY_ROUGHNESS := 0.35
 const SELECTED_BODY_COLOR := Color(0.55, 0.68, 0.9)
 const SELECTED_FACE_COLOR := Color(1.0, 0.62, 0.15)
 const HOVER_BODY_COLOR := Color(0.78, 0.84, 0.92)
@@ -149,8 +152,8 @@ shader_type spatial;
 render_mode cull_disabled, diffuse_lambert, specular_schlick_ggx;
 
 uniform vec4 albedo_color : source_color = vec4(0.72, 0.74, 0.78, 1.0);
-uniform float metallic : hint_range(0.0, 1.0) = 0.1;
-uniform float roughness : hint_range(0.0, 1.0) = 0.55;
+uniform float metallic : hint_range(0.0, 1.0) = 0.92;
+uniform float roughness : hint_range(0.0, 1.0) = 0.35;
 uniform float emission_energy : hint_range(0.0, 2.0) = 0.0;
 
 void fragment() {
@@ -171,8 +174,8 @@ func _make_material(color: Color, emission_energy: float = 0.0) -> ShaderMateria
 	var m := ShaderMaterial.new()
 	m.shader = _body_shader
 	m.set_shader_parameter("albedo_color", color)
-	m.set_shader_parameter("metallic", 0.1)
-	m.set_shader_parameter("roughness", 0.55)
+	m.set_shader_parameter("metallic", BODY_METALLIC)
+	m.set_shader_parameter("roughness", BODY_ROUGHNESS)
 	m.set_shader_parameter("emission_energy", emission_energy)
 	return m
 
@@ -186,8 +189,8 @@ render_mode cull_disabled, diffuse_lambert, specular_schlick_ggx;
 uniform vec4 albedo_color : source_color = vec4(0.72, 0.74, 0.78, 1.0);
 uniform vec3 section_point = vec3(0.0);
 uniform vec3 section_normal = vec3(1.0, 0.0, 0.0);
-uniform float metallic : hint_range(0.0, 1.0) = 0.1;
-uniform float roughness : hint_range(0.0, 1.0) = 0.55;
+uniform float metallic : hint_range(0.0, 1.0) = 0.92;
+uniform float roughness : hint_range(0.0, 1.0) = 0.35;
 uniform vec4 emission_color : source_color = vec4(0.0, 0.0, 0.0, 1.0);
 uniform float emission_energy : hint_range(0.0, 2.0) = 0.0;
 
@@ -222,8 +225,8 @@ func _make_section_material(albedo: Color, emission: Color = Color(0, 0, 0), emi
 	m.set_shader_parameter("albedo_color", albedo)
 	m.set_shader_parameter("section_point", _section_point)
 	m.set_shader_parameter("section_normal", _section_normal)
-	m.set_shader_parameter("metallic", 0.1)
-	m.set_shader_parameter("roughness", 0.55)
+	m.set_shader_parameter("metallic", BODY_METALLIC)
+	m.set_shader_parameter("roughness", BODY_ROUGHNESS)
 	m.set_shader_parameter("emission_color", emission)
 	m.set_shader_parameter("emission_energy", emission_energy)
 	return m
@@ -279,31 +282,72 @@ static func default_primitive_size(kind: String) -> Vector3:
 			return Vector3(s, s, s)
 
 
-## Insert a palette primitive sitting on a horizontal floor through `world_point`.
-## `world_point` is model (kernel Z-up) space: x/y = footprint center, z = floor
-## height (0 = ground plane; top of another body = stack).
-## Optional `size` (W,H,D mm) overrides the default footprint; see
-## `default_primitive_size` for per-kind mapping onto kernel a/b/c.
-func insert_primitive(kind: String, world_point: Vector3, size := Vector3.ZERO) -> String:
+## Insert a palette primitive sitting on a floor through `world_point`.
+## Default: world XY floor, height along +Z. Pass `sit_normal` / `plane_x` to
+## place on an active plane (height along sit_normal, footprint along plane_x/y).
+## Optional `size` (W,H,D mm) overrides the default; see `default_primitive_size`.
+func insert_primitive(kind: String, world_point: Vector3, size := Vector3.ZERO,
+		sit_normal := Vector3(0, 0, 1), plane_x := Vector3(1, 0, 0)) -> String:
 	var p := world_point
 	var s := size if size.x > 0.0 else default_primitive_size(kind)
-	var fid := ""
+	var n := sit_normal.normalized()
+	if n.length_squared() < 1e-12:
+		n = Vector3(0, 0, 1)
+	var x := plane_x - n * plane_x.dot(n)
+	if x.length_squared() < 1e-12:
+		x = n.cross(Vector3(0, 0, 1))
+		if x.length_squared() < 1e-12:
+			x = Vector3.RIGHT
+	x = x.normalized()
+	var y := n.cross(x).normalized()
+	var origin := p
+	var a := 0.0
+	var b := 0.0
+	var c := 0.0
 	match kind:
 		"box":
-			fid = doc.graph_add_primitive("box", s.x, s.y, s.z, p - Vector3(s.x * 0.5, s.y * 0.5, 0))
+			a = s.x
+			b = s.y
+			c = s.z
+			origin = p - x * (s.x * 0.5) - y * (s.y * 0.5)
 		"cylinder":
 			# a=radius, b=height — HUD W/H are diameter; D is height.
-			fid = doc.graph_add_primitive("cylinder", s.x * 0.5, s.z, 0, p)
+			a = s.x * 0.5
+			b = s.z
+			c = 0.0
+			origin = p
 		"sphere":
-			fid = doc.graph_add_primitive("sphere", s.x * 0.5, 0, 0, p + Vector3(0, 0, s.x * 0.5))
+			a = s.x * 0.5
+			b = 0.0
+			c = 0.0
+			origin = p + n * (s.x * 0.5)
 		"cone":
 			# a=bottom radius, b=top radius, c=height
-			fid = doc.graph_add_primitive("cone", s.x * 0.5, s.y * 0.5, s.z, p)
+			a = s.x * 0.5
+			b = s.y * 0.5
+			c = s.z
+			origin = p
 		"torus":
-			fid = doc.graph_add_primitive("torus", s.x * 0.5, s.y * 0.5, 0, p + Vector3(0, 0, s.y * 0.5))
+			a = s.x * 0.5
+			b = s.y * 0.5
+			c = 0.0
+			origin = p + n * (s.y * 0.5)
 		_:
 			push_error("unknown primitive kind: " + kind)
 			return ""
+	var fid := doc.graph_add_primitive(kind, a, b, c, origin)
+	if fid == "":
+		return ""
+	# Stamp orientation when not the default Z-up / +X frame (regen rebuilds).
+	var needs_frame := not n.is_equal_approx(Vector3(0, 0, 1)) \
+			or not x.is_equal_approx(Vector3(1, 0, 0))
+	if needs_frame:
+		var params := _feature_params_by_id(fid)
+		if not params.is_empty():
+			params["origin"] = _vec3_to_param(origin)
+			params["z_dir"] = _vec3_to_param(n)
+			params["x_dir"] = _vec3_to_param(x)
+			doc.graph_set_params(fid, JSON.stringify(params))
 	var id := body_of_feature(fid)
 	_after_mutation()
 	if id != "":
@@ -650,10 +694,64 @@ func _edge_near_point(body_id: String, point: Vector3) -> String:
 	return best_id
 
 
+## Closest point on any edge of `body_id` to `point` (no pick tolerance).
+## Returns `point` unchanged when the body has no edge polylines.
+func closest_edge_point(body_id: String, point: Vector3) -> Vector3:
+	var lines: Dictionary = doc.get_edge_lines(body_id)
+	var best := point
+	var best_d := INF
+	for edge_id in lines:
+		var pts: PackedVector3Array = lines[edge_id]
+		for i in range(pts.size() - 1):
+			var q := _closest_point_on_segment3(point, pts[i], pts[i + 1])
+			var d := point.distance_squared_to(q)
+			if d < best_d:
+				best_d = d
+				best = q
+	return best
+
+
+## Closest corner to `point` — AABB corners plus edge endpoints (vertices).
+## Used when planting / replanting the measure X so it snaps to corners.
+func closest_corner_point(body_id: String, point: Vector3) -> Vector3:
+	var candidates: Array[Vector3] = []
+	var bb: Dictionary = doc.measure_bbox(body_id)
+	if not bb.is_empty():
+		var mn: Vector3 = bb["min"]
+		var mx: Vector3 = bb["max"]
+		for x in [mn.x, mx.x]:
+			for y in [mn.y, mx.y]:
+				for z in [mn.z, mx.z]:
+					candidates.append(Vector3(x, y, z))
+	var lines: Dictionary = doc.get_edge_lines(body_id)
+	for edge_id in lines:
+		var pts: PackedVector3Array = lines[edge_id]
+		if pts.is_empty():
+			continue
+		candidates.append(pts[0])
+		if pts.size() > 1:
+			candidates.append(pts[pts.size() - 1])
+	if candidates.is_empty():
+		return closest_edge_point(body_id, point)
+	var best: Vector3 = candidates[0]
+	var best_d := point.distance_squared_to(best)
+	for i in range(1, candidates.size()):
+		var c: Vector3 = candidates[i]
+		var d := point.distance_squared_to(c)
+		if d < best_d:
+			best_d = d
+			best = c
+	return best
+
+
 func _point_segment_distance3(p: Vector3, a: Vector3, b: Vector3) -> float:
+	return p.distance_to(_closest_point_on_segment3(p, a, b))
+
+
+func _closest_point_on_segment3(p: Vector3, a: Vector3, b: Vector3) -> Vector3:
 	var ab := b - a
 	var t := 0.0 if ab.length_squared() < 1e-12 else clampf((p - a).dot(ab) / ab.length_squared(), 0.0, 1.0)
-	return p.distance_to(a + ab * t)
+	return a + ab * t
 
 
 func select_edge(body_id: String, edge_id: String) -> void:

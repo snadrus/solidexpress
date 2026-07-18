@@ -19,7 +19,7 @@ const GLYPHS := {
 	# --- sketch tools ---
 	"sketch": "<path d='M5 19l1-4L16.5 4.5l3 3L9 18z'/><path d='M14.5 6.5l3 3'/>",
 	"select": "<path d='M7 4l11 8-4.5 1L16 18l-2.5 1-2.5-5-3.5 3.5z'/>",
-	"line": "<path d='M5 19 19 5'/><circle cx='5' cy='19' r='1.6' fill='%STROKE%'/><circle cx='19' cy='5' r='1.6' fill='%STROKE%'/>",
+	"line": "<path d='M5 19 19 5'/>",
 	"rect": "<rect x='5' y='7' width='14' height='10'/>",
 	"circle": "<circle cx='12' cy='12' r='7'/><circle cx='12' cy='12' r='1.2' fill='%STROKE%'/>",
 	"arc": "<path d='M5 18a11 11 0 0 1 14 0'/><circle cx='5' cy='18' r='1.5' fill='%STROKE%'/><circle cx='19' cy='18' r='1.5' fill='%STROKE%'/>",

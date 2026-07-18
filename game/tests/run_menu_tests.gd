@@ -86,22 +86,22 @@ func test_materials(main) -> void:
 	print("- body material and mass")
 	var body: String = main.view.insert_primitive("box", Vector3.ZERO)
 	var mats: Array = main.view.doc.material_list()
-	check(mats.size() >= 15, "material table exposed (%d entries)" % mats.size())
+	check(mats.size() == 13, "material table exposed (%d entries)" % mats.size())
 	check(str(main.view.doc.body_material(body)) == "Unspecified", "default material")
 
-	check(main.view.doc.set_body_material(body, "Steel"), "assign Steel")
+	check(main.view.doc.set_body_material(body, "PLA"), "assign PLA")
 	var mp: Dictionary = main.view.doc.measure_mass(body)
-	# 20mm default box = 8000 mm^3 = 8 cm^3 -> 62.8 g of steel.
-	var expected: float = mp["volume"] / 1000.0 * 7.85
+	# 20mm default box = 8000 mm^3 = 8 cm^3 -> 9.92 g of PLA.
+	var expected: float = mp["volume"] / 1000.0 * 1.24
 	check(absf(float(mp["mass_g"]) - expected) < 0.01, "mass uses density (%.1f g)" % mp["mass_g"])
-	check(str(mp["material"]) == "Steel", "mass readout names material")
+	check(str(mp["material"]) == "PLA", "mass readout names material")
 	check(not main.view.doc.set_body_material(body, "Unobtainium"), "unknown material rejected")
 
 	# Ops panel dropdown syncs to the selected body's material.
 	main.view.select_entity(body, "")
 	await process_frame
 	var opt: OptionButton = main.ops_panel._material_option
-	check(str(opt.get_item_metadata(opt.selected)) == "Steel", "ops panel dropdown synced")
+	check(str(opt.get_item_metadata(opt.selected)) == "PLA", "ops panel dropdown synced")
 	main.view.clear_selection()
 
 
