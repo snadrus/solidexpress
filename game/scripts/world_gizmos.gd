@@ -1,42 +1,28 @@
 class_name WorldGizmos
 extends Node3D
-## Origin triad (RGB XYZ) and reference grid. The grid sits on the active
-## move plane (default: model XY / Z = 0). Sibling of DocumentView under
-## ModelSpace.
+## Reference grid on the active move plane (default: model XY / Z = 0).
+## RGB origin sticks live on the ViewHud (OriginTriadHud), not on this plate.
+## Sibling of DocumentView under ModelSpace.
 
-const TRIAD_LEN := 5.0
-const TRIAD_RADIUS := 0.12
 ## Match place-snap (0.1 mm): minor every 0.1, major every 1.0, ±50 mm sheet.
 const GRID_HALF := 50.0
 const GRID_STEP := 0.1
 const GRID_MAJOR := 1.0
 
-const COLOR_X := Color(0.92, 0.22, 0.18)
-const COLOR_Y := Color(0.22, 0.82, 0.28)
-const COLOR_Z := Color(0.22, 0.42, 0.95)
 const COLOR_GRID := Color(0.32, 0.33, 0.36)
 const COLOR_GRID_MAJOR := Color(0.48, 0.49, 0.54)
 const COLOR_GRID_CENTER_X := Color(0.72, 0.28, 0.26)
 const COLOR_GRID_CENTER_Y := Color(0.28, 0.68, 0.32)
 
 var gizmos_visible := true
-var triad_visible := true
 var grid_visible := true
 
-var _triad: Node3D
 var _grid: MeshInstance3D
 ## Stash if set_active_plane runs before _ready builds the grid.
 var _pending_plane: Dictionary = {}
 
 
 func _ready() -> void:
-	_triad = Node3D.new()
-	_triad.name = "Triad"
-	add_child(_triad)
-	_triad.add_child(_make_axis_cylinder(Vector3.RIGHT, COLOR_X, "AxisX"))
-	_triad.add_child(_make_axis_cylinder(Vector3.UP, COLOR_Y, "AxisY"))
-	_triad.add_child(_make_axis_cylinder(Vector3(0, 0, 1), COLOR_Z, "AxisZ"))
-
 	_grid = MeshInstance3D.new()
 	_grid.name = "Grid"
 	_grid.mesh = _make_grid_mesh()
@@ -54,18 +40,13 @@ func set_gizmos_visible(on: bool) -> void:
 	_apply_visibility()
 
 
-func set_triad_visible(on: bool) -> void:
-	triad_visible = on
-	_apply_visibility()
-
-
 func set_grid_visible(on: bool) -> void:
 	grid_visible = on
 	_apply_visibility()
 
 
 ## Place the white reference grid on `origin` with in-plane axes derived from
-## `normal` (mesh is authored on local XY). Triad stays at the world origin.
+## `normal` (mesh is authored on local XY).
 func set_active_plane(origin: Vector3, normal: Vector3) -> void:
 	var n := normal.normalized()
 	if n.length_squared() < 1e-12:
@@ -84,17 +65,8 @@ func set_active_plane(origin: Vector3, normal: Vector3) -> void:
 
 
 func _apply_visibility() -> void:
-	if _triad:
-		_triad.visible = gizmos_visible and triad_visible
 	if _grid:
 		_grid.visible = gizmos_visible and grid_visible
-
-
-func _unshaded(color: Color) -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	m.albedo_color = color
-	return m
 
 
 func _unshaded_vertex_color_material() -> StandardMaterial3D:
@@ -102,27 +74,6 @@ func _unshaded_vertex_color_material() -> StandardMaterial3D:
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	m.vertex_color_use_as_albedo = true
 	return m
-
-
-## Thin cylinder from origin along +dir, length TRIAD_LEN.
-func _make_axis_cylinder(dir: Vector3, color: Color, node_name: String) -> MeshInstance3D:
-	var cyl := CylinderMesh.new()
-	cyl.top_radius = TRIAD_RADIUS
-	cyl.bottom_radius = TRIAD_RADIUS
-	cyl.height = TRIAD_LEN
-	var mi := MeshInstance3D.new()
-	mi.name = node_name
-	mi.mesh = cyl
-	mi.material_override = _unshaded(color)
-	# CylinderMesh height is local +Y; map local Y onto dir.
-	var y := dir.normalized()
-	var x := y.cross(Vector3(0, 0, 1))
-	if x.length_squared() < 1e-8:
-		x = y.cross(Vector3(1, 0, 0))
-	x = x.normalized()
-	var z := x.cross(y).normalized()
-	mi.transform = Transform3D(Basis(x, y, z), y * (TRIAD_LEN * 0.5))
-	return mi
 
 
 ## Reference grid on local XY (Z = 0); transform places it on the active plane.

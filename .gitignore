@@ -14,3 +14,9 @@ game/.godot/
 .cache/
 compile_commands.json
 /tmp/
+# Generated movie / howto film outputs (often huge)
+dist/movies/
+*.avi
+*.mp4
+*.webm
+*.bak

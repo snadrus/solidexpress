@@ -20,6 +20,16 @@ struct DistanceResult {
 std::optional<DistanceResult> min_distance(const Document& doc, const EntityId& a,
                                            const EntityId& b);
 
+// Closest point on a resolved shape to a free 3D point (perpendicular foot
+// onto the near surface / edge / vertex). `point_a` echoes `from`; `point_b`
+// is the foot on the shape.
+std::optional<DistanceResult> closest_point(const Document& doc, const EntityId& shape,
+                                            const std::array<double, 3>& from);
+
+// UV-parameter midpoint of a face mapped to 3D (surface midpoint).
+std::optional<std::array<double, 3>> face_midpoint(const Document& doc,
+                                                   const EntityId& face);
+
 struct BBox {
     std::array<double, 3> min{};
     std::array<double, 3> max{};

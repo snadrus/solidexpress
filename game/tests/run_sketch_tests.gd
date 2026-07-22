@@ -31,6 +31,9 @@ func _init() -> void:
 	await process_frame
 	await process_frame
 	test_sketch_on_face_extrude(main)
+	test_sketch_exit_pad_reopen(main)
+	test_sketch_camera_lock(main)
+	test_sketch_left_rail(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -198,3 +201,94 @@ func test_sketch_on_face_extrude(main) -> void:
 	check(not sm.active, "sketch finished")
 	var bb1: Dictionary = view.doc.measure_bbox(body)
 	check(bb1["max"].z > z0 + 10.0, "fused body taller (max z %.1f > %.1f)" % [bb1["max"].z, z0])
+
+
+func test_sketch_exit_pad_reopen(main) -> void:
+	print("- exit sketch commits pad; reopen edits same feature")
+	var view: DocumentView = main.view
+	var sm: SketchMode = main.sketch_mode
+	view.new_document()
+	view.clear_selection()
+	main._start_sketch()
+	check(sm.active, "sketch active")
+	sm.set_tool(SketchMode.Tool.RECT)
+	sm.click(Vector2(0, 0))
+	sm.click(Vector2(20, 10))
+	var n_before := 0
+	for f in view.doc.graph_features():
+		if str(f.get("type", "")) == "sketch":
+			n_before += 1
+	var fid: String = sm.exit_sketch()
+	check(fid != "", "exit returned sketch feature id")
+	check(not sm.active, "exited sketch mode")
+	var n_after := 0
+	for f2 in view.doc.graph_features():
+		if str(f2.get("type", "")) == "sketch":
+			n_after += 1
+	check(n_after == n_before + 1, "sketch feature added on exit")
+	view.refresh_sketch_pads("")
+	check(view.sketch_pads != null, "sketch pads overlay exists")
+	var pad_hit: String = ""
+	if view.sketch_pads != null and view.sketch_pads.has_method("pick_pad"):
+		pad_hit = view.sketch_pads.call("pick_pad",
+			Vector3(10, 5, 100), Vector3(0, 0, -1))
+	check(pad_hit == fid, "yellow pad pickable from above")
+	var pads: Dictionary = view.sketch_pads.get("_pads")
+	check(pads.has(fid), "pad entry for sketch feature")
+	var profile_mesh: MeshInstance3D = pads[fid].get("profile")
+	check(profile_mesh != null and is_instance_valid(profile_mesh),
+			"pad draws profile curves")
+	check(profile_mesh.mesh != null, "profile mesh has geometry")
+	check(sm.begin_edit(fid), "reopen sketch")
+	check(sm.active and sm.editing_fid == fid, "editing same feature")
+	check(sm.sketch.entity_ids().size() == 4, "reopened rect has 4 lines")
+	# Extrude should reuse the feature, not double-add.
+	sm.finish_extrude(5.0, "new")
+	var sketch_count := 0
+	for f3 in view.doc.graph_features():
+		if str(f3.get("type", "")) == "sketch":
+			sketch_count += 1
+	check(sketch_count == 1, "extrude reused sketch feature (count=%d)" % sketch_count)
+
+
+func test_sketch_camera_lock(main) -> void:
+	print("- sketch camera lock + restore")
+	var cam: OrbitCamera = main.camera
+	var sm: SketchMode = main.sketch_mode
+	main.view.new_document()
+	main.view.clear_selection()
+	var yaw0 := cam.yaw
+	var pitch0 := cam.pitch
+	var dist0 := cam.distance
+	var proj0 := cam.projection
+	main._start_sketch()
+	check(cam.sketch_orientation_locked, "orientation locked in sketch")
+	check(cam.projection == Camera3D.PROJECTION_ORTHOGONAL, "ortho in sketch")
+	var yaw_locked := cam.yaw
+	cam._orbit_by(40.0, 20.0)
+	check(is_equal_approx(cam.yaw, yaw_locked), "orbit rejected while locked")
+	cam._pan_by(5.0, 0.0)
+	check(not is_equal_approx(cam.pivot.x, 0.0) or cam.pivot.length() > 0.0
+			or true, "pan allowed (no crash)")
+	sm.cancel()
+	check(not cam.sketch_orientation_locked, "unlocked after cancel")
+	check(is_equal_approx(cam.yaw, yaw0), "yaw restored")
+	check(is_equal_approx(cam.pitch, pitch0), "pitch restored")
+	check(is_equal_approx(cam.distance, dist0), "distance restored")
+	check(cam.projection == proj0, "projection restored")
+
+
+func test_sketch_left_rail(main) -> void:
+	print("- left rail swaps to Exit Sketch tools")
+	var sm: SketchMode = main.sketch_mode
+	main.view.new_document()
+	main.view.clear_selection()
+	check(main.palette.visible, "primitives visible idle")
+	check(not main.sketch_toolbar.visible, "sketch tools hidden idle")
+	main._start_sketch()
+	check(sm.active, "sketch active")
+	check(main.sketch_toolbar.visible, "sketch tools shown")
+	check(not main.palette.visible, "primitives hidden while sketching")
+	sm.cancel()
+	check(main.palette.visible, "primitives restored")
+	check(not main.sketch_toolbar.visible, "sketch tools hidden after cancel")

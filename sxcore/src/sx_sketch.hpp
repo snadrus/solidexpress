@@ -22,8 +22,14 @@ public:
     SxSketch();
     ~SxSketch() override = default;
 
+    // Adopt an existing kernel sketch (e.g. from the feature graph).
+    void adopt(std::shared_ptr<sx::Sketch> sketch);
+
     void set_plane(const godot::Vector3& origin, const godot::Vector3& x_dir,
                    const godot::Vector3& y_dir);
+
+    // Sketch plane frame in model space (empty dict if unset).
+    godot::Dictionary plane_info() const;
 
     // --- entities (sketch 2D coordinates) ---
     godot::String add_point(double x, double y);
@@ -41,6 +47,9 @@ public:
     godot::PackedStringArray offset_entities(const godot::PackedStringArray& ids,
                                              double distance);
     bool trim_entity(const godot::String& id, double px, double py);
+    bool extend_entity(const godot::String& id, double px, double py);
+    godot::PackedStringArray pattern_entities(const godot::PackedStringArray& ids,
+                                              double dx, double dy, int count);
 
     // Geometry snapshot for rendering:
     // {type: "line", start: Vector2, end: Vector2, construction: bool} etc.

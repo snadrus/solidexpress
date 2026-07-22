@@ -26,6 +26,10 @@ const GLYPHS := {
 	"polygon": "<path d='M12 4.5 18.5 9l-2.5 8h-8L5.5 9z'/>",
 	"trim": "<path d='M5 5l14 14'/><path d='M19 5 5 19' stroke-dasharray='2.4 2.4'/><circle cx='12' cy='12' r='2'/>",
 	"extend": "<path d='M4 12h9'/><path d='M13 12h6' stroke-dasharray='2.4 2.4'/><path d='M16.5 9.5 19 12l-2.5 2.5'/>",
+	"spline": "<path d='M4 16c3-10 5 2 8-4s5 8 8-2'/>",
+	"point": "<circle cx='12' cy='12' r='2.5' fill='%STROKE%'/><circle cx='12' cy='12' r='6'/>",
+	"convert": "<path d='M7 7h10v10'/><path d='M7 17 17 7'/><path d='M5 12h4M15 12h4'/>",
+	"pattern": "<rect x='4' y='4' width='6' height='6'/><rect x='14' y='4' width='6' height='6'/><rect x='4' y='14' width='6' height='6'/>",
 	# --- constraints ---
 	"horizontal": "<path d='M5 12h14'/><circle cx='5' cy='12' r='1.6' fill='%STROKE%'/><circle cx='19' cy='12' r='1.6' fill='%STROKE%'/>",
 	"vertical": "<path d='M12 5v14'/><circle cx='12' cy='5' r='1.6' fill='%STROKE%'/><circle cx='12' cy='19' r='1.6' fill='%STROKE%'/>",

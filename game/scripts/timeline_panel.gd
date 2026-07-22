@@ -30,6 +30,7 @@ const TYPE_ICONS := {
 	"circular_pattern": "circular_pattern", "shell": "shell",
 	"offset": "offset", "sweep": "arc", "loft": "area",
 	"helix_sweep": "revolve", "thread": "cylinder", "import_step": "box",
+	"import_stl": "box",
 }
 
 

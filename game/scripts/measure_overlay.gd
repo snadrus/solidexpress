@@ -20,10 +20,14 @@ const BOUND_OFFSET_MIN := 2.5
 const SCREEN_FRAC := 1.0 / 40.0
 
 var view: DocumentView
+## Optional sketch session for 2D measure mode (Δu/Δv along plane axes).
+var sketch_mode: SketchMode
 
 ## Pinned / following anchor from the first touched body.
 var anchor_point: Variant = null  # Vector3 when set
 var anchor_body := ""
+## Sketch-mode entity id for A (when measuring sketch entities).
+var anchor_entity := ""
 ## True while the cursor is still on the anchor body (X follows nearest edge).
 var following := false
 ## Last live B point while hovering a second body (null when not showing pair).
@@ -39,6 +43,7 @@ var labels: Array = []  # {p: Vector3, text: String, color: Color}
 func clear_pair() -> void:
 	anchor_point = null
 	anchor_body = ""
+	anchor_entity = ""
 	following = false
 	_last_b = null
 	_rebuild()
@@ -50,6 +55,7 @@ func clear_all() -> void:
 
 ## Hover update. Leaving A pins the X so B can compare against it.
 ## Pair dimensions exist only while hovering B; leave B → dims vanish, X stays.
+## Callers pass an already-snapped `hit_point` (corner / edge mid / surface mid).
 func update_hover(body: String, hit_point: Vector3) -> void:
 	if view == null:
 		return
@@ -62,25 +68,48 @@ func update_hover(body: String, hit_point: Vector3) -> void:
 		return
 
 	if anchor_body == "" or body == anchor_body:
-		# First touch / still on A / returned to A — X prefers nearest corner.
+		# First touch / still on A / returned to A — X follows measure snap.
 		anchor_body = body
-		anchor_point = view.closest_corner_point(body, hit_point)
+		anchor_entity = ""
+		anchor_point = hit_point
 		following = true
 		_rebuild()
 		return
 
-	# Touching a different body B: pin A, show live dims to nearest edge.
+	# Touching a different body B: pin A, show live dims to `hit_point`
+	# (caller chooses edge / perpendicular foot / etc.).
 	following = false
-	_rebuild(view.closest_edge_point(body, hit_point))
+	_rebuild(hit_point)
 
 
-## Force the X onto `body` at the nearest corner (place-mode re-anchor). Always
+## Sketch-mode hover: entity id "" clears live B / pins A. Hit is model-space.
+func update_sketch_hover(entity_id: String, hit_point: Vector3) -> void:
+	if sketch_mode == null or not sketch_mode.active:
+		return
+	if entity_id == "":
+		if anchor_point == null:
+			return
+		following = false
+		_rebuild()
+		return
+	if anchor_entity == "" or entity_id == anchor_entity:
+		anchor_entity = entity_id
+		anchor_body = "sketch:" + entity_id
+		anchor_point = hit_point
+		following = true
+		_rebuild()
+		return
+	following = false
+	_rebuild(hit_point)
+
+
+## Force the X onto `body` at the nearest measure snap to `hit_point`. Always
 ## becomes the new A — never treats the body as a B measure target.
 func relocate_anchor(body: String, hit_point: Vector3) -> void:
 	if view == null or body == "":
 		return
 	anchor_body = body
-	anchor_point = view.closest_corner_point(body, hit_point)
+	anchor_point = view.closest_measure_snap(body, hit_point)
 	following = true
 	_rebuild()
 
@@ -167,6 +196,10 @@ func _append_selection_bounds() -> void:
 
 func _append_pair_dims(a: Vector3, b: Vector3) -> void:
 	var d := b - a
+	# Sketch mode: project Δ onto plane axes as Δu / Δv (RGB = plane X/Y).
+	if sketch_mode != null and sketch_mode.active:
+		_append_sketch_pair_dims(a, b)
+		return
 	# Stagger label stations along each segment + a perpendicular nudge so the
 	# three cardinals and the diagonal don't share one midpoint in 3D.
 	_add_dim_seg(a, b, COLOR_DIAG)
@@ -205,6 +238,40 @@ func _append_pair_dims(a: Vector3, b: Vector3) -> void:
 			"text": "Δz %.2f" % absf(d.z),
 			"color": COLOR_Z,
 			"rank": 3,
+		})
+
+
+func _append_sketch_pair_dims(a: Vector3, b: Vector3) -> void:
+	var px: Vector3 = sketch_mode.plane_x
+	var py: Vector3 = sketch_mode.plane_y
+	var d := b - a
+	var du := d.dot(px)
+	var dv := d.dot(py)
+	_add_dim_seg(a, b, COLOR_DIAG)
+	labels.append({
+		"p": a.lerp(b, 0.55) + _perp_nudge(d, sketch_mode.plane_normal(), 1.6),
+		"text": "%.2f" % a.distance_to(b),
+		"color": COLOR_DIAG,
+		"rank": 0,
+	})
+	if absf(du) > 1e-4:
+		var bu: Vector3 = a + px * du
+		_add_dim_seg(a, bu, COLOR_X)
+		labels.append({
+			"p": a.lerp(bu, 0.4) + py * 1.2,
+			"text": "Δu %.2f" % absf(du),
+			"color": COLOR_X,
+			"rank": 1,
+		})
+	if absf(dv) > 1e-4:
+		var bv0: Vector3 = a + px * du
+		var bv1: Vector3 = b
+		_add_dim_seg(bv0, bv1, COLOR_Y)
+		labels.append({
+			"p": bv0.lerp(bv1, 0.5) + px * 1.2,
+			"text": "Δv %.2f" % absf(dv),
+			"color": COLOR_Y,
+			"rank": 2,
 		})
 
 

@@ -4,7 +4,7 @@ Goal: drop one solid that sits on the ground plane, keep it selected, and orbit 
 
 ## Steps
 
-1. The empty scene starts zoomed in on a **0.1 mm** ground grid (1 mm majors). In the left **Primitives** palette, click **Box** (do not drag). The status bar says *Click ground or a face to place box*. A translucent ghost appears with its **floor** on the active plane (ground by default). A bottom bar shows editable **X/Y/Z** (place point) and **W×H×D** size, plus **Snap to grid** (default on, 0.1 mm).
+1. The empty scene starts zoomed in on a **0.1 mm** ground grid (1 mm majors). In the left **Primitives** palette, click **Box** (do not drag). The status bar says *Click ground or a face to place box*. A translucent ghost appears with its **floor** on the active plane (ground by default). A bottom bar shows editable **X/Y/Z** (place point) and **W×H×D** size. The compact **Snap** dock at the top of the screen (default on, 0.1 mm) stays visible at all times.
 2. Move the pointer — the ghost tracks on the active plane (screen ray mapped to that plane’s XY; solid sits on your side of the plane). Optionally type a precise size in the bottom bar before placing. Click the plane (or a face). The solid appears under the ghost.
 3. The new box stays **selected** (highlighted with a blue AABB / corner brackets). The left rail swaps: **Primitives** hides and **Modify** tools take that space. Position and size stay editable in the bottom HUD.
 4. Orbit with any of:
@@ -28,7 +28,7 @@ Goal: drop one solid that sits on the ground plane, keep it selected, and orbit 
 ## What “good” looks like
 
 - The ghost tracks the pointer after you arm place (not stuck at screen center).
-- Snap-to-grid + position/size HUD are visible while place is armed.
+- The top **Snap** dock is always visible; position/size HUD shows while place is armed.
 - The box sits on the ground (`z = 0` floor, top at 5 for the default 5 mm cube).
 - After the place click, the box remains selected with clear corner brackets; left chrome shows Modify tools, not Primitives.
 - Empty-space drag and Alt-drag orbit even when side panels are open.

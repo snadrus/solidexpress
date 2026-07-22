@@ -257,3 +257,110 @@ TEST_CASE("featsweep: json round trip preserves sweep and loft", "[featsweep]") 
     REQUIRE(shape::volume(doc2.body(sw_body)->shape) == Approx(sw_vol).epsilon(1e-6));
     REQUIRE(shape::volume(doc2.body(loft_body)->shape) == Approx(loft_vol).epsilon(1e-6));
 }
+
+TEST_CASE("featsweep: Path joins two planar sketches and Sweep consumes path_feature",
+          "[featsweep][path]") {
+    Document doc;
+    FeatureGraph graph;
+
+    // Path sketch A on XY: line from origin toward +X
+    Feature ska;
+    ska.type = FeatureType::Sketch;
+    ska.sketch = std::make_shared<Sketch>("PathA");
+    ska.sketch->add_line(0, 0, 20, 0);
+    auto ska_fid = graph.add(std::move(ska));
+
+    // Path sketch B on XZ-ish plane (Y-up kernel: rotate to YZ for vertical)
+    SketchPlane yz;
+    yz.origin = {20, 0, 0};
+    yz.x_dir = {0, 1, 0};
+    yz.y_dir = {0, 0, 1};
+    Feature skb;
+    skb.type = FeatureType::Sketch;
+    skb.sketch = std::make_shared<Sketch>("PathB", yz);
+    skb.sketch->add_line(0, 0, 0, 30);
+    auto skb_fid = graph.add(std::move(skb));
+
+    Feature pathf;
+    pathf.type = FeatureType::Path;
+    pathf.params = {{"sketches", json::array({ska_fid.str(), skb_fid.str()})},
+                    {"mode", "join_endpoints"}};
+    auto path_fid = graph.add(std::move(pathf));
+
+    Feature profile;
+    profile.type = FeatureType::Sketch;
+    profile.sketch = circle_sketch(2.0);
+    auto profile_fid = graph.add(std::move(profile));
+
+    Feature sw;
+    sw.type = FeatureType::Sweep;
+    sw.params = {{"sketch", profile_fid.str()}, {"path_feature", path_fid.str()}};
+    auto sw_fid = graph.add(std::move(sw));
+
+    std::string err;
+    REQUIRE(graph.regenerate(doc, &err));
+    REQUIRE(graph.feature(path_fid)->params.contains("path"));
+    REQUIRE(graph.feature(path_fid)->params["path"].size() >= 2);
+    EntityId body = graph.feature(sw_fid)->output_body;
+    REQUIRE(doc.body(body) != nullptr);
+    REQUIRE(shape::volume(doc.body(body)->shape) > 0.0);
+
+    FeatureGraph restored = FeatureGraph::from_json(graph.to_json());
+    REQUIRE(restored.feature(path_fid)->type == FeatureType::Path);
+    Document doc2;
+    REQUIRE(restored.regenerate(doc2, &err));
+    REQUIRE(doc2.body(body) != nullptr);
+}
+
+TEST_CASE("featsweep: Path merge preserves sketch order for dense spline + 3D corner sweep",
+          "[featsweep][path]") {
+    Document doc;
+    FeatureGraph graph;
+
+    Feature ska;
+    ska.type = FeatureType::Sketch;
+    ska.sketch = std::make_shared<Sketch>("SplineRail");
+    // Densified fit-spline as line chain (matches UI spline tool).
+    for (int i = 0; i < 16; ++i) {
+        double t0 = static_cast<double>(i) / 16.0;
+        double t1 = static_cast<double>(i + 1) / 16.0;
+        double x0 = 20.0 * t0;
+        double y0 = 4.0 * std::sin(t0 * 3.14159);
+        double x1 = 20.0 * t1;
+        double y1 = 4.0 * std::sin(t1 * 3.14159);
+        ska.sketch->add_line(x0, y0, x1, y1);
+    }
+    auto ska_fid = graph.add(std::move(ska));
+
+    SketchPlane yz;
+    yz.origin = {20, 0, 0};
+    yz.x_dir = {0, 1, 0};
+    yz.y_dir = {0, 0, 1};
+    Feature skb;
+    skb.type = FeatureType::Sketch;
+    skb.sketch = std::make_shared<Sketch>("Leg", yz);
+    skb.sketch->add_line(0, 0, 0, 30);
+    auto skb_fid = graph.add(std::move(skb));
+
+    Feature pathf;
+    pathf.type = FeatureType::Path;
+    pathf.params = {{"sketches", json::array({ska_fid.str(), skb_fid.str()})},
+                    {"mode", "join_endpoints"}};
+    auto path_fid = graph.add(std::move(pathf));
+
+    Feature profile;
+    profile.type = FeatureType::Sketch;
+    profile.sketch = circle_sketch(2.0);
+    auto profile_fid = graph.add(std::move(profile));
+
+    Feature sw;
+    sw.type = FeatureType::Sweep;
+    sw.params = {{"sketch", profile_fid.str()}, {"path_feature", path_fid.str()}};
+    auto sw_fid = graph.add(std::move(sw));
+
+    std::string err;
+    REQUIRE(graph.regenerate(doc, &err));
+    EntityId body = graph.feature(sw_fid)->output_body;
+    REQUIRE(doc.body(body) != nullptr);
+    REQUIRE(shape::volume(doc.body(body)->shape) > 0.0);
+}

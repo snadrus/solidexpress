@@ -314,7 +314,7 @@ func _do_view(intent: Dictionary) -> void:
 			camera.set_view(deg_to_rad(180.0), deg_to_rad(0.0), true)
 			status.emit("Back view")
 		"iso":
-			camera.set_view(deg_to_rad(-35.0), deg_to_rad(30.0), true)
+			camera.set_view(deg_to_rad(-35.0), deg_to_rad(40.0), true)
 			status.emit("Isometric view")
 		"zoom_fit":
 			camera.frame_contents()

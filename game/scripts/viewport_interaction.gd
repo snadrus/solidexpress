@@ -9,6 +9,8 @@ signal status(text: String)
 signal place_changed(active: bool)
 ## Request sketch-on-selection (main owns SketchMode.begin).
 signal sketch_requested
+## Open Paste Special dialog (main owns the offset UI).
+signal paste_special_requested
 
 var view: DocumentView
 var camera: OrbitCamera
@@ -103,9 +105,11 @@ var place_size := Vector3(
 		DocumentView.DEFAULT_PRIMITIVE_MM)
 ## After a place commit, skip the matching LMB release select (avoids clear-on-miss).
 var _ignore_select_release := false
-## Snap-to-grid UI (shown while place is armed or during body move).
+## Snap-to-grid dock (always visible; parents into `top_chrome` beside File menu).
 var place_snap_enabled := true
 var place_snap_mm := 0.1
+## Host HBox from Main (File/Insert/View); snap bar docks as the next child.
+var top_chrome: Control
 var _place_snap_panel: PanelContainer
 var _place_snap_check: CheckBox
 var _place_snap_spin: SpinBox
@@ -120,6 +124,11 @@ var active_plane_normal := Vector3(0, 0, 1)
 var _active_plane_custom := false
 ## One-shot: next face click sets the active plane (View → Set Active Plane…).
 var _picking_active_plane := false
+## One-shot: next face / pad / ground click starts or reopens a sketch.
+var _picking_sketch_host := false
+
+signal sketch_host_picked(kind: String, face_id: String, body_id: String, pad_fid: String)
+signal sketch_pad_clicked(fid: String)
 
 ## Resize-drag state (AABB corner / face-center handles).
 var _resize_min := Vector3.ZERO
@@ -149,6 +158,12 @@ const AXIS_LEN_FRAC := 0.35
 const GRIP_SCREEN_FRAC := 0.10
 ## Screen-space magnet hold for grid / object snap during body move.
 const SNAP_HOLD_PX := 6.0
+## Tighter than approach: only when the cursor is this close (screen px AND
+## model mm) to a measure snap (corner / edge mid / surface mid) does the X
+## relocate onto the near body. Larger misses keep the X pinned and dim to the
+## perpendicular foot instead — so the perp cue appears earlier.
+const MEASURE_RELOCATE_PX := 14.0
+const MEASURE_RELOCATE_MM := 0.85
 const GHOST_NAME := "PlaceGhost"
 ## Kernel primitive sizes used for sit-on-plane ghost offsets (half-heights).
 const PLACE_HALF_Z := {
@@ -280,15 +295,27 @@ func _build_orient_popup() -> void:
 	_orient_popup.name = "OrientPopup"
 	add_child(_orient_popup)
 	var col := VBoxContainer.new()
+	col.name = "OrientCol"
 	col.add_theme_constant_override("separation", 4)
 	_orient_popup.add_child(col)
+	_rebuild_orient_popup()
+
+
+func _rebuild_orient_popup() -> void:
+	if _orient_popup == null:
+		return
+	var col: VBoxContainer = _orient_popup.get_node_or_null("OrientCol") as VBoxContainer
+	if col == null:
+		return
+	for c in col.get_children():
+		col.remove_child(c)
+		c.queue_free()
 	var title := Label.new()
 	title.text = "Orientation (Space)"
 	col.add_child(title)
 	for entry in [
 		["Front", 1], ["Right", 2], ["Top", 3], ["Isometric", 7],
-		["Fit selection", 20], ["Fit all", 21], ["Ortho/Persp", 5],
-		["Restore “User”", 30],
+		["Frame selection", 20], ["Frame all", 21], ["Ortho/Persp", 5],
 	]:
 		var b := Button.new()
 		b.text = str(entry[0])
@@ -297,6 +324,23 @@ func _build_orient_popup() -> void:
 			_on_orient_id(id)
 			_orient_popup.hide())
 		col.add_child(b)
+	if camera != null:
+		var named := camera.named_view_list()
+		if not named.is_empty():
+			col.add_child(HSeparator.new())
+			var saved_lbl := Label.new()
+			saved_lbl.text = "Saved views"
+			saved_lbl.add_theme_font_size_override("font_size", 11)
+			col.add_child(saved_lbl)
+			for view_name in named:
+				var nb := Button.new()
+				nb.text = "Restore “%s”" % view_name
+				var n := str(view_name)
+				nb.pressed.connect(func() -> void:
+					if camera.restore_named_view(n):
+						status.emit("Restored view “%s”" % n)
+					_orient_popup.hide())
+				col.add_child(nb)
 
 
 func _build_dim_edit_popup() -> void:
@@ -347,36 +391,37 @@ func _apply_dim_edit(text: String) -> void:
 
 
 func _build_place_snap_ui() -> void:
+	# Compact bar: docks immediately right of File/Insert/View in Main's TopChrome.
 	_place_snap_panel = PanelContainer.new()
 	_place_snap_panel.name = "PlaceSnapBar"
-	_place_snap_panel.visible = false
-	_place_snap_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_place_snap_panel.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	_place_snap_panel.offset_left = -160
-	_place_snap_panel.offset_right = 160
-	_place_snap_panel.offset_top = -148
-	_place_snap_panel.offset_bottom = -92
-	add_child(_place_snap_panel)
+	_place_snap_panel.visible = true
+	_place_snap_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	if top_chrome != null:
+		top_chrome.add_child(_place_snap_panel)
+	else:
+		_place_snap_panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
+		_place_snap_panel.position = Vector2(168, 8)
+		add_child(_place_snap_panel)
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 10)
+	row.add_theme_constant_override("separation", 6)
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	_place_snap_panel.add_child(row)
 	_place_snap_check = CheckBox.new()
-	_place_snap_check.text = "Snap to grid"
+	_place_snap_check.text = "Snap"
+	_place_snap_check.tooltip_text = "Snap place / move to grid"
+	_place_snap_check.add_theme_font_size_override("font_size", 11)
 	_place_snap_check.button_pressed = place_snap_enabled
 	_place_snap_check.toggled.connect(func(on: bool) -> void:
 		place_snap_enabled = on)
 	row.add_child(_place_snap_check)
-	var lbl := Label.new()
-	lbl.text = "Res"
-	lbl.add_theme_font_size_override("font_size", 11)
-	row.add_child(lbl)
 	_place_snap_spin = SpinBox.new()
 	_place_snap_spin.min_value = 0.01
 	_place_snap_spin.max_value = 100.0
 	_place_snap_spin.step = 0.01
 	_place_snap_spin.value = place_snap_mm
 	_place_snap_spin.suffix = "mm"
-	_place_snap_spin.custom_minimum_size = Vector2(100, 0)
+	_place_snap_spin.tooltip_text = "Grid snap resolution"
+	_place_snap_spin.custom_minimum_size = Vector2(72, 0)
 	_place_snap_spin.value_changed.connect(func(v: float) -> void:
 		place_snap_mm = maxf(v, 0.01))
 	row.add_child(_place_snap_spin)
@@ -442,21 +487,16 @@ func _place_half_height(kind: String) -> float:
 
 
 func _show_snap_bar() -> void:
+	# Dock is always visible; keep checkbox / spin in sync with state.
 	if _place_snap_panel == null:
 		return
-	_place_snap_panel.visible = true
-	_place_snap_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	_place_snap_check.button_pressed = place_snap_enabled
 	_place_snap_spin.value = place_snap_mm
 
 
 func _hide_snap_bar_unless_placing() -> void:
-	if _place_kind != "":
-		return
-	if _place_snap_panel == null:
-		return
-	_place_snap_panel.visible = false
-	_place_snap_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# Snap dock stays up; callers still invoke this after move release.
+	pass
 
 
 ## Normalize a kernel bbox ({min,max}) to include center/size.
@@ -473,8 +513,9 @@ func _bb_with_center(bb: Dictionary) -> Dictionary:
 	}
 
 
-## Center + 6 AABB face midpoints for snap matching.
-func _aabb_snap_anchors(bb: Dictionary) -> Array[Dictionary]:
+## Center + 6 AABB face midpoints for snap matching. When `body_id` is set,
+## also append real B-rep face (surface) midpoints as kind "surface".
+func _aabb_snap_anchors(bb: Dictionary, body_id: String = "") -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	var full := _bb_with_center(bb)
 	if full.is_empty():
@@ -489,14 +530,22 @@ func _aabb_snap_anchors(bb: Dictionary) -> Array[Dictionary]:
 	out.append({"point": Vector3(c.x, mn.y, c.z), "kind": "face", "axis": 1, "sign": -1})
 	out.append({"point": Vector3(c.x, c.y, mx.z), "kind": "face", "axis": 2, "sign": 1})
 	out.append({"point": Vector3(c.x, c.y, mn.z), "kind": "face", "axis": 2, "sign": -1})
+	if body_id != "" and view != null and view.doc != null:
+		for face_id in view.doc.get_face_ids(body_id):
+			var mid: Vector3 = view.doc.face_midpoint(face_id)
+			out.append({"point": mid, "kind": "surface", "axis": -1, "sign": 0})
 	return out
 
 
 func _snap_kind_priority(src_kind: String, dst_kind: String, src_axis: int, dst_axis: int) -> int:
 	if src_kind == "center" and dst_kind == "center":
 		return 0
+	if src_kind == "surface" and dst_kind == "surface":
+		return 1
 	if src_kind == "face" and dst_kind == "face" and src_axis == dst_axis and src_axis >= 0:
 		return 1
+	if src_kind == "surface" or dst_kind == "surface":
+		return 2
 	if src_kind == "center" or dst_kind == "center":
 		return 2
 	return 3
@@ -593,6 +642,16 @@ func _move_snap_target_body(live_center: Vector3) -> String:
 	return best_id
 
 
+## Primary selected body id while moving (for real face-mid snap anchors).
+func _move_body_id_for_snap() -> String:
+	if view == null:
+		return ""
+	if view.selected_body != "":
+		return view.selected_body
+	var ids := _selected_body_ids()
+	return str(ids[0]) if not ids.is_empty() else ""
+
+
 func _update_move_snap_hover(screen_pos: Vector2) -> void:
 	_move_snap_hover_body = ""
 	var ray := _model_ray(screen_pos)
@@ -618,8 +677,8 @@ func _resolve_move_snap(raw_delta: Vector3) -> Dictionary:
 	if target_id != "":
 		var other_bb := _bb_with_center(view.doc.measure_bbox(target_id))
 		if not other_bb.is_empty():
-			var srcs := _aabb_snap_anchors(_move_start_bb)
-			var dsts := _aabb_snap_anchors(other_bb)
+			var srcs := _aabb_snap_anchors(_move_start_bb, _move_body_id_for_snap())
+			var dsts := _aabb_snap_anchors(other_bb, target_id)
 			for src in srcs:
 				for dst in dsts:
 					var cand: Vector3 = dst["point"] - src["point"]
@@ -695,7 +754,8 @@ func _resolve_move_snap(raw_delta: Vector3) -> Dictionary:
 	return {}
 
 
-## Origin triad + ground grid as a sibling of DocumentView under ModelSpace.
+## Ground grid as a sibling of DocumentView under ModelSpace.
+## (RGB origin sticks live on ViewHud / OriginTriadHud.)
 func _mount_world_gizmos() -> void:
 	if model_space == null:
 		return
@@ -716,6 +776,7 @@ func _mount_measure_overlay() -> void:
 		measure_overlay.name = "MeasureOverlay"
 		add_child(measure_overlay)
 	measure_overlay.view = view
+	measure_overlay.sketch_mode = sketch_mode
 	if not measure_overlay.changed.is_connected(_on_measure_overlay_changed):
 		measure_overlay.changed.connect(_on_measure_overlay_changed)
 	measure_overlay.refresh_bounds()
@@ -777,6 +838,7 @@ func reset_active_plane() -> void:
 func arm_pick_active_plane() -> void:
 	if _place_kind != "":
 		_disarm_place(false)
+	_picking_sketch_host = false
 	_picking_active_plane = true
 	grab_focus()
 	status.emit("Click a flat face to set the active plane (Esc to cancel)")
@@ -787,6 +849,50 @@ func cancel_pick_active_plane() -> void:
 		return
 	_picking_active_plane = false
 	status.emit("Set active plane cancelled")
+
+
+## Arm one-shot pick for sketch host (face, yellow pad, or ground).
+func arm_pick_sketch_host() -> void:
+	if sketch_mode != null and sketch_mode.active:
+		return
+	if _place_kind != "":
+		_disarm_place(false)
+	_picking_active_plane = false
+	_picking_sketch_host = true
+	grab_focus()
+	status.emit("Select a face or existing sketch (Esc to cancel)")
+
+
+func cancel_pick_sketch_host() -> void:
+	if not _picking_sketch_host:
+		return
+	_picking_sketch_host = false
+	status.emit("Sketch pick cancelled")
+
+
+func _commit_pick_sketch_host(screen_pos: Vector2) -> void:
+	var ray := _model_ray(screen_pos)
+	# Prefer yellow sketch pads.
+	if view.sketch_pads != null:
+		var pad_fid: String = view.sketch_pads.pick_pad(ray[0], ray[1])
+		if pad_fid != "":
+			_picking_sketch_host = false
+			sketch_host_picked.emit("pad", "", "", pad_fid)
+			return
+	var hit: Dictionary = view.pick_info(ray[0], ray[1])
+	if not hit.is_empty() and str(hit.get("face", "")) != "":
+		var face_id := str(hit["face"])
+		var body_id := str(hit.get("body", ""))
+		view.select_entity(body_id, face_id)
+		_picking_sketch_host = false
+		sketch_host_picked.emit("face", face_id, body_id, "")
+		return
+	# Empty ground → XY sketch.
+	if hit.is_empty() and ground_point(screen_pos) != null:
+		_picking_sketch_host = false
+		sketch_host_picked.emit("ground", "", "", "")
+		return
+	status.emit("Click a face, yellow sketch pad, or empty ground")
 
 
 func _commit_pick_active_plane(screen_pos: Vector2) -> void:
@@ -814,7 +920,8 @@ func set_active_plane_from_selection() -> bool:
 
 
 func _set_active_plane_from_face(face_id: String, body_id: String) -> bool:
-	var plane: Dictionary = SketchMode.derive_face_plane(view.doc, face_id, body_id)
+	var plane: Dictionary = SketchMode.derive_face_plane(
+		view.doc, face_id, body_id, view.face_normal(body_id, face_id))
 	if not bool(plane.get("ok", false)):
 		status.emit(str(plane.get("message", "Face is not a flat axis-aligned plane")))
 		return false
@@ -1088,8 +1195,18 @@ func _closest_corner_of(corners: Array[Vector3], from: Vector3) -> Variant:
 	return best
 
 
-## Place / move / selected-body transport measure: touch another solid to plant
-## the X (corner); otherwise dim from X to the subject's nearest corner.
+## True when `hit` is close enough to `snap` (in screen px and model mm) that
+## the measure X should relocate rather than dim a perpendicular foot.
+func _near_measure_snap(hit: Vector3, snap: Vector3) -> bool:
+	if hit.distance_to(snap) > MEASURE_RELOCATE_MM:
+		return false
+	return _screen_delta_px(hit, snap) <= MEASURE_RELOCATE_PX
+
+
+## Place / move / selected-body transport measure: approach another solid to
+## dim the perpendicular foot from X (appears first); only when the cursor is
+## within MEASURE_RELOCATE_PX of a snap (corner / mid / surface mid) does the
+## X relocate onto that body.
 func _update_transport_measure(screen_pos: Vector2 = Vector2.INF) -> void:
 	if measure_overlay == null or view == null:
 		return
@@ -1100,14 +1217,25 @@ func _update_transport_measure(screen_pos: Vector2 = Vector2.INF) -> void:
 	var hit := _pick_measure_target(pos, skip)
 	if not hit.is_empty():
 		var body := str(hit.get("body", ""))
-		measure_overlay.relocate_anchor(body, hit.get("point", Vector3.ZERO))
+		var hit_pt: Vector3 = hit.get("point", Vector3.ZERO)
+		var snap := view.closest_measure_snap(body, hit_pt)
+		var near_snap := _near_measure_snap(hit_pt, snap)
+		if near_snap or not measure_overlay.has_anchor():
+			measure_overlay.relocate_anchor(body, snap)
+			view.set_hover(body, str(hit.get("face", "")), str(hit.get("edge", "")))
+			if _place_kind != "":
+				status.emit("Measure X on target — move ghost to compare · click places")
+			elif _drag_mode == DragMode.MOVE_BODY:
+				status.emit("Measure X on target — drag to compare · release commits move")
+			else:
+				status.emit("Measure X on target — drag body to compare")
+			return
+		# X stays; dim to the perpendicular foot on the near body (earlier cue).
 		view.set_hover(body, str(hit.get("face", "")), str(hit.get("edge", "")))
-		if _place_kind != "":
-			status.emit("Measure X on target — move ghost to compare · click places")
-		elif _drag_mode == DragMode.MOVE_BODY:
-			status.emit("Measure X on target — drag to compare · release commits move")
-		else:
-			status.emit("Measure X on target — drag body to compare")
+		var foot := view.closest_surface_point(
+				body, measure_overlay.anchor_point as Vector3)
+		measure_overlay.set_live_target(foot)
+		status.emit("Measure — perpendicular to near body · approach snap to move X")
 		return
 	view.clear_hover()
 	if not measure_overlay.has_anchor():
@@ -1116,11 +1244,30 @@ func _update_transport_measure(screen_pos: Vector2 = Vector2.INF) -> void:
 	if corners.is_empty():
 		measure_overlay.clear_live_target()
 		return
+	# Live place/move ghost: dim to nearest subject corner (kernel shape lags).
+	# Idle selection: prefer the true perpendicular foot onto the subject.
+	var live_pose := _place_kind != "" or _drag_mode == DragMode.MOVE_BODY
+	if not live_pose:
+		var subj := _transport_subject_body()
+		if subj != "":
+			var foot2 := view.closest_surface_point(
+					subj, measure_overlay.anchor_point as Vector3)
+			measure_overlay.set_live_target(foot2)
+			return
 	var corner = _closest_corner_of(corners, measure_overlay.anchor_point as Vector3)
 	if corner == null:
 		measure_overlay.clear_live_target()
 		return
 	measure_overlay.set_live_target(corner as Vector3)
+
+
+## Body id for the place ghost / move / selection subject, or "".
+func _transport_subject_body() -> String:
+	if _place_kind != "":
+		return ""
+	if view == null:
+		return ""
+	return view.selected_body
 
 
 ## @deprecated name kept for call sites — forwards to transport measure.
@@ -1148,9 +1295,6 @@ func _free_ghost() -> void:
 func _disarm_place(emit_cancel: bool) -> void:
 	_free_ghost()
 	_place_kind = ""
-	if _place_snap_panel != null:
-		_place_snap_panel.visible = false
-		_place_snap_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if measure_overlay != null:
 		measure_overlay.clear_live_target()
 	if emit_cancel:
@@ -1164,9 +1308,6 @@ func _commit_place(screen_pos: Vector2) -> void:
 	var target := _place_target(screen_pos)
 	_free_ghost()
 	_place_kind = ""
-	if _place_snap_panel != null:
-		_place_snap_panel.visible = false
-		_place_snap_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if measure_overlay != null:
 		measure_overlay.clear_live_target()
 	_ignore_select_release = true
@@ -1383,7 +1524,7 @@ func _update_hover(screen_pos: Vector2) -> void:
 	_last_hover_key = key
 	mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	if measure_overlay != null and measure_overlay.has_anchor() and not measure_overlay.following:
-		status.emit("Measure — diagonal + Δx/Δy/Δz to nearest edge · Esc clears")
+		status.emit("Measure — Δ to perpendicular on near body · approach snap to move X · Esc clears")
 	elif edge != "":
 		status.emit("Edge — click to select · Ctrl/Shift+click adds")
 	elif face != "":
@@ -1393,9 +1534,25 @@ func _update_hover(screen_pos: Vector2) -> void:
 
 
 func _update_measure_hover(body: String, hit_point: Vector3) -> void:
-	if measure_overlay == null:
+	if measure_overlay == null or view == null:
 		return
-	measure_overlay.update_hover(body, hit_point)
+	if body == "":
+		measure_overlay.update_hover("", Vector3.ZERO)
+		return
+	# First body / still on A: X follows corner / edge mid / surface mid.
+	if measure_overlay.anchor_body == "" or body == measure_overlay.anchor_body \
+			or not measure_overlay.has_anchor():
+		measure_overlay.update_hover(body, view.closest_measure_snap(body, hit_point))
+		return
+	# Approaching B: perpendicular foot from X appears first; only when the
+	# cursor is within relocate tolerance of a snap does the X move onto B.
+	var snap := view.closest_measure_snap(body, hit_point)
+	if _near_measure_snap(hit_point, snap):
+		measure_overlay.relocate_anchor(body, snap)
+		return
+	var foot := view.closest_surface_point(
+			body, measure_overlay.anchor_point as Vector3)
+	measure_overlay.update_hover(body, foot)
 
 
 func _measure_hover_miss() -> void:
@@ -1409,6 +1566,39 @@ func _measure_hover_miss() -> void:
 	measure_overlay.update_hover("", Vector3.ZERO)
 
 
+## Collect pierce points where body edges meet the active sketch plane.
+func refresh_sketch_intersections() -> void:
+	if sketch_mode == null or not sketch_mode.active or view == null:
+		return
+	var pts: Array[Vector2] = []
+	var origin := sketch_mode.plane_origin
+	var n := sketch_mode.plane_normal()
+	var px := sketch_mode.plane_x
+	var py := sketch_mode.plane_y
+	const TOL := 0.15
+	for body_id in view.doc.body_ids():
+		var edges: Dictionary = view.doc.get_edge_lines(body_id)
+		for edge_id in edges:
+			var poly: PackedVector3Array = edges[edge_id]
+			for i in range(poly.size() - 1):
+				var a: Vector3 = poly[i]
+				var b: Vector3 = poly[i + 1]
+				var da := (a - origin).dot(n)
+				var db := (b - origin).dot(n)
+				if absf(da) <= TOL:
+					var la := a - origin
+					pts.append(Vector2(la.dot(px), la.dot(py)))
+				if absf(db) <= TOL:
+					var lb := b - origin
+					pts.append(Vector2(lb.dot(px), lb.dot(py)))
+				if da * db < 0.0 and absf(da - db) > 1e-9:
+					var t := da / (da - db)
+					var hit: Vector3 = a.lerp(b, t)
+					var lh := hit - origin
+					pts.append(Vector2(lh.dot(px), lh.dot(py)))
+	sketch_mode.intersection_points = pts
+
+
 func _sketch_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
@@ -1416,10 +1606,10 @@ func _sketch_input(event: InputEvent) -> void:
 			var ray := _model_ray(mb.position)
 			var p2 = sketch_mode.ray_to_sketch(ray[0], ray[1])
 			if p2 != null:
-				# With the SELECT tool, grabbing geometry starts a drag-to-edit;
-				# constraint glyphs and dimension labels win over grabbing, and
-				# a plain click (no hit) falls through to selection.
-				if sketch_mode.tool == SketchMode.Tool.SELECT \
+				if sketch_mode.tool == SketchMode.Tool.TRIM:
+					sketch_mode.begin_trim_drag(p2)
+					_sketch_dragging = true
+				elif sketch_mode.tool == SketchMode.Tool.SELECT \
 						and sketch_mode.constraint_hit(p2) == "" \
 						and sketch_mode.dimension_hit(p2) < 0 \
 						and not sketch_mode.drag_hit(p2).is_empty():
@@ -1431,8 +1621,9 @@ func _sketch_input(event: InputEvent) -> void:
 		elif not mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT and _sketch_dragging:
 			var ray_up := _model_ray(mb.position)
 			var p2_up = sketch_mode.ray_to_sketch(ray_up[0], ray_up[1])
-			# A press-release without movement is a click-select, not a drag.
-			if not _sketch_drag_moved and p2_up != null:
+			if sketch_mode.tool == SketchMode.Tool.TRIM:
+				sketch_mode.end_trim_drag()
+			elif not _sketch_drag_moved and p2_up != null:
 				sketch_mode.end_drag()
 				sketch_mode.click(p2_up)
 			else:
@@ -1449,22 +1640,89 @@ func _sketch_input(event: InputEvent) -> void:
 		if p2 != null:
 			if _sketch_dragging:
 				_sketch_drag_moved = true
-				sketch_mode.update_drag(p2)
+				if sketch_mode.tool == SketchMode.Tool.TRIM:
+					sketch_mode.update_trim_drag(p2)
+				else:
+					sketch_mode.update_drag(p2)
 			else:
 				sketch_mode.hover(p2)
+				_update_sketch_measure(p2)
+		else:
+			if measure_overlay != null:
+				measure_overlay.update_sketch_hover("", Vector3.ZERO)
+	elif event is InputEventKey and event.pressed and event.ctrl_pressed:
+		var ke := event as InputEventKey
+		match ke.keycode:
+			KEY_A:
+				var n := sketch_mode.select_all_entities()
+				status.emit("Selected %d sketch entities" % n if n > 0 else "No sketch entities")
+				accept_event()
+			KEY_C:
+				var nc := sketch_mode.copy_selected_entities()
+				status.emit("Copied %d sketch entities" % nc if nc > 0 else "Nothing to copy")
+				accept_event()
+			KEY_X:
+				var nx := sketch_mode.cut_selected_entities()
+				status.emit("Cut %d sketch entities" % nx if nx > 0 else "Nothing to cut")
+				accept_event()
+			KEY_V:
+				var made: Array = sketch_mode.paste_entities()
+				status.emit("Pasted %d sketch entities" % made.size() if not made.is_empty() else "Clipboard empty")
+				accept_event()
 	elif event is InputEventKey and event.pressed and not event.ctrl_pressed:
 		match (event as InputEventKey).keycode:
 			KEY_S: sketch_mode.set_tool(SketchMode.Tool.SELECT)
 			KEY_L: sketch_mode.set_tool(SketchMode.Tool.LINE)
 			KEY_R: sketch_mode.set_tool(SketchMode.Tool.RECT)
 			KEY_C: sketch_mode.set_tool(SketchMode.Tool.CIRCLE)
+			KEY_A: sketch_mode.set_tool(SketchMode.Tool.ARC)
 			KEY_T: sketch_mode.set_tool(SketchMode.Tool.TRIM)
+			KEY_D: sketch_mode.set_tool(SketchMode.Tool.SMART_DIM)
+			KEY_E: sketch_mode.set_tool(SketchMode.Tool.EXTEND)
 			KEY_X: sketch_mode.toggle_construction_selected()
 			KEY_DELETE, KEY_BACKSPACE:
 				if not sketch_mode.delete_selected_constraint():
-					status.emit("Click a constraint badge first, then Del removes it")
-			KEY_ESCAPE: sketch_mode.cancel()
+					if sketch_mode.delete_selected_entities() == 0:
+						status.emit("Nothing to delete")
+			KEY_ESCAPE:
+				if measure_overlay != null and measure_overlay.has_anchor():
+					measure_overlay.clear_pair()
+					status.emit("Measure cleared")
+				else:
+					sketch_mode.cancel()
 		accept_event()
+
+
+func _update_sketch_measure(pos2: Vector2) -> void:
+	if measure_overlay == null or sketch_mode == null:
+		return
+	var eid: String = sketch_mode._nearest_entity_at(pos2)
+	if eid == "":
+		# Also try pierce points as measure anchors.
+		var best_d := SketchMode.PICK_TOLERANCE
+		var best_pt: Variant = null
+		for ip in sketch_mode.intersection_points:
+			var d: float = pos2.distance_to(ip)
+			if d < best_d:
+				best_d = d
+				best_pt = ip
+		if best_pt != null:
+			measure_overlay.update_sketch_hover("pierce", sketch_mode.to_model(best_pt))
+		else:
+			measure_overlay.update_sketch_hover("", Vector3.ZERO)
+		return
+	var snap2 := sketch_mode.snap_point(pos2)
+	# Prefer nearest endpoint of the hovered entity for the ✕ mark.
+	var mark2 := snap2
+	var eps: Array = sketch_mode._snap_endpoints(eid)
+	if not eps.is_empty():
+		var bd := INF
+		for ep in eps:
+			var d2: float = pos2.distance_to(ep)
+			if d2 < bd:
+				bd = d2
+				mark2 = ep
+	measure_overlay.update_sketch_hover(eid, sketch_mode.to_model(mark2))
 
 
 func _on_press(pos: Vector2) -> void:
@@ -1628,7 +1886,8 @@ func _on_drag(pos: Vector2) -> void:
 	if _pending_instance_move and _drag_mode == DragMode.NONE:
 		_pending_instance_move = false
 		_drag_mode = DragMode.MOVE_INSTANCE
-	# Empty-space drag: orbit. Ctrl+empty-drag: rubber-band box select.
+	# Empty-space drag: orbit (or pan when sketch orientation is locked).
+	# Ctrl+empty-drag: rubber-band box select.
 	if _drag_mode == DragMode.NONE and _press_empty and _place_kind == "":
 		_drag_mode = DragMode.BOX_SELECT if _box_drag else DragMode.ORBIT_VIEW
 		# Orbit from the press origin so the first post-slop frame applies real delta.
@@ -1638,11 +1897,15 @@ func _on_drag(pos: Vector2) -> void:
 			var rel := pos - _last_drag_pos
 			_last_drag_pos = pos
 			if camera != null and rel.length_squared() > 0.0:
-				if Input.is_key_pressed(KEY_SHIFT):
+				if Input.is_key_pressed(KEY_SHIFT) or camera.sketch_orientation_locked:
 					camera._pan_by(rel.x, rel.y)
+					if camera.sketch_orientation_locked:
+						status.emit("Pan (sketch view locked) — zoom with wheel")
+					else:
+						status.emit("Pan — release Shift to orbit")
 				else:
 					camera._orbit_by(rel.x, rel.y)
-			status.emit("Orbit (empty drag) — two-finger drag or Alt-drag also orbit")
+					status.emit("Orbit (empty drag) — two-finger drag or Alt-drag also orbit")
 		DragMode.BOX_SELECT:
 			_box_rect = Rect2(_press_pos, pos - _press_pos).abs()
 			queue_redraw()
@@ -2016,6 +2279,17 @@ func _on_release(pos: Vector2) -> void:
 	_pending_body_move = false
 	_drag_mode = DragMode.NONE
 	if _press_empty and not _additive_click:
+		# Yellow sketch pad click → reopen that sketch.
+		var pad_ray := _model_ray(_press_pos)
+		if view.sketch_pads != null and (sketch_mode == null or not sketch_mode.active):
+			var pad_fid: String = view.sketch_pads.pick_pad(pad_ray[0], pad_ray[1])
+			if pad_fid != "":
+				sketch_pad_clicked.emit(pad_fid)
+				_box_drag = false
+				_additive_click = false
+				_press_empty = false
+				_press_travel = 0.0
+				return
 		view.clear_selection()
 		status.emit("")
 	else:
@@ -2073,8 +2347,24 @@ func _gui_key(event: InputEventKey) -> bool:
 				else:
 					status.emit("Nothing to copy")
 				return true
+		KEY_X:
+			if event.ctrl_pressed:
+				var n := view.cut_selection()
+				if n > 0:
+					status.emit("Cut %d" % n if n > 1 else "Cut")
+				else:
+					status.emit("Nothing to cut")
+				_refresh_transform_hud()
+				_refresh_selection_strip()
+				return true
+		KEY_A:
+			if event.ctrl_pressed:
+				return _select_all()
 		KEY_V:
 			if event.ctrl_pressed:
+				if event.shift_pressed:
+					paste_special_requested.emit()
+					return true
 				var made: Array = view.paste_clipboard()
 				if made.is_empty():
 					status.emit("Clipboard empty")
@@ -2147,6 +2437,38 @@ func _selected_body_ids() -> Array:
 	return ids
 
 
+## Ctrl+A: select all faces on the primary body (one big surface selection),
+## or every body when nothing is selected. Import meshes stay one body selection
+## (scale stays available) — that *is* "select all" for an STL drop.
+func _select_all() -> bool:
+	if sketch_mode != null and sketch_mode.active:
+		var n := sketch_mode.select_all_entities()
+		status.emit("Selected %d sketch entities" % n if n > 0 else "No sketch entities")
+		return true
+	if view.selected_body != "":
+		if view.is_import_body(view.selected_body):
+			view.select_entity(view.selected_body, "")
+			status.emit("Selected imported body")
+			_refresh_transform_hud()
+			_refresh_selection_strip()
+			return true
+		var n := view.select_all_faces(view.selected_body)
+		if n > 0:
+			status.emit("Selected all %d faces" % n)
+			_refresh_transform_hud()
+			_refresh_selection_strip()
+			return true
+		view.select_entity(view.selected_body, "")
+		status.emit("Selected body")
+		_refresh_transform_hud()
+		return true
+	var n2 := view.select_all_bodies()
+	status.emit("Selected %d bodies" % n2 if n2 > 0 else "Nothing to select")
+	_refresh_transform_hud()
+	_refresh_selection_strip()
+	return true
+
+
 func _on_view_selection_changed(_body: String, _face: String) -> void:
 	_refresh_transform_hud()
 	_refresh_selection_strip()
@@ -2194,14 +2516,20 @@ func _refresh_transform_hud() -> void:
 		transform_hud.show_dims(target["point"], place_size, true)
 		return
 	# Idle selection: clear the bottom band. Move/stretch blanks stay up on their own.
-	transform_hud.hide_dims()
+	# Import bodies keep W×H×D visible so scale is one typed edit away after drop.
 	if view.selected_body == "" or view.selection_size() != 1:
+		transform_hud.hide_dims()
 		transform_hud.hide_precision()
 		transform_hud.hide_move_delta()
 		return
 	var bb := view.selection_bbox()
 	if bb.is_empty():
+		transform_hud.hide_dims()
 		return
+	if view.is_import_body(view.selected_body):
+		transform_hud.show_dims(bb["center"], bb["size"], true)
+		return
+	transform_hud.hide_dims()
 	transform_hud.set_values(bb["center"], bb["size"], view.is_primitive_body(view.selected_body))
 
 
@@ -2236,7 +2564,12 @@ func _on_hud_size(size: Vector3) -> void:
 			_place_ghost.transform = _ghost_world_xform(_place_kind, floor_pt)
 			_update_place_measure(_screen_center())
 		return
-	if view.selected_body == "" or not view.is_primitive_body(view.selected_body):
+	if view.selected_body == "":
+		return
+	if view.is_import_body(view.selected_body):
+		_apply_import_hud_size(size)
+		return
+	if not view.is_primitive_body(view.selected_body):
 		return
 	var bb := view.selection_bbox()
 	if bb.is_empty():
@@ -2246,6 +2579,26 @@ func _on_hud_size(size: Vector3) -> void:
 	var half := size * 0.5
 	if view.resize_primitive_aabb(view.selected_body, center - half, center + half):
 		status.emit("Size → %.1f × %.1f × %.1f" % [size.x, size.y, size.z])
+	_refresh_transform_hud()
+
+
+## Map a HUD size edit onto uniform import scale (max-extent ratio).
+func _apply_import_hud_size(size: Vector3) -> void:
+	var bb := view.selection_bbox()
+	if bb.is_empty():
+		return
+	var old: Vector3 = bb["size"]
+	var old_ext := maxf(old.x, maxf(old.y, old.z))
+	var new_ext := maxf(size.x, maxf(size.y, size.z))
+	if old_ext < 1e-6 or new_ext < 1e-6:
+		return
+	var params := view.feature_params(view.selected_body)
+	var cur := float(params.get("scale", 1.0))
+	var next := cur * (new_ext / old_ext)
+	if absf(next - cur) < 1e-9:
+		return
+	if view.set_import_scale(view.selected_body, next):
+		status.emit("Scale → %.4g" % next)
 	_refresh_transform_hud()
 
 
@@ -2612,6 +2965,31 @@ func _input(event: InputEvent) -> void:
 				get_viewport().set_input_as_handled()
 				return
 		return
+	# One-shot: pick face / yellow pad / ground to start or reopen a sketch.
+	if _picking_sketch_host:
+		if event is InputEventMouseButton or event is InputEventMouseMotion:
+			var mouse_pos2 := (event as InputEventMouse).position
+			if _over_chrome(mouse_pos2):
+				return
+		if event is InputEventMouseButton:
+			var mb2 := event as InputEventMouseButton
+			if not mb2.pressed:
+				get_viewport().set_input_as_handled()
+				return
+			if mb2.button_index == MOUSE_BUTTON_LEFT and not mb2.alt_pressed:
+				_commit_pick_sketch_host(mb2.position)
+				get_viewport().set_input_as_handled()
+				return
+			if mb2.button_index == MOUSE_BUTTON_RIGHT:
+				cancel_pick_sketch_host()
+				get_viewport().set_input_as_handled()
+				return
+		if event is InputEventKey and event.pressed and not event.echo:
+			if (event as InputEventKey).keycode == KEY_ESCAPE:
+				cancel_pick_sketch_host()
+				get_viewport().set_input_as_handled()
+				return
+		return
 	if _place_kind != "":
 		# Don't steal clicks aimed at the snap / transform chrome.
 		if event is InputEventMouseButton or event is InputEventMouseMotion:
@@ -2778,12 +3156,22 @@ func _open_context_menu(screen_pos: Vector2) -> void:
 			_context_menu.add_item("Push/Pull (drag orange arrow)", 7)
 		_context_menu.add_item("Hide", 3)
 		_context_menu.add_item("Isolate", 4)
+		_context_menu.add_separator()
+		_context_menu.add_item("Cut", 20)
+		_context_menu.add_item("Copy", 21)
+		_context_menu.add_item("Paste", 22)
+		_context_menu.add_item("Paste Special…", 23)
+		_context_menu.add_separator()
 		_context_menu.add_item("Delete", 5)
 		_context_menu.add_item("Fit selection", 12)
 	else:
 		_context_menu.add_item("Set Active Plane… (click face)", 14)
 		if _active_plane_custom:
 			_context_menu.add_item("Reset Active Plane (ground)", 15)
+		if view.has_clipboard():
+			_context_menu.add_item("Paste", 22)
+			_context_menu.add_item("Paste Special…", 23)
+			_context_menu.add_separator()
 		_context_menu.add_item("Fit all", 10)
 		_context_menu.add_item("Unhide all", 11)
 		_context_menu.add_item("Orientation… (Space)", 13)
@@ -2812,6 +3200,21 @@ func _on_context_id(id: int) -> void:
 		12:
 			if camera != null:
 				camera.frame_selection_or_all(false)
+		20:
+			var n := view.cut_selection()
+			status.emit("Cut %d" % n if n > 1 else ("Cut" if n == 1 else "Nothing to cut"))
+			_refresh_transform_hud()
+			_refresh_selection_strip()
+		21:
+			var nc := view.copy_selection()
+			status.emit("Copied %d" % nc if nc > 1 else ("Copied" if nc == 1 else "Nothing to copy"))
+		22:
+			var made: Array = view.paste_clipboard()
+			status.emit("Pasted %d" % made.size() if made.size() > 1 else ("Pasted" if not made.is_empty() else "Clipboard empty"))
+			_refresh_transform_hud()
+			_refresh_selection_strip()
+		23:
+			paste_special_requested.emit()
 		13:
 			_show_orient_popup()
 		14:
@@ -2885,8 +3288,9 @@ func _ctx_look_at() -> void:
 func _show_orient_popup() -> void:
 	if _orient_popup == null:
 		return
+	_rebuild_orient_popup()
 	var center := get_viewport().get_visible_rect().get_center()
-	_orient_popup.popup(Rect2i(Vector2i(center) - Vector2i(80, 120), Vector2i(160, 260)))
+	_orient_popup.popup(Rect2i(Vector2i(center) - Vector2i(80, 120), Vector2i(180, 320)))
 
 
 func _on_orient_id(id: int) -> void:
@@ -2900,21 +3304,16 @@ func _on_orient_id(id: int) -> void:
 		3:
 			camera.set_view(deg_to_rad(0.0), deg_to_rad(89.0), true)
 		7:
-			camera.set_view(deg_to_rad(-35.0), deg_to_rad(30.0), true)
+			camera.set_view(deg_to_rad(-35.0), deg_to_rad(40.0), true)
 		5:
 			camera.toggle_projection()
 			status.emit("Projection toggled")
 		20:
 			camera.frame_selection_or_all(false)
-			status.emit("Fit selection")
+			status.emit("Framed selection")
 		21:
 			camera.frame_contents()
-			status.emit("Fit all")
-		30:
-			if camera.restore_named_view("User"):
-				status.emit("Restored view “User”")
-			else:
-				status.emit("No saved view “User” — use ViewHud Save view first")
+			status.emit("Framed all")
 
 
 # --- on-canvas gizmos ---

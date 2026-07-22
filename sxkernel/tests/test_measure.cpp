@@ -26,6 +26,38 @@ TEST_CASE("min_distance between boxes", "[measure]") {
     REQUIRE(d0->distance == Approx(0.0).margin(1e-9));
 }
 
+TEST_CASE("closest_point foot of perpendicular onto a box face", "[measure]") {
+    Document doc;
+    auto id = doc.add_body(shape::make_box(10, 10, 10), "Box");
+    // Point floating above the top face center → foot at (5,5,10).
+    auto r = measure::closest_point(doc, id, {5.0, 5.0, 25.0});
+    REQUIRE(r.has_value());
+    REQUIRE(r->distance == Approx(15.0).margin(1e-6));
+    REQUIRE(r->point_b[0] == Approx(5.0).margin(1e-6));
+    REQUIRE(r->point_b[1] == Approx(5.0).margin(1e-6));
+    REQUIRE(r->point_b[2] == Approx(10.0).margin(1e-6));
+}
+
+TEST_CASE("face_midpoint is UV center of box top", "[measure]") {
+    Document doc;
+    auto id = doc.add_body(shape::make_box(10, 10, 10), "Box");
+    // Pick the face whose midpoint is on z=10 (top) among the six faces.
+    std::optional<std::array<double, 3>> top;
+    for (int i = 1; i <= 6; ++i) {
+        auto fid = doc.subshape_id(id, EntityKind::Face, i);
+        auto mid = measure::face_midpoint(doc, fid);
+        REQUIRE(mid.has_value());
+        if (std::abs((*mid)[2] - 10.0) < 1e-4) {
+            top = mid;
+            break;
+        }
+    }
+    REQUIRE(top.has_value());
+    REQUIRE((*top)[0] == Approx(5.0).margin(1e-4));
+    REQUIRE((*top)[1] == Approx(5.0).margin(1e-4));
+    REQUIRE((*top)[2] == Approx(10.0).margin(1e-4));
+}
+
 TEST_CASE("bounding_box of origin box", "[measure]") {
     Document doc;
     auto id = doc.add_body(shape::make_box(10, 10, 10), "Box");
@@ -104,6 +136,8 @@ TEST_CASE("invalid ids return nullopt or zero", "[measure]") {
     EntityId bogus = EntityId::generate();
 
     REQUIRE_FALSE(measure::min_distance(doc, body, bogus).has_value());
+    REQUIRE_FALSE(measure::closest_point(doc, bogus, {0, 0, 0}).has_value());
+    REQUIRE_FALSE(measure::face_midpoint(doc, bogus).has_value());
     REQUIRE_FALSE(measure::bounding_box(doc, bogus).has_value());
     REQUIRE_FALSE(measure::mass_properties(doc, bogus).has_value());
     // Face id is not a body.

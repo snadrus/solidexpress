@@ -63,9 +63,11 @@ const char* to_string(FeatureType t) {
         case FeatureType::Offset: return "offset";
         case FeatureType::Sweep: return "sweep";
         case FeatureType::Loft: return "loft";
+        case FeatureType::Path: return "path";
         case FeatureType::HelixSweep: return "helix_sweep";
         case FeatureType::Thread: return "thread";
         case FeatureType::ImportStep: return "import_step";
+        case FeatureType::ImportStl: return "import_stl";
     }
     return "unknown";
 }
@@ -86,16 +88,19 @@ FeatureType feature_type_from_string(const std::string& s) {
     if (s == "offset") return FeatureType::Offset;
     if (s == "sweep") return FeatureType::Sweep;
     if (s == "loft") return FeatureType::Loft;
+    if (s == "path") return FeatureType::Path;
     if (s == "helix_sweep") return FeatureType::HelixSweep;
     if (s == "thread") return FeatureType::Thread;
     if (s == "import_step") return FeatureType::ImportStep;
+    if (s == "import_stl") return FeatureType::ImportStl;
     throw std::invalid_argument("unknown feature type: " + s);
 }
 
 static bool creates_body(const Feature& f) {
     if (f.type == FeatureType::Primitive || f.type == FeatureType::ImportStep ||
-        f.type == FeatureType::Mirror || f.type == FeatureType::Sweep ||
-        f.type == FeatureType::Loft || f.type == FeatureType::HelixSweep)
+        f.type == FeatureType::ImportStl || f.type == FeatureType::Mirror ||
+        f.type == FeatureType::Sweep || f.type == FeatureType::Loft ||
+        f.type == FeatureType::HelixSweep)
         return true;
     if (f.type == FeatureType::Extrude || f.type == FeatureType::Revolve)
         return f.params.value("op", "new") == "new";
@@ -141,7 +146,7 @@ namespace {
 
 // Collect feature ids referenced by params keys sketch/target/tool/sketches.
 void collect_deps(const Feature& f, std::vector<std::string>& out) {
-    for (const char* key : {"sketch", "target", "tool"}) {
+    for (const char* key : {"sketch", "target", "tool", "path_feature"}) {
         if (f.params.contains(key) && f.params[key].is_string())
             out.push_back(f.params[key].get<std::string>());
     }
@@ -374,8 +379,85 @@ TopoDS_Wire make_polyline_wire(const json& path) {
     return mk.Wire();
 }
 
+// Drop intermediate points that are collinear (safe for dense splines + 3D corner sweeps).
+json simplify_path_polyline(const json& path) {
+    if (!path.is_array() || path.size() < 3) return path;
+    const double dist_eps = 1e-12;
+    const double ang_eps = 1e-6;
+    json out = json::array();
+    out.push_back(path[0]);
+    for (size_t i = 1; i + 1 < path.size(); ++i) {
+        gp_Pnt a = pnt_from(out.back());
+        gp_Pnt b = pnt_from(path[i]);
+        gp_Pnt c = pnt_from(path[i + 1]);
+        gp_Vec v1(a, b);
+        gp_Vec v2(b, c);
+        if (v1.SquareMagnitude() < dist_eps * dist_eps) continue;
+        if (v2.SquareMagnitude() < dist_eps * dist_eps) continue;
+        v1.Normalize();
+        v2.Normalize();
+        if (v1.IsParallel(v2, ang_eps)) continue;
+        out.push_back(path[i]);
+    }
+    out.push_back(path[path.size() - 1]);
+    return out;
+}
+
+static double point_seg_dist(const gp_Pnt& p, const gp_Pnt& a, const gp_Pnt& b) {
+    gp_Vec ab(a, b);
+    double len2 = ab.SquareMagnitude();
+    if (len2 < 1e-24) return p.Distance(a);
+    double t = gp_Vec(a, p).Dot(ab) / len2;
+    t = std::max(0.0, std::min(1.0, t));
+    gp_Pnt proj = a.Translated(ab * t);
+    return p.Distance(proj);
+}
+
+static void rdp_rec(const json& path, size_t i0, size_t i1, double eps, std::vector<bool>& keep) {
+    if (i1 <= i0 + 1) return;
+    gp_Pnt a = pnt_from(path[i0]);
+    gp_Pnt b = pnt_from(path[i1]);
+    double max_d = 0.0;
+    size_t max_i = i0;
+    for (size_t i = i0 + 1; i < i1; ++i) {
+        double d = point_seg_dist(pnt_from(path[i]), a, b);
+        if (d > max_d) {
+            max_d = d;
+            max_i = i;
+        }
+    }
+    if (max_d > eps) {
+        rdp_rec(path, i0, max_i, eps, keep);
+        keep[max_i] = true;
+        rdp_rec(path, max_i, i1, eps, keep);
+    }
+}
+
+json simplify_path_rdp(const json& path, double eps) {
+    if (!path.is_array() || path.size() < 3 || eps <= 0.0) return path;
+    std::vector<bool> keep(path.size(), false);
+    keep[0] = true;
+    keep[path.size() - 1] = true;
+    rdp_rec(path, 0, path.size() - 1, eps, keep);
+    json out = json::array();
+    for (size_t i = 0; i < path.size(); ++i)
+        if (keep[i]) out.push_back(path[i]);
+    return out;
+}
+
+json simplify_path_for_sweep(const json& path) {
+    json p = simplify_path_polyline(path);
+    if (p.is_array() && p.size() > 12) {
+        double eps = 0.05;
+        json rdp = simplify_path_rdp(p, eps);
+        if (rdp.size() >= 2) p = std::move(rdp);
+    }
+    return p;
+}
+
 TopoDS_Shape sweep_along_polyline(const TopoDS_Shape& face, const json& path) {
-    TopoDS_Wire spine = make_polyline_wire(path);
+    json simplified = simplify_path_for_sweep(path);
+    TopoDS_Wire spine = make_polyline_wire(simplified);
     TopTools_IndexedMapOfShape edges;
     TopExp::MapShapes(spine, TopAbs_EDGE, edges);
     if (edges.Extent() <= 1) {
@@ -481,6 +563,156 @@ TopoDS_Shape thread_cutter_solid(const gp_Ax2& axis, double major_radius, double
     if (!shell.MakeSolid()) throw std::runtime_error("thread MakePipeShell could not make solid");
     return shell.Shape();
 }
+
+gp_Pnt sketch_uv_to_3d(const SketchPlane& pl, double u, double v) {
+    return gp_Pnt(pl.origin[0] + pl.x_dir[0] * u + pl.y_dir[0] * v,
+                  pl.origin[1] + pl.x_dir[1] * u + pl.y_dir[1] * v,
+                  pl.origin[2] + pl.x_dir[2] * u + pl.y_dir[2] * v);
+}
+
+json pnt_to_json(const gp_Pnt& p) { return json::array({p.X(), p.Y(), p.Z()}); }
+
+// Collect 3D line endpoints from a sketch (legacy / fallback).
+std::vector<gp_Pnt> sketch_line_points(const Sketch& sk) {
+    std::vector<gp_Pnt> pts;
+    const auto& pl = sk.plane();
+    for (const auto& e : sk.entities()) {
+        if (e.construction) continue;
+        if (e.type != SketchEntityType::Line || e.params.size() < 4) continue;
+        double x1 = sk.param(e.params[0]);
+        double y1 = sk.param(e.params[1]);
+        double x2 = sk.param(e.params[2]);
+        double y2 = sk.param(e.params[3]);
+        pts.push_back(sketch_uv_to_3d(pl, x1, y1));
+        pts.push_back(sketch_uv_to_3d(pl, x2, y2));
+    }
+    return pts;
+}
+
+// Ordered polyline through line entities (preserves spline densification order).
+json sketch_ordered_polyline(const Sketch& sk) {
+    const double eps = 1e-9;
+    json path = json::array();
+    const auto& pl = sk.plane();
+    gp_Pnt last;
+    bool have_last = false;
+    for (const auto& e : sk.entities()) {
+        if (e.construction) continue;
+        if (e.type != SketchEntityType::Line || e.params.size() < 4) continue;
+        gp_Pnt a = sketch_uv_to_3d(pl, sk.param(e.params[0]), sk.param(e.params[1]));
+        gp_Pnt b = sketch_uv_to_3d(pl, sk.param(e.params[2]), sk.param(e.params[3]));
+        if (!have_last) {
+            path.push_back(pnt_to_json(a));
+            if (a.Distance(b) >= eps) path.push_back(pnt_to_json(b));
+            last = b;
+            have_last = true;
+            continue;
+        }
+        if (last.Distance(a) < eps) {
+            if (last.Distance(b) >= eps) path.push_back(pnt_to_json(b));
+            last = b;
+        } else if (last.Distance(b) < eps) {
+            if (last.Distance(a) >= eps) path.push_back(pnt_to_json(a));
+            last = a;
+        } else {
+            path.push_back(pnt_to_json(a));
+            if (a.Distance(b) >= eps) path.push_back(pnt_to_json(b));
+            last = b;
+        }
+    }
+    return path;
+}
+
+// Append polyline b onto a, connecting at the nearest pair of endpoints.
+json join_polylines(json a, const json& b) {
+    if (!a.is_array() || a.size() < 2) return b;
+    if (!b.is_array() || b.size() < 2) return a;
+    gp_Pnt tail = pnt_from(a.back());
+    gp_Pnt b0 = pnt_from(b[0]);
+    gp_Pnt bn = pnt_from(b[b.size() - 1]);
+    if (tail.Distance(b0) <= tail.Distance(bn)) {
+        for (size_t i = 1; i < b.size(); ++i) a.push_back(b[i]);
+    } else {
+        for (int i = static_cast<int>(b.size()) - 2; i >= 0; --i) a.push_back(b[i]);
+    }
+    return a;
+}
+
+// Nearest-neighbor chain through a set of points (greedy TSP for path merge).
+// Deduplicates coincident endpoints (shared sketch corners) first.
+json chain_points(std::vector<gp_Pnt> pts) {
+    const double eps = 1e-9;
+    std::vector<gp_Pnt> uniq;
+    for (const auto& p : pts) {
+        bool dup = false;
+        for (const auto& u : uniq) {
+            if (u.Distance(p) < eps) {
+                dup = true;
+                break;
+            }
+        }
+        if (!dup) uniq.push_back(p);
+    }
+    json path = json::array();
+    if (uniq.empty()) return path;
+    std::vector<bool> used(uniq.size(), false);
+    size_t cur = 0;
+    used[0] = true;
+    path.push_back(pnt_to_json(uniq[0]));
+    for (size_t n = 1; n < uniq.size(); ++n) {
+        double best = 1e300;
+        size_t best_i = cur;
+        for (size_t i = 0; i < uniq.size(); ++i) {
+            if (used[i]) continue;
+            double d = uniq[cur].Distance(uniq[i]);
+            if (d < best) {
+                best = d;
+                best_i = i;
+            }
+        }
+        used[best_i] = true;
+        cur = best_i;
+        path.push_back(pnt_to_json(uniq[cur]));
+    }
+    return path;
+}
+
+// Catmull-Rom densify for bridge_spline mode (control points → denser polyline).
+json densify_catmull(const std::vector<gp_Pnt>& ctrl, int samples_per_seg = 8) {
+    json path = json::array();
+    if (ctrl.size() < 2) return path;
+    if (ctrl.size() == 2) {
+        path.push_back(pnt_to_json(ctrl[0]));
+        path.push_back(pnt_to_json(ctrl[1]));
+        return path;
+    }
+    auto at = [&](int i) -> gp_Pnt {
+        if (i < 0) return ctrl[0];
+        if (i >= static_cast<int>(ctrl.size())) return ctrl.back();
+        return ctrl[static_cast<size_t>(i)];
+    };
+    for (int i = 0; i < static_cast<int>(ctrl.size()) - 1; ++i) {
+        gp_Pnt p0 = at(i - 1), p1 = at(i), p2 = at(i + 1), p3 = at(i + 2);
+        for (int s = 0; s < samples_per_seg; ++s) {
+            double t = static_cast<double>(s) / samples_per_seg;
+            double t2 = t * t, t3 = t2 * t;
+            gp_Pnt p(
+                0.5 * ((2 * p1.X()) + (-p0.X() + p2.X()) * t +
+                       (2 * p0.X() - 5 * p1.X() + 4 * p2.X() - p3.X()) * t2 +
+                       (-p0.X() + 3 * p1.X() - 3 * p2.X() + p3.X()) * t3),
+                0.5 * ((2 * p1.Y()) + (-p0.Y() + p2.Y()) * t +
+                       (2 * p0.Y() - 5 * p1.Y() + 4 * p2.Y() - p3.Y()) * t2 +
+                       (-p0.Y() + 3 * p1.Y() - 3 * p2.Y() + p3.Y()) * t3),
+                0.5 * ((2 * p1.Z()) + (-p0.Z() + p2.Z()) * t +
+                       (2 * p0.Z() - 5 * p1.Z() + 4 * p2.Z() - p3.Z()) * t2 +
+                       (-p0.Z() + 3 * p1.Z() - 3 * p2.Z() + p3.Z()) * t3));
+            path.push_back(pnt_to_json(p));
+        }
+    }
+    path.push_back(pnt_to_json(ctrl.back()));
+    return path;
+}
+
 }  // namespace
 
 bool FeatureGraph::apply(Document& doc, Feature& f,
@@ -748,6 +980,55 @@ bool FeatureGraph::apply(Document& doc, Feature& f,
                 return true;
             }
 
+            case FeatureType::Path: {
+                if (!params.contains("sketches") || !params["sketches"].is_array() ||
+                    params["sketches"].size() < 2)
+                    return fail("path needs at least two sketch features");
+                std::string mode = params.value("mode", "join_endpoints");
+                json path = json::array();
+                std::vector<json> sketch_polys;
+                for (const auto& js : params["sketches"]) {
+                    EntityId sketch_fid = EntityId::from_string(js.get<std::string>());
+                    const Feature* skf = feature(sketch_fid);
+                    if (!skf || !skf->sketch)
+                        return fail("missing sketch for path");
+                    json pl = sketch_ordered_polyline(*skf->sketch);
+                    if (pl.size() >= 2) sketch_polys.push_back(std::move(pl));
+                }
+                if (sketch_polys.empty()) return fail("path sketches have insufficient geometry");
+                if (mode == "bridge_spline") {
+                    std::vector<gp_Pnt> controls;
+                    for (const auto& pl : sketch_polys) {
+                        controls.push_back(pnt_from(pl[0]));
+                        if (pl.size() >= 2) controls.push_back(pnt_from(pl[pl.size() - 1]));
+                    }
+                    const double eps = 1e-9;
+                    std::vector<gp_Pnt> uniq;
+                    for (const auto& p : controls) {
+                        if (uniq.empty() || uniq.back().Distance(p) >= eps) uniq.push_back(p);
+                    }
+                    if (uniq.size() < 2) return fail("bridge_spline needs >=2 control points");
+                    if (uniq.size() > 24) {
+                        std::vector<gp_Pnt> thin;
+                        for (size_t i = 0; i < uniq.size(); i += uniq.size() / 12 + 1)
+                            thin.push_back(uniq[i]);
+                        if (thin.back().Distance(uniq.back()) > 1e-6) thin.push_back(uniq.back());
+                        uniq = std::move(thin);
+                    }
+                    path = densify_catmull(uniq);
+                } else {
+                    // join_endpoints / composite: sketch order + endpoint join (not global NN).
+                    path = sketch_polys[0];
+                    for (size_t i = 1; i < sketch_polys.size(); ++i)
+                        path = join_polylines(std::move(path), sketch_polys[i]);
+                }
+                if (path.size() < 2) return fail("path rebuild produced <2 points");
+                path = simplify_path_polyline(path);
+                if (path.size() < 2) return fail("path rebuild produced <2 points");
+                f.params["path"] = path;
+                return true;
+            }
+
             case FeatureType::Sweep: {
                 EntityId sketch_fid =
                     EntityId::from_string(params.at("sketch").get<std::string>());
@@ -756,9 +1037,20 @@ bool FeatureGraph::apply(Document& doc, Feature& f,
                 std::string perr;
                 TopoDS_Shape face = skf->sketch->profile_face(&perr);
                 if (face.IsNull()) return fail("profile: " + perr);
+                json path = params.value("path", json::array());
+                if (params.contains("path_feature") && params["path_feature"].is_string()) {
+                    const Feature* pf =
+                        feature(EntityId::from_string(params["path_feature"].get<std::string>()));
+                    if (!pf || pf->type != FeatureType::Path)
+                        return fail("missing path feature");
+                    // Prefer live params on the path feature (regenerated earlier).
+                    path = pf->params.value("path", json::array());
+                }
+                if (!path.is_array() || path.size() < 2)
+                    return fail("sweep needs a path with at least two points");
                 TopoDS_Shape result;
                 try {
-                    result = sweep_along_polyline(face, params.at("path"));
+                    result = sweep_along_polyline(face, path);
                 } catch (const Standard_Failure& e) {
                     return fail(std::string("sweep failed: ") + e.GetMessageString());
                 } catch (const std::runtime_error& e) {
@@ -870,20 +1162,25 @@ bool FeatureGraph::apply(Document& doc, Feature& f,
                 return true;
             }
 
-            case FeatureType::ImportStep: {
+            case FeatureType::ImportStep:
+            case FeatureType::ImportStl: {
                 // File is re-read on every regenerate; path is an external
                 // document dependency (acceptable for this BASE feature).
                 if (!params.contains("path") || !params["path"].is_string())
                     return fail("missing path");
                 const std::string path = params["path"].get<std::string>();
-                const int index = params.value("index", 0);
                 const double scale = num_param(params, "scale", 1.0, env);
+                const bool is_stl = f.type == FeatureType::ImportStl;
 
                 Document tmp;
                 std::string ierr;
-                auto ids = interop::import_step(tmp, path, &ierr);
+                auto ids = is_stl ? interop::import_stl(tmp, path, &ierr)
+                                  : interop::import_step(tmp, path, &ierr);
                 if (ids.empty())
-                    return fail(ierr.empty() ? "STEP import failed" : ierr);
+                    return fail(ierr.empty()
+                                    ? (is_stl ? "STL import failed" : "STEP import failed")
+                                    : ierr);
+                const int index = is_stl ? 0 : params.value("index", 0);
                 if (index < 0 || static_cast<size_t>(index) >= ids.size())
                     return fail("shape index out of range");
                 const Body* src = tmp.body(ids[static_cast<size_t>(index)]);

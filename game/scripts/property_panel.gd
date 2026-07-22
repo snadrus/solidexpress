@@ -76,6 +76,9 @@ const SCHEMAS := {
 	"import_step": [
 		{"key": "scale", "label": "Scale", "kind": "float", "min": 0.001, "max": 1000.0, "step": 0.1},
 	],
+	"import_stl": [
+		{"key": "scale", "label": "Scale", "kind": "float", "min": 0.001, "max": 1000.0, "step": 0.1},
+	],
 	"loft": [
 		{"key": "ruled", "label": "Ruled", "kind": "bool"},
 	],

@@ -25,6 +25,7 @@ func _init() -> void:
 	await process_frame
 
 	test_closest_edge_point(main)
+	await test_perp_before_relocate(main)
 	await test_selection_bound_labels(main)
 	test_hover_pair_pins_on_leave(main)
 	test_esc_clears_pair(main)
@@ -37,7 +38,7 @@ func _init() -> void:
 
 
 func test_closest_edge_point(main) -> void:
-	print("- closest_edge_point / closest_corner_point")
+	print("- closest_edge_point / closest_measure_snap")
 	var view: DocumentView = main.view
 	view.new_document()
 	var id: String = view.insert_primitive("box", Vector3.ZERO)
@@ -52,18 +53,59 @@ func test_closest_edge_point(main) -> void:
 	var edge_pt := view.closest_edge_point(id, outside)
 	check(edge_pt.distance_to(outside) < outside.distance_to(center),
 			"outside point snaps closer to the solid than the center")
-	# Face-center hit should plant X on a corner of that face, not mid-edge.
+	# Face-center hit plants X on the surface midpoint of that face.
 	var face_hit := Vector3(center.x, center.y, bb["max"].z)
-	var corner := view.closest_corner_point(id, face_hit)
-	var mn: Vector3 = bb["min"]
-	var mx: Vector3 = bb["max"]
-	var on_corner := false
-	for x in [mn.x, mx.x]:
-		for y in [mn.y, mx.y]:
-			if corner.distance_to(Vector3(x, y, mx.z)) < 1e-4:
-				on_corner = true
-	check(on_corner, "closest_corner_point lands on a top-face corner")
-	check(corner.distance_to(face_hit) > 0.5, "corner ≠ face center")
+	var mid := view.closest_measure_snap(id, face_hit)
+	check(mid.distance_to(face_hit) < 1e-3, "closest_measure_snap hits surface midpoint")
+	check(mid.distance_to(view.closest_corner_point(id, face_hit)) > 0.5,
+			"surface mid ≠ corner")
+	# Perpendicular foot from a point above the top face.
+	var foot := view.closest_surface_point(id, Vector3(center.x, center.y, 40.0))
+	check(foot.distance_to(face_hit) < 1e-3, "closest_surface_point is top-face mid")
+
+
+func test_perp_before_relocate(main) -> void:
+	print("- perpendicular to near body appears before X relocates")
+	var view: DocumentView = main.view
+	var ix: ViewportInteraction = main.interaction
+	view.new_document()
+	var a: String = view.insert_primitive("box", Vector3(-40, 0, 0))
+	var b: String = view.insert_primitive("box", Vector3(40, 0, 0))
+	var mo: MeasureOverlay = ix.measure_overlay
+	mo.clear_all()
+	main.camera.frame_contents()
+	await process_frame
+
+	var bb_a: Dictionary = view.doc.measure_bbox(a)
+	var aa_max: Vector3 = bb_a["max"]
+	mo.update_hover(a, aa_max)
+	mo.update_hover("", Vector3.ZERO)
+	check(mo.has_anchor(), "X pinned on A")
+	var pinned: Vector3 = mo.anchor_point as Vector3
+
+	# Hit B on a face interior away from corners / face mid so relocate stays off.
+	var bb_b: Dictionary = view.doc.measure_bbox(b)
+	var mn: Vector3 = bb_b["min"]
+	var mx: Vector3 = bb_b["max"]
+	var off_mid := Vector3(
+			lerpf(mn.x, mx.x, 0.22),
+			lerpf(mn.y, mx.y, 0.22),
+			mx.z)
+	ix._update_measure_hover(b, off_mid)
+	check(mo.anchor_body == a, "X stays on A when not near a snap")
+	check(mo.anchor_point == pinned, "pinned X unchanged")
+	check(mo._last_b != null, "live B shows perpendicular foot")
+	var foot: Vector3 = mo._last_b as Vector3
+	var expected := view.closest_surface_point(b, pinned)
+	check(foot.distance_to(expected) < 1e-3, "B is perpendicular foot from X onto B")
+
+	# Approach the surface midpoint — X relocates.
+	var face_mid := Vector3((mn.x + mx.x) * 0.5, (mn.y + mx.y) * 0.5, mx.z)
+	ix._update_measure_hover(b, face_mid)
+	check(mo.anchor_body == b, "near surface mid relocates X onto B")
+	check(mo.following, "following after relocate")
+	check((mo.anchor_point as Vector3).distance_to(face_mid) < 1e-3,
+			"X lands on surface midpoint")
 
 
 func test_selection_bound_labels(main) -> void:
@@ -197,13 +239,18 @@ func test_place_ghost_nearest_corner(main) -> void:
 	# Not the ghost center (unless degenerate).
 	var center: Vector3 = ix._place_ghost.position
 	check(b.distance_to(center) > 0.5, "corner ≠ ghost center")
-	# Hover another solid while placing — X relocates onto that target.
+	# Hover another solid while placing — X relocates when near a surface mid.
 	var bb_side: Dictionary = view.doc.measure_bbox(side)
-	var side_center: Vector3 = (bb_side["min"] as Vector3 + bb_side["max"] as Vector3) * 0.5
-	var side_screen: Vector2 = ix._model_to_screen(side_center)
+	var side_mid: Vector3 = Vector3(
+			(bb_side["min"].x + bb_side["max"].x) * 0.5,
+			(bb_side["min"].y + bb_side["max"].y) * 0.5,
+			bb_side["max"].z)
+	var side_screen: Vector2 = ix._model_to_screen(side_mid)
 	ix._update_ghost(side_screen)
 	check(mo.anchor_body == side, "place hover relocates X onto target body")
 	check(mo.following, "following X on target while hovering it")
+	check((mo.anchor_point as Vector3).distance_to(side_mid) < 1e-2,
+			"X planted on target surface mid")
 	# Move ghost to empty ground — pin X and dim to nearest corner again.
 	ix._update_ghost(ix._model_to_screen(Vector3(40, 0, 0)))
 	check(mo.anchor_body == side, "X stays on last target after leaving it")
@@ -230,12 +277,11 @@ func test_move_uses_transport_measure(main) -> void:
 	await process_frame
 	ix._update_transport_measure(ix._model_to_screen(Vector3(0, 0, 0)))
 	check(mo.has_anchor(), "anchor kept with selection")
-	check(mo.is_showing_pair(), "idle selection dims to moved body's corner")
+	check(mo.is_showing_pair(), "idle selection dims to perpendicular on subject")
 	var idle_b: Vector3 = mo._last_b as Vector3
-	var a_corners: Array[Vector3] = ix._transport_subject_corners()
-	check(a_corners.size() == 8, "selected body has 8 corners")
-	check(idle_b.distance_to(ix._closest_corner_of(a_corners, mo.anchor_point as Vector3) as Vector3) < 1e-3,
-			"idle B is nearest corner of selected body")
+	var expected_idle := view.closest_surface_point(a, mo.anchor_point as Vector3)
+	check(idle_b.distance_to(expected_idle) < 1e-3,
+			"idle B is perpendicular foot onto selected body")
 
 	# Begin move and drag — measure stays visible; dims track live corners.
 	ix._begin_move_body(ix._model_to_screen(Vector3(-40, 0, 2.5)), Vector3(-40, 0, 2.5))
@@ -250,10 +296,15 @@ func test_move_uses_transport_measure(main) -> void:
 			"live B tracks moved corners")
 	check(live_b.x > idle_b.x + 1.0, "moved corner advanced in +X")
 
-	# Touch B again during move — X replants on B (skipped body is A).
-	var b_center: Vector3 = (bb_b["min"] as Vector3 + bb_b["max"] as Vector3) * 0.5
-	ix._update_transport_measure(ix._model_to_screen(b_center))
+	# Touch B again during move — X replants on B when near a surface mid.
+	var b_mid: Vector3 = Vector3(
+			(bb_b["min"].x + bb_b["max"].x) * 0.5,
+			(bb_b["min"].y + bb_b["max"].y) * 0.5,
+			bb_b["max"].z)
+	ix._update_transport_measure(ix._model_to_screen(b_mid))
 	check(mo.anchor_body == b, "touch during move relocates X onto other body")
 	check(mo.following, "following X on other body during move")
+	check((mo.anchor_point as Vector3).distance_to(b_mid) < 1e-2,
+			"X replanted on B surface mid")
 	ix._drag_mode = ViewportInteraction.DragMode.NONE
 	view.refresh()

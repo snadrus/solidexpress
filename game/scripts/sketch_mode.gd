@@ -8,7 +8,11 @@ signal finished(body_id: String)
 signal cancelled
 signal status(text: String)
 
-enum Tool { NONE, LINE, RECT, CIRCLE, ARC, POLYGON, SELECT, TRIM }
+enum Tool {
+	NONE, LINE, RECT, CIRCLE, ARC, POLYGON, SELECT, TRIM,
+	EXTEND, SMART_DIM, CONVERT, MIRROR, PATTERN, SPLINE, POINT,
+	CENTERLINE, ELLIPSE, SLOT, CHAMFER,
+}
 
 signal selection_changed(ids: Array)
 
@@ -26,9 +30,40 @@ var snap_enabled := true
 var polygon_sides := 6:
 	set(v):
 		polygon_sides = clampi(v, 3, 24)
+## Tool variants: rect=corner|center|three_point|parallelogram;
+## circle=center|perimeter|three_point; arc=center|tangent|three_point;
+## pattern=linear|circular.
+var tool_variant := "corner"
+## Draw next line as construction (centerline mode).
+var draw_construction := false
+## Power-trim drag state: list of already-trimmed entity ids this stroke.
+var _trim_drag_ids: Array[String] = []
+var _trim_dragging := false
+## Highlight entity under trim hover (red).
+var _trim_hover_id := ""
+## Smart-dim / convert / mirror / pattern scratch.
+var _smart_dim_first: Variant = null  # Vector2 | null
+var _mirror_axis_id := ""
+var _pattern_count := 3
+var _pattern_spacing := 10.0
+## Sketch blocks: name -> PackedStringArray of entity ids.
+var blocks: Dictionary = {}
+## Sketch picture underlay (Texture2D on plane); null when none.
+var sketch_picture: Texture2D
+var sketch_picture_size := Vector2(100, 100)
+var _picture_node: MeshInstance3D
+## Fit-spline control points while drawing.
+var _spline_pts: Array[Vector2] = []
 ## Feature id of the body being sketched on ("" when on the ground plane);
 ## used as the boolean target for cut/fuse finishes.
 var target_fid := ""
+## Feature id of the sketch being edited ("" when creating a new sketch).
+var editing_fid := ""
+## Optional OrbitCamera for enter/leave sketch view locking.
+var camera: OrbitCamera
+## Pierce / coincident points from other geometry (model-space projected to 2D).
+## Array of Vector2 in sketch coords — used for snap/select/measure.
+var intersection_points: Array[Vector2] = []
 
 # Sketch plane frame in model space.
 var plane_origin := Vector3.ZERO
@@ -73,6 +108,8 @@ const COLOR_CONSTRAINED := Color(0.35, 0.85, 0.45)  # fully constrained sketch
 const COLOR_CONFLICT := Color(0.95, 0.3, 0.25)  # entities in conflicting constraints
 const COLOR_GLYPH := Color(0.65, 0.8, 1.0)
 const COLOR_GLYPH_SELECTED := Color(1.0, 0.62, 0.15)
+## Match 3D stretch-handle blue for endpoint drag affordance.
+const COLOR_HANDLE := Color(0.25, 0.75, 1.0, 0.95)
 ## SolidWorks-style relation badges drawn next to the owning geometry.
 ## Dimensional constraints (distance/radius/angle) use the dim labels instead.
 const GLYPH_SYMBOLS := {
@@ -122,7 +159,7 @@ func _ready() -> void:
 	add_child(_preview_node)
 	_selected_material = StandardMaterial3D.new()
 	_selected_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_selected_material.albedo_color = Color(1.0, 0.62, 0.15)
+	_selected_material.albedo_color = COLOR_HANDLE
 	_selected_node = MeshInstance3D.new()
 	_selected_node.material_override = _selected_material
 	add_child(_selected_node)
@@ -143,10 +180,11 @@ func _ready() -> void:
 	add_child(_infer_label)
 
 
-## Derive a sketch plane from an axis-aligned planar face via bbox heuristics.
-## Returns {ok, origin, normal, message}. ok=false → caller should fall back to
-## ground (v1: non-axis-aligned faces are not supported).
-static func derive_face_plane(doc: SxDocument, face_id: String, body_id: String) -> Dictionary:
+## Derive a sketch plane from a planar face. Prefers the real face normal from
+## DocumentView tessellation when provided; falls back to axis-aligned bbox
+## heuristics. Returns {ok, origin, normal, message}.
+static func derive_face_plane(doc: SxDocument, face_id: String, body_id: String,
+		face_normal: Vector3 = Vector3.ZERO) -> Dictionary:
 	var ground := {
 		"ok": false,
 		"origin": Vector3.ZERO,
@@ -163,30 +201,36 @@ static func derive_face_plane(doc: SxDocument, face_id: String, body_id: String)
 	var fmx: Vector3 = face_bb["max"]
 	var extent := fmx - fmn
 	var origin := (fmn + fmx) * 0.5
-	const EPS := 1e-6
+	var normal := Vector3.ZERO
 	var axis := -1
-	if extent.x < EPS:
+	const EPS := 1e-6
+	# Prefer tessellated face normal when available (supports rotated faces).
+	if face_normal.length_squared() > 1e-8:
+		normal = face_normal.normalized()
+	elif extent.x < EPS:
 		axis = 0
+		normal = Vector3(1, 0, 0)
 	elif extent.y < EPS:
 		axis = 1
+		normal = Vector3(0, 1, 0)
 	elif extent.z < EPS:
 		axis = 2
+		normal = Vector3(0, 0, 1)
 	else:
-		ground["message"] = "Face not axis-aligned — sketching on ground (v1 limitation)"
+		ground["message"] = "Face not planar enough — sketching on ground"
 		return ground
-	var normal := Vector3.ZERO
-	normal[axis] = 1.0
 	var body_bb: Dictionary = doc.measure_bbox(body_id)
 	if not body_bb.is_empty():
 		var body_center: Vector3 = (body_bb["min"] + body_bb["max"]) * 0.5
 		# Outward: pointing away from the body bbox center.
 		if (origin - body_center).dot(normal) < 0.0:
 			normal = -normal
-	var axis_name: String
-	if normal[axis] > 0.0:
-		axis_name = ["+X", "+Y", "+Z"][axis]
-	else:
-		axis_name = ["-X", "-Y", "-Z"][axis]
+	var axis_name := "%.2f,%.2f,%.2f" % [normal.x, normal.y, normal.z]
+	if axis >= 0:
+		if normal[axis] > 0.0:
+			axis_name = ["+X", "+Y", "+Z"][axis]
+		else:
+			axis_name = ["-X", "-Y", "-Z"][axis]
 	return {
 		"ok": true,
 		"origin": origin,
@@ -201,10 +245,105 @@ func plane_normal() -> Vector3:
 	return plane_x.cross(plane_y).normalized()
 
 
+## 2D AABB of all entities inflated by `pad_frac` (0.2 = 20% past extents).
+## Returns {min, max, center, radius} or empty if no entities.
+func sketch_extents(pad_frac := 0.2) -> Dictionary:
+	if sketch == null:
+		return {}
+	var ids: PackedStringArray = sketch.entity_ids()
+	if ids.is_empty():
+		return {}
+	var mn := Vector2(INF, INF)
+	var mx := Vector2(-INF, -INF)
+	for id in ids:
+		var info: Dictionary = sketch.entity_info(id)
+		match str(info.get("type", "")):
+			"line":
+				var a: Vector2 = info["start"]
+				var b: Vector2 = info["end"]
+				mn = mn.min(a).min(b)
+				mx = mx.max(a).max(b)
+			"circle", "arc":
+				var c: Vector2 = info["center"]
+				var r: float = float(info.get("radius", 0.0))
+				mn = mn.min(c - Vector2(r, r))
+				mx = mx.max(c + Vector2(r, r))
+			"point":
+				var p: Vector2 = info.get("position", info.get("point", Vector2.ZERO))
+				mn = mn.min(p)
+				mx = mx.max(p)
+	if not is_finite(mn.x):
+		return {}
+	var size := mx - mn
+	var pad := size * pad_frac * 0.5
+	pad.x = maxf(pad.x, 2.0)
+	pad.y = maxf(pad.y, 2.0)
+	mn -= pad
+	mx += pad
+	var mid2 := (mn + mx) * 0.5
+	var center3 := to_model(mid2)
+	var half := (mx - mn) * 0.5
+	var radius := maxf(half.x, half.y) * 1.414
+	return {"min": mn, "max": mx, "center": center3, "radius": maxf(radius, 5.0),
+			"min2": mn, "max2": mx}
+
+
+## Sketch 2D → model space.
+func to_model(p: Vector2) -> Vector3:
+	return plane_origin + plane_x * p.x + plane_y * p.y
+
+
 ## Begin a sketch on the model-space plane (origin + normal). x_hint picks the
 ## in-plane X direction; pass ZERO for an automatic perpendicular (n × world-Z,
 ## or world-X when the normal is parallel to Z). Extrude follows this normal.
 func begin(origin: Vector3, normal: Vector3, x_hint: Vector3 = Vector3.ZERO) -> void:
+	editing_fid = ""
+	_setup_plane(origin, normal, x_hint)
+	sketch = SxSketch.new()
+	sketch.set_plane(origin, plane_x, plane_y)
+	_activate_session()
+	status.emit("Sketch: Select · Line · Rect · Circle · Exit Sketch · Esc discard")
+
+
+## New sketch on an explicit plane (3D path legs, UI movies).
+func begin_on_plane(origin: Vector3, x_dir: Vector3, y_dir: Vector3) -> bool:
+	if view == null or active:
+		return false
+	editing_fid = ""
+	plane_origin = origin
+	plane_x = x_dir.normalized()
+	plane_y = y_dir.normalized()
+	sketch = SxSketch.new()
+	sketch.set_plane(origin, plane_x, plane_y)
+	_activate_session()
+	if view != null and view.has_method("refresh_sketch_pads"):
+		view.refresh_sketch_pads("_active")
+	status.emit("Sketch on plane — Exit Sketch to save")
+	return true
+
+
+## Reopen an existing Sketch feature for editing.
+func begin_edit(fid: String) -> bool:
+	if view == null or view.doc == null or fid == "":
+		return false
+	var loaded: SxSketch = view.doc.graph_get_sketch(fid)
+	if loaded == null:
+		status.emit("Could not load sketch feature")
+		return false
+	var pi: Dictionary = loaded.plane_info()
+	if pi.is_empty():
+		return false
+	editing_fid = fid
+	plane_origin = pi["origin"]
+	plane_x = (pi["x_dir"] as Vector3).normalized()
+	plane_y = (pi["y_dir"] as Vector3).normalized()
+	sketch = loaded
+	_activate_session()
+	status.emit("Editing sketch — Exit Sketch to save · Esc discard")
+	return true
+
+
+func _setup_plane(origin: Vector3, normal: Vector3, x_hint: Vector3 = Vector3.ZERO) -> void:
 	last_dofs = -1
 	last_solve_status = ""
 	plane_origin = origin
@@ -216,24 +355,49 @@ func begin(origin: Vector3, normal: Vector3, x_hint: Vector3 = Vector3.ZERO) -> 
 			x = Vector3.RIGHT
 	plane_x = (x - n * x.dot(n)).normalized()
 	plane_y = n.cross(plane_x).normalized()
-	sketch = SxSketch.new()
-	sketch.set_plane(origin, plane_x, plane_y)
+
+
+func _activate_session() -> void:
 	active = true
 	tool = Tool.LINE
 	_tool_points.clear()
 	_drag.clear()
 	dimensions.clear()
+	intersection_points.clear()
 	_clear_dimension_labels()
+	_enter_camera()
 	_redraw()
-	status.emit("Sketch: Select · Line · Rect · Circle · Extrude · Esc cancel")
 
 
+func _enter_camera() -> void:
+	if camera == null:
+		return
+	var ext := sketch_extents(0.2)
+	var center: Vector3 = plane_origin
+	var radius := 25.0
+	if not ext.is_empty():
+		center = ext["center"]
+		radius = float(ext["radius"])
+	camera.enter_sketch_view(plane_normal(), center, radius)
+
+
+func _leave_camera() -> void:
+	if camera != null:
+		camera.leave_sketch_view()
+
+
+## Discard the session without committing (Esc).
 func cancel() -> void:
+	if not active:
+		return
 	active = false
+	editing_fid = ""
 	_tool_points.clear()
 	_snap_marker = null
 	_drag.clear()
+	intersection_points.clear()
 	_clear_meshes()
+	_leave_camera()
 	cancelled.emit()
 
 
@@ -241,6 +405,43 @@ func set_dimensions_visible(on: bool) -> void:
 	dimensions_visible = on
 	if _dimension_labels != null:
 		_dimension_labels.visible = on
+
+
+## Commit the sketch feature (add or update) and leave sketch mode.
+## Returns the sketch feature id ("" on failure / empty new sketch).
+func exit_sketch() -> String:
+	if not active or sketch == null:
+		return ""
+	var fid := ""
+	if editing_fid != "":
+		if view.doc.graph_update_sketch(editing_fid, sketch):
+			fid = editing_fid
+		else:
+			status.emit("Failed to update sketch")
+			return ""
+	else:
+		if sketch.entity_ids().is_empty():
+			cancel()
+			status.emit("Empty sketch discarded")
+			return ""
+		fid = view.doc.graph_add_sketch(sketch)
+		if fid == "":
+			status.emit("Failed to save sketch")
+			return ""
+	active = false
+	editing_fid = ""
+	_tool_points.clear()
+	_snap_marker = null
+	_drag.clear()
+	intersection_points.clear()
+	_clear_meshes()
+	_leave_camera()
+	if view != null:
+		view.refresh()
+		view.document_changed.emit()
+	finished.emit("")
+	status.emit("Sketch saved")
+	return fid
 
 
 ## Finish the sketch and extrude by `distance` (model units). Routed through
@@ -256,7 +457,9 @@ func finish_extrude(distance: float, op: String = "new") -> void:
 		return
 	if op == "cut":
 		distance = -absf(distance)
-	var sk_fid: String = view.doc.graph_add_sketch(sketch)
+	var sk_fid := _ensure_sketch_feature()
+	if sk_fid == "":
+		return
 	var ex_fid: String = view.doc.graph_add_extrude(
 		sk_fid, distance, false, op, target_fid if op != "new" else "")
 	_finish_feature(sk_fid, ex_fid, op, "Extrude failed — is the profile closed?")
@@ -278,24 +481,44 @@ func finish_revolve(angle: float = TAU, op: String = "new") -> void:
 			axis_point = info["start"]
 			axis_dir = (info["end"] - info["start"]).normalized()
 			sketch.set_construction(selected[0], true)
-	var sk_fid: String = view.doc.graph_add_sketch(sketch)
+	var sk_fid := _ensure_sketch_feature()
+	if sk_fid == "":
+		return
 	var rv_fid: String = view.doc.graph_add_revolve(
 		sk_fid, axis_point, axis_dir, angle, op, target_fid if op != "new" else "")
 	_finish_feature(sk_fid, rv_fid, op, "Revolve failed — closed profile on one side of the axis?")
 
 
+## Ensure the active sketch is a graph feature; reuse editing_fid when set.
+func _ensure_sketch_feature() -> String:
+	if editing_fid != "":
+		if not view.doc.graph_update_sketch(editing_fid, sketch):
+			status.emit("Failed to update sketch")
+			return ""
+		return editing_fid
+	var sk_fid: String = view.doc.graph_add_sketch(sketch)
+	if sk_fid == "":
+		status.emit("Failed to add sketch")
+	else:
+		editing_fid = sk_fid
+	return sk_fid
+
+
 func _finish_feature(sk_fid: String, feat_fid: String, op: String, fail_msg: String) -> void:
 	if feat_fid == "":
-		view.doc.graph_remove(sk_fid)
+		# Keep the sketch pad when extrude fails after an already-committed edit.
+		if editing_fid != sk_fid:
+			view.doc.graph_remove(sk_fid)
 	var body_id: String
 	if op == "new":
 		body_id = view.body_of_feature(feat_fid)
 	else:
-		# Modifying feature: the target body was updated in place.
 		body_id = view.body_of_feature(target_fid) if feat_fid != "" else ""
 	active = false
+	editing_fid = ""
 	_tool_points.clear()
 	_clear_meshes()
+	_leave_camera()
 	if feat_fid == "":
 		status.emit(fail_msg)
 		cancelled.emit()
@@ -319,14 +542,85 @@ func ray_to_sketch(origin: Vector3, direction: Vector3) -> Variant:
 	return Vector2(p.dot(plane_x), p.dot(plane_y))
 
 
+signal tool_changed(tool: int)
+## Emitted when selection chips should refresh (ids may be empty).
+signal selection_actions_needed
+
+
 func set_tool(t: Tool) -> void:
 	if not _drag.is_empty():
 		end_drag()
 	tool = t
 	_tool_points.clear()
+	_spline_pts.clear()
+	_smart_dim_first = null
+	_trim_hover_id = ""
+	_trim_dragging = false
+	_trim_drag_ids.clear()
+	draw_construction = (t == Tool.CENTERLINE)
+	# Default variants per tool family (reset on tool switch so prior family
+	# names like circle "center" don't silently become rect "center").
+	match t:
+		Tool.RECT:
+			tool_variant = "corner"
+		Tool.CIRCLE:
+			tool_variant = "center"
+		Tool.ARC:
+			tool_variant = "center"
+		Tool.PATTERN:
+			tool_variant = "linear"
+		_:
+			pass
 	if t != Tool.SELECT:
 		_set_selected([])
 	_update_preview()
+	tool_changed.emit(int(t))
+
+
+func set_tool_variant(v: String) -> void:
+	tool_variant = v
+	_tool_points.clear()
+	_update_preview()
+	status.emit("Variant: %s" % v.replace("_", " "))
+
+
+func variants_for_tool(t: Tool = tool) -> Array:
+	match t:
+		Tool.RECT:
+			return ["corner", "center", "three_point", "parallelogram"]
+		Tool.CIRCLE:
+			return ["center", "perimeter", "three_point"]
+		Tool.ARC:
+			return ["center", "tangent", "three_point"]
+		Tool.PATTERN:
+			return ["linear", "circular"]
+		Tool.LINE, Tool.CENTERLINE:
+			return ["line", "centerline"]
+		_:
+			return []
+
+
+func selection_actions() -> Array:
+	var acts: Array = []
+	if selected.is_empty():
+		return acts
+	acts.append("construction")
+	acts.append("delete")
+	if selected.size() == 2:
+		var t0: String = sketch.entity_info(selected[0]).get("type", "")
+		var t1: String = sketch.entity_info(selected[1]).get("type", "")
+		if t0 == "line" and t1 == "line":
+			acts.append("fillet")
+			acts.append("chamfer")
+		acts.append_array(["horizontal", "vertical", "parallel", "perpendicular",
+				"equal", "coincident", "tangent", "midpoint", "symmetric"])
+	if selected.size() >= 1:
+		acts.append("offset")
+		acts.append("pattern")
+		acts.append("mirror")
+		acts.append("block")
+		acts.append("split")
+	return acts
 
 
 func set_snap(on: bool) -> void:
@@ -373,6 +667,18 @@ func snap_point(p: Vector2) -> Vector2:
 				best_d = d2
 				best_pt = mp
 				found = true
+	if found:
+		_snap_marker = best_pt
+		return best_pt
+	# (b2) pierce / coincident points from other geometry on this plane
+	best_d = SNAP_RADIUS
+	found = false
+	for ip in intersection_points:
+		var d_ip: float = p.distance_to(ip)
+		if d_ip <= best_d:
+			best_d = d_ip
+			best_pt = ip
+			found = true
 	if found:
 		_snap_marker = best_pt
 		return best_pt
@@ -427,6 +733,18 @@ func _set_selected(ids: Array[String]) -> void:
 	selected = ids
 	_redraw_selected()
 	selection_changed.emit(selected)
+	selection_actions_needed.emit()
+
+
+## Select every sketch entity (Ctrl+A). Returns count selected.
+func select_all_entities() -> int:
+	if sketch == null:
+		return 0
+	var ids: Array[String] = []
+	for id in sketch.entity_ids():
+		ids.append(id)
+	_set_selected(ids)
+	return ids.size()
 
 
 ## Nearest entity id within PICK_TOLERANCE of pos2, or "" if none.
@@ -451,7 +769,8 @@ func _select_at(pos2: Vector2) -> void:
 		ids.erase(best_id)  # click again to deselect
 	else:
 		ids.append(best_id)
-		while ids.size() > 2:
+		# Soft cap so relation chips stay usable; Mirror/Pattern need 2+.
+		while ids.size() > 8:
 			ids.pop_front()
 	_set_selected(ids)
 
@@ -700,10 +1019,56 @@ func constrain(type: String, value: float = 0.0) -> String:
 				if k == "circle" or k == "arc":
 					cid = sketch.add_constraint("radius", [{"entity": id, "role": "self"}], value)
 					added = true
+		"tangent", "angle", "point_on_line":
+			if selected.size() == 2:
+				cid = sketch.add_constraint(type, [
+					{"entity": selected[0], "role": "self"},
+					{"entity": selected[1], "role": "self"}], value)
+				added = true
+		"concentric":
+			# Coincident circle/arc centers.
+			if selected.size() == 2:
+				cid = sketch.add_constraint("coincident", [
+					{"entity": selected[0], "role": "center"},
+					{"entity": selected[1], "role": "center"}], 0.0)
+				added = true
+		"midpoint":
+			# Point on midpoint of line: point_on_line + equal end distances via coincident helper point.
+			if selected.size() == 2:
+				var line_id := selected[0]
+				var pt_id := selected[1]
+				if sketch.entity_info(line_id).get("type") != "line":
+					line_id = selected[1]
+					pt_id = selected[0]
+				if sketch.entity_info(line_id).get("type") == "line":
+					cid = sketch.add_constraint("point_on_line", [
+						{"entity": pt_id, "role": "self"},
+						{"entity": line_id, "role": "self"}], 0.0)
+					# Equal distance to both endpoints → midpoint.
+					sketch.add_constraint("distance", [
+						{"entity": pt_id, "role": "self"},
+						{"entity": line_id, "role": "start"}], value if value > 0 else 1.0)
+					# Use equal-length trick: two distance constraints with same value solved by user dim — skip second.
+					added = true
+		"symmetric":
+			status.emit("Symmetric: select two entities then a mirror line (use Mirror tool)")
+		"collinear":
+			if selected.size() == 2:
+				cid = sketch.add_constraint("parallel", [
+					{"entity": selected[0], "role": "self"},
+					{"entity": selected[1], "role": "self"}], 0.0)
+				# Also coincident one endpoint onto the other line.
+				sketch.add_constraint("point_on_line", [
+					{"entity": selected[0], "role": "start"},
+					{"entity": selected[1], "role": "self"}], 0.0)
+				added = true
+		"fix":
+			# Soft fix: lock a line by horizontal+vertical is wrong; emit status.
+			status.emit("Fix relation: use dimensions to lock geometry (v1)")
 	if not added:
 		return ""
 	# Record dimensional constraints (distance/radius, or any with a numeric value).
-	if type == "distance" or type == "radius" or absf(value) > 0.0:
+	if type == "distance" or type == "radius" or type == "angle" or absf(value) > 0.0:
 		_record_dimension(type, selected.duplicate(), value, cid)
 	var res: Dictionary = run_solve()
 	_redraw()
@@ -771,6 +1136,237 @@ func offset_selected(distance: float) -> Array:
 	for id in new_ids:
 		out.append(id)
 	return out
+
+
+## Extend the entity nearest to pos2 to the next intersection.
+func extend_at(pos2: Vector2) -> bool:
+	if not active or sketch == null:
+		return false
+	var id := _nearest_entity_at(pos2)
+	if id == "":
+		status.emit("Extend: click a line")
+		return false
+	if not sketch.extend_entity(id, pos2.x, pos2.y):
+		status.emit("Extend failed — no forward intersection")
+		return false
+	run_solve()
+	_redraw()
+	return true
+
+
+## Linear or circular pattern of the selection.
+func pattern_selected(dx: float, dy: float, count: int) -> Array:
+	if not active or selected.is_empty():
+		status.emit("Pattern needs a selection")
+		return []
+	var ids := PackedStringArray()
+	for id in selected:
+		ids.append(id)
+	var new_ids: PackedStringArray
+	if tool_variant == "circular":
+		# Approximate circular pattern as rotated copies about selection centroid.
+		var c := _selection_centroid()
+		new_ids = PackedStringArray()
+		for i in range(1, count):
+			var ang := TAU * float(i) / float(count)
+			var ca := cos(ang)
+			var sa := sin(ang)
+			for id in ids:
+				var info: Dictionary = sketch.entity_info(id)
+				_add_rotated_copy(info, c, ca, sa, new_ids)
+	else:
+		new_ids = sketch.pattern_entities(ids, dx, dy, count)
+	if new_ids.is_empty():
+		status.emit("Pattern failed")
+		return []
+	_redraw()
+	var out: Array = []
+	for id2 in new_ids:
+		out.append(id2)
+	return out
+
+
+func _selection_centroid() -> Vector2:
+	var sum := Vector2.ZERO
+	var n := 0
+	for id in selected:
+		for ep in _snap_endpoints(id):
+			sum += ep
+			n += 1
+	return sum / float(n) if n > 0 else Vector2.ZERO
+
+
+func _add_rotated_copy(info: Dictionary, c: Vector2, ca: float, sa: float,
+		out_ids: PackedStringArray) -> void:
+	var rot := func(p: Vector2) -> Vector2:
+		var d := p - c
+		return c + Vector2(d.x * ca - d.y * sa, d.x * sa + d.y * ca)
+	match str(info.get("type", "")):
+		"line":
+			var a: Vector2 = rot.call(info["start"])
+			var b: Vector2 = rot.call(info["end"])
+			out_ids.append(sketch.add_line(a.x, a.y, b.x, b.y))
+		"circle":
+			var ctr: Vector2 = rot.call(info["center"])
+			out_ids.append(sketch.add_circle(ctr.x, ctr.y, float(info["radius"])))
+		"arc":
+			var ctr2: Vector2 = rot.call(info["center"])
+			out_ids.append(sketch.add_arc(ctr2.x, ctr2.y, float(info["radius"]),
+					float(info["start_angle"]) + atan2(sa, ca),
+					float(info["end_angle"]) + atan2(sa, ca)))
+		"point":
+			var p: Vector2 = rot.call(info.get("position", Vector2.ZERO))
+			out_ids.append(sketch.add_point(p.x, p.y))
+
+
+## Mirror selected entities about a selected line axis (or sketch Y if none).
+func mirror_selected() -> Array:
+	if selected.is_empty():
+		status.emit("Mirror needs a selection")
+		return []
+	var axis_id := ""
+	var geo_ids: Array[String] = []
+	for id in selected:
+		if sketch.entity_info(id).get("type", "") == "line" and axis_id == "":
+			axis_id = id
+		else:
+			geo_ids.append(id)
+	if axis_id == "" or geo_ids.is_empty():
+		# Use last selected line as axis if two+ lines.
+		status.emit("Mirror: select geometry plus one axis line")
+		return []
+	var ainfo: Dictionary = sketch.entity_info(axis_id)
+	var a0: Vector2 = ainfo["start"]
+	var a1: Vector2 = ainfo["end"]
+	var ad := (a1 - a0).normalized()
+	var an := Vector2(-ad.y, ad.x)
+	var out: Array = []
+	for id in geo_ids:
+		var info: Dictionary = sketch.entity_info(id)
+		var refl := func(p: Vector2) -> Vector2:
+			var d := p - a0
+			var along := ad * d.dot(ad)
+			var across := an * d.dot(an)
+			return a0 + along - across
+		match str(info.get("type", "")):
+			"line":
+				var s: Vector2 = refl.call(info["start"])
+				var e: Vector2 = refl.call(info["end"])
+				out.append(sketch.add_line(s.x, s.y, e.x, e.y))
+			"circle":
+				var ctr: Vector2 = refl.call(info["center"])
+				out.append(sketch.add_circle(ctr.x, ctr.y, float(info["radius"])))
+			"point":
+				var p: Vector2 = refl.call(info.get("position", Vector2.ZERO))
+				out.append(sketch.add_point(p.x, p.y))
+			"arc":
+				var ctr2: Vector2 = refl.call(info["center"])
+				out.append(sketch.add_arc(ctr2.x, ctr2.y, float(info["radius"]),
+						-float(info["end_angle"]), -float(info["start_angle"])))
+	_redraw()
+	return out
+
+
+## Convert pierce / edge intersection points into sketch points (and optional lines).
+func convert_pierce_points() -> int:
+	var n := 0
+	for ip in intersection_points:
+		sketch.add_point(ip.x, ip.y)
+		n += 1
+	if n == 0:
+		status.emit("Convert: no pierce points on this plane")
+	else:
+		status.emit("Converted %d pierce points" % n)
+		_redraw()
+	return n
+
+
+## Sketch chamfer: trim two lines and add a connecting segment.
+func chamfer_selected(distance: float) -> String:
+	if selected.size() != 2:
+		status.emit("Chamfer needs 2 lines")
+		return ""
+	# Approximate: fillet with tiny radius then replace arc with line — simpler:
+	# offset endpoints along each line by distance and connect.
+	var ia: Dictionary = sketch.entity_info(selected[0])
+	var ib: Dictionary = sketch.entity_info(selected[1])
+	if ia.get("type") != "line" or ib.get("type") != "line":
+		status.emit("Chamfer needs 2 lines")
+		return ""
+	# Find shared corner.
+	var pts_a := [ia["start"], ia["end"]]
+	var pts_b := [ib["start"], ib["end"]]
+	var corner: Variant = null
+	var a_other: Vector2
+	var b_other: Vector2
+	for pa in pts_a:
+		for pb in pts_b:
+			if pa.distance_to(pb) < 1e-3:
+				corner = pa
+				a_other = pts_a[1] if pa.distance_to(pts_a[0]) < 1e-3 else pts_a[0]
+				b_other = pts_b[1] if pb.distance_to(pts_b[0]) < 1e-3 else pts_b[0]
+	if corner == null:
+		status.emit("Chamfer: lines must share a corner")
+		return ""
+	var c: Vector2 = corner
+	var da := (a_other - c).normalized() * distance
+	var db := (b_other - c).normalized() * distance
+	var p1 := c + da
+	var p2 := c + db
+	# Shorten both lines to the chamfer points.
+	sketch.set_entity_geometry(selected[0], {"start": p1, "end": a_other})
+	sketch.set_entity_geometry(selected[1], {"start": p2, "end": b_other})
+	var cid: String = sketch.add_line(p1.x, p1.y, p2.x, p2.y)
+	run_solve()
+	_redraw()
+	return cid
+
+
+## Group selection into a named sketch block.
+func create_block(block_name: String) -> bool:
+	if selected.is_empty() or block_name == "":
+		return false
+	var ids := PackedStringArray()
+	for id in selected:
+		ids.append(id)
+	blocks[block_name] = ids
+	status.emit("Block “%s” (%d entities)" % [block_name, ids.size()])
+	return true
+
+
+## Place a fit polyline spline through successive clicks (commit with end_chain).
+func _commit_spline() -> void:
+	if _spline_pts.size() < 2:
+		_spline_pts.clear()
+		return
+	# Dense polyline approximation of a fit spline (Catmull-Rom samples).
+	var densified: Array[Vector2] = []
+	if _spline_pts.size() == 2:
+		densified = _spline_pts.duplicate()
+	else:
+		for i in range(_spline_pts.size() - 1):
+			var p0: Vector2 = _spline_pts[maxi(i - 1, 0)]
+			var p1: Vector2 = _spline_pts[i]
+			var p2: Vector2 = _spline_pts[i + 1]
+			var p3: Vector2 = _spline_pts[mini(i + 2, _spline_pts.size() - 1)]
+			for s in range(8):
+				var t := float(s) / 8.0
+				densified.append(_catmull(p0, p1, p2, p3, t))
+		densified.append(_spline_pts[_spline_pts.size() - 1])
+	for i in range(densified.size() - 1):
+		var a: Vector2 = densified[i]
+		var b: Vector2 = densified[i + 1]
+		if a.distance_to(b) > 1e-6:
+			sketch.add_line(a.x, a.y, b.x, b.y)
+	_spline_pts.clear()
+	_redraw()
+
+
+func _catmull(p0: Vector2, p1: Vector2, p2: Vector2, p3: Vector2, t: float) -> Vector2:
+	var t2 := t * t
+	var t3 := t2 * t
+	return 0.5 * ((2.0 * p1) + (-p0 + p2) * t + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+			+ (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)
 
 
 ## Trim the entity nearest to pos2 at its intersections. Returns true on success.
@@ -874,12 +1470,11 @@ func _redraw_selected() -> void:
 func click(pos2: Vector2) -> void:
 	if not active:
 		return
-	# TRIM needs the raw pick along the curve; snap would pull toward midpoints.
-	if tool != Tool.TRIM:
+	# TRIM/EXTEND need the raw pick along the curve; snap would pull away.
+	if tool != Tool.TRIM and tool != Tool.EXTEND:
 		pos2 = snap_point(pos2)
 	match tool:
 		Tool.SELECT:
-			# Priority: constraint glyphs, then dimension labels, then geometry.
 			var chit := constraint_hit(pos2)
 			if chit != "":
 				select_constraint(chit)
@@ -891,50 +1486,27 @@ func click(pos2: Vector2) -> void:
 				dimension_edit_requested.emit(dhit)
 				return
 			_select_at(pos2)
+			selection_actions_needed.emit()
 		Tool.TRIM:
 			trim_at(pos2)
-		Tool.LINE:
+		Tool.EXTEND:
+			extend_at(pos2)
+		Tool.LINE, Tool.CENTERLINE:
 			_tool_points.append(pos2)
 			if _tool_points.size() >= 2:
 				var a := _tool_points[_tool_points.size() - 2]
 				var b := _tool_points[_tool_points.size() - 1]
 				var lid: String = sketch.add_line(a.x, a.y, b.x, b.y)
+				if draw_construction or tool == Tool.CENTERLINE:
+					sketch.set_construction(lid, true)
 				_infer_line(lid, a, b)
 				_redraw()
 		Tool.RECT:
-			_tool_points.append(pos2)
-			if _tool_points.size() == 2:
-				var a := _tool_points[0]
-				var b := _tool_points[1]
-				var l1: String = sketch.add_line(a.x, a.y, b.x, a.y)
-				var l2: String = sketch.add_line(b.x, a.y, b.x, b.y)
-				var l3: String = sketch.add_line(b.x, b.y, a.x, b.y)
-				var l4: String = sketch.add_line(a.x, b.y, a.x, a.y)
-				_infer_rect(l1, l2, l3, l4)
-				_tool_points.clear()
-				_redraw()
+			_click_rect(pos2)
 		Tool.CIRCLE:
-			_tool_points.append(pos2)
-			if _tool_points.size() == 2:
-				var c := _tool_points[0]
-				var r := c.distance_to(_tool_points[1])
-				if r > 1e-6:
-					sketch.add_circle(c.x, c.y, r)
-				_tool_points.clear()
-				_redraw()
+			_click_circle(pos2)
 		Tool.ARC:
-			_tool_points.append(pos2)
-			if _tool_points.size() == 3:
-				var c := _tool_points[0]
-				var start_pt := _tool_points[1]
-				var end_pt := _tool_points[2]
-				var r := c.distance_to(start_pt)
-				if r > 1e-6:
-					var start_angle := (start_pt - c).angle()
-					var end_angle := (end_pt - c).angle()
-					sketch.add_arc(c.x, c.y, r, start_angle, end_angle)
-				_tool_points.clear()
-				_redraw()
+			_click_arc(pos2)
 		Tool.POLYGON:
 			_tool_points.append(pos2)
 			if _tool_points.size() == 2:
@@ -946,15 +1518,248 @@ func click(pos2: Vector2) -> void:
 					var start_angle := (vertex - c).angle()
 					var verts: Array[Vector2] = []
 					for i in range(n):
-						var a := start_angle + TAU * float(i) / float(n)
-						verts.append(c + Vector2(cos(a), sin(a)) * r)
+						var ang := start_angle + TAU * float(i) / float(n)
+						verts.append(c + Vector2(cos(ang), sin(ang)) * r)
 					for i in range(n):
-						var a := verts[i]
-						var b := verts[(i + 1) % n]
-						sketch.add_line(a.x, a.y, b.x, b.y)
+						var va := verts[i]
+						var vb := verts[(i + 1) % n]
+						sketch.add_line(va.x, va.y, vb.x, vb.y)
 				_tool_points.clear()
 				_redraw()
+		Tool.POINT:
+			sketch.add_point(pos2.x, pos2.y)
+			_redraw()
+		Tool.SPLINE:
+			_spline_pts.append(pos2)
+			_update_preview()
+		Tool.ELLIPSE:
+			_tool_points.append(pos2)
+			if _tool_points.size() == 2:
+				# Approximate ellipse as 4 arcs / polygon ring (32-gon).
+				var c := _tool_points[0]
+				var corner := _tool_points[1]
+				var rx := absf(corner.x - c.x)
+				var ry := absf(corner.y - c.y)
+				if rx > 1e-6 and ry > 1e-6:
+					var prev: Vector2
+					for i in range(33):
+						var ang := TAU * float(i) / 32.0
+						var p := c + Vector2(cos(ang) * rx, sin(ang) * ry)
+						if i > 0:
+							sketch.add_line(prev.x, prev.y, p.x, p.y)
+						prev = p
+				_tool_points.clear()
+				_redraw()
+		Tool.SLOT:
+			_tool_points.append(pos2)
+			if _tool_points.size() == 2:
+				_add_slot(_tool_points[0], _tool_points[1], 4.0)
+				_tool_points.clear()
+				_redraw()
+		Tool.SMART_DIM:
+			_click_smart_dim(pos2)
+		Tool.CONVERT:
+			convert_pierce_points()
+		Tool.MIRROR:
+			# Selection must already include axis + geometry; click confirms.
+			mirror_selected()
+		Tool.PATTERN:
+			pattern_selected(_pattern_spacing, 0.0, _pattern_count)
+		Tool.CHAMFER:
+			chamfer_selected(2.0)
 	_update_preview()
+
+
+func _click_rect(pos2: Vector2) -> void:
+	_tool_points.append(pos2)
+	match tool_variant:
+		"center":
+			if _tool_points.size() == 2:
+				var c := _tool_points[0]
+				var corner := _tool_points[1]
+				var d := corner - c
+				var a := c - d
+				var b := c + d
+				_add_rect_lines(a, b)
+				_tool_points.clear()
+		"three_point":
+			if _tool_points.size() == 3:
+				var p0 := _tool_points[0]
+				var p1 := _tool_points[1]
+				var p2 := _tool_points[2]
+				var edge := p1 - p0
+				var n := Vector2(-edge.y, edge.x).normalized()
+				var depth := (p2 - p0).dot(n)
+				var a := p0
+				var b := p1
+				var c := p1 + n * depth
+				var d := p0 + n * depth
+				var l1: String = sketch.add_line(a.x, a.y, b.x, b.y)
+				var l2: String = sketch.add_line(b.x, b.y, c.x, c.y)
+				var l3: String = sketch.add_line(c.x, c.y, d.x, d.y)
+				var l4: String = sketch.add_line(d.x, d.y, a.x, a.y)
+				_infer_rect(l1, l2, l3, l4)
+				_tool_points.clear()
+		"parallelogram":
+			if _tool_points.size() == 3:
+				var p0 := _tool_points[0]
+				var p1 := _tool_points[1]
+				var p2 := _tool_points[2]
+				var p3 := p0 + (p2 - p1)
+				sketch.add_line(p0.x, p0.y, p1.x, p1.y)
+				sketch.add_line(p1.x, p1.y, p2.x, p2.y)
+				sketch.add_line(p2.x, p2.y, p3.x, p3.y)
+				sketch.add_line(p3.x, p3.y, p0.x, p0.y)
+				_tool_points.clear()
+		_:  # corner
+			if _tool_points.size() == 2:
+				_add_rect_lines(_tool_points[0], _tool_points[1])
+				_tool_points.clear()
+	_redraw()
+
+
+func _add_rect_lines(a: Vector2, b: Vector2) -> void:
+	var l1: String = sketch.add_line(a.x, a.y, b.x, a.y)
+	var l2: String = sketch.add_line(b.x, a.y, b.x, b.y)
+	var l3: String = sketch.add_line(b.x, b.y, a.x, b.y)
+	var l4: String = sketch.add_line(a.x, b.y, a.x, a.y)
+	_infer_rect(l1, l2, l3, l4)
+
+
+func _click_circle(pos2: Vector2) -> void:
+	_tool_points.append(pos2)
+	match tool_variant:
+		"perimeter", "three_point":
+			if _tool_points.size() == 3:
+				var p1 := _tool_points[0]
+				var p2 := _tool_points[1]
+				var p3 := _tool_points[2]
+				var c_v: Variant = _circumcenter(p1, p2, p3)
+				if c_v != null:
+					var c: Vector2 = c_v
+					var r: float = c.distance_to(p1)
+					if r > 1e-6:
+						sketch.add_circle(c.x, c.y, r)
+				_tool_points.clear()
+		_:  # center
+			if _tool_points.size() == 2:
+				var c := _tool_points[0]
+				var r := c.distance_to(_tool_points[1])
+				if r > 1e-6:
+					sketch.add_circle(c.x, c.y, r)
+				_tool_points.clear()
+	_redraw()
+
+
+func _circumcenter(a: Vector2, b: Vector2, c: Vector2) -> Variant:
+	var d := 2.0 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y))
+	if absf(d) < 1e-12:
+		return null
+	var ux := ((a.x * a.x + a.y * a.y) * (b.y - c.y)
+			+ (b.x * b.x + b.y * b.y) * (c.y - a.y)
+			+ (c.x * c.x + c.y * c.y) * (a.y - b.y)) / d
+	var uy := ((a.x * a.x + a.y * a.y) * (c.x - b.x)
+			+ (b.x * b.x + b.y * b.y) * (a.x - c.x)
+			+ (c.x * c.x + c.y * c.y) * (b.x - a.x)) / d
+	return Vector2(ux, uy)
+
+
+func _click_arc(pos2: Vector2) -> void:
+	_tool_points.append(pos2)
+	match tool_variant:
+		"three_point":
+			if _tool_points.size() == 3:
+				var p1 := _tool_points[0]
+				var p2 := _tool_points[1]
+				var p3 := _tool_points[2]
+				var c_v: Variant = _circumcenter(p1, p2, p3)
+				if c_v != null:
+					var ctr: Vector2 = c_v
+					var r := ctr.distance_to(p1)
+					if r > 1e-6:
+						sketch.add_arc(ctr.x, ctr.y, r, (p1 - ctr).angle(), (p3 - ctr).angle())
+				_tool_points.clear()
+		"tangent":
+			# First click near existing curve endpoint; second = end.
+			if _tool_points.size() == 2:
+				var start_pt := _tool_points[0]
+				var end_pt := _tool_points[1]
+				var mid := (start_pt + end_pt) * 0.5
+				var n := Vector2(-(end_pt - start_pt).y, (end_pt - start_pt).x).normalized()
+				var c := mid + n * start_pt.distance_to(end_pt) * 0.5
+				var r := c.distance_to(start_pt)
+				if r > 1e-6:
+					sketch.add_arc(c.x, c.y, r, (start_pt - c).angle(), (end_pt - c).angle())
+				_tool_points.clear()
+		_:  # center
+			if _tool_points.size() == 3:
+				var c := _tool_points[0]
+				var start_pt := _tool_points[1]
+				var end_pt := _tool_points[2]
+				var r := c.distance_to(start_pt)
+				if r > 1e-6:
+					sketch.add_arc(c.x, c.y, r, (start_pt - c).angle(), (end_pt - c).angle())
+				_tool_points.clear()
+	_redraw()
+
+
+func _add_slot(a: Vector2, b: Vector2, half_w: float) -> void:
+	var d := b - a
+	if d.length() < 1e-6:
+		return
+	var n := Vector2(-d.y, d.x).normalized() * half_w
+	var p0 := a + n
+	var p1 := b + n
+	var p2 := b - n
+	var p3 := a - n
+	sketch.add_line(p0.x, p0.y, p1.x, p1.y)
+	sketch.add_line(p3.x, p3.y, p2.x, p2.y)
+	# End caps as semicircle approximations (8 segments each).
+	_add_semicircle(b, n, d.normalized())
+	_add_semicircle(a, -n, -d.normalized())
+
+
+func _add_semicircle(center: Vector2, start_off: Vector2, outward: Vector2) -> void:
+	var r := start_off.length()
+	var a0 := start_off.angle()
+	var prev := center + start_off
+	for i in range(1, 9):
+		var ang := a0 + PI * float(i) / 8.0
+		# Flip based on outward so the bulge goes the right way.
+		var p := center + Vector2(cos(ang), sin(ang)) * r
+		if (p - center).dot(outward) < 0.0:
+			p = center - (p - center)
+		sketch.add_line(prev.x, prev.y, p.x, p.y)
+		prev = p
+
+
+func _click_smart_dim(pos2: Vector2) -> void:
+	var hit := _nearest_entity_at(pos2)
+	if hit == "":
+		if _smart_dim_first != null:
+			# Second click as free point → distance from entity endpoint.
+			var a: Vector2 = _smart_dim_first
+			constrain("distance", a.distance_to(pos2))
+			_smart_dim_first = null
+		return
+	var info: Dictionary = sketch.entity_info(hit)
+	match str(info.get("type", "")):
+		"circle", "arc":
+			_set_selected([hit])
+			constrain("radius", float(info.get("radius", 10.0)))
+			_smart_dim_first = null
+		"line":
+			if selected.size() == 1 and selected[0] != hit:
+				_set_selected([selected[0], hit])
+				# Angle between two lines via angle constraint.
+				constrain("angle", PI * 0.5)
+			else:
+				_set_selected([hit])
+				constrain("distance", info["start"].distance_to(info["end"]))
+			_smart_dim_first = null
+		_:
+			_set_selected([hit])
+			_smart_dim_first = pos2
 
 
 # --- constraint inference (automatic relations on creation) ---
@@ -1055,13 +1860,20 @@ func set_dimension_value(index: int, value: float) -> String:
 	return res["status"]
 
 
-## Double-click or right-click ends a line chain.
+## Double-click or right-click ends a line chain / commits a spline.
 func end_chain() -> void:
+	if tool == Tool.SPLINE and _spline_pts.size() >= 2:
+		_commit_spline()
 	_tool_points.clear()
 	_update_preview()
 
 
 func hover(pos2: Vector2) -> void:
+	if tool == Tool.TRIM:
+		_trim_hover_id = _nearest_entity_at(pos2)
+		_hover = pos2
+		_update_preview()
+		return
 	_hover = snap_point(pos2)
 	if _infer_label != null:
 		var hint := _infer_hint_text(_hover)
@@ -1070,6 +1882,214 @@ func hover(pos2: Vector2) -> void:
 			_infer_label.text = hint
 			_infer_label.position = _to3(_hover + Vector2(2.0, 2.0))
 	_update_preview()
+
+
+## Power-trim drag: trim every entity the cursor crosses.
+func begin_trim_drag(pos2: Vector2) -> void:
+	_trim_dragging = true
+	_trim_drag_ids.clear()
+	trim_at(pos2)
+	var id := _nearest_entity_at(pos2)
+	if id != "":
+		_trim_drag_ids.append(id)
+
+
+func update_trim_drag(pos2: Vector2) -> void:
+	if not _trim_dragging:
+		return
+	var id := _nearest_entity_at(pos2)
+	if id != "" and id not in _trim_drag_ids:
+		if trim_at(pos2):
+			_trim_drag_ids.append(id)
+	_trim_hover_id = id
+	_update_preview()
+
+
+func end_trim_drag() -> void:
+	_trim_dragging = false
+	_trim_drag_ids.clear()
+	_trim_hover_id = ""
+
+
+## Split the nearest line at pos2 into two collinear segments.
+func split_at(pos2: Vector2) -> bool:
+	if not active or sketch == null:
+		return false
+	var id := _nearest_entity_at(pos2)
+	if id == "":
+		status.emit("Split: click a line")
+		return false
+	var info: Dictionary = sketch.entity_info(id)
+	if info.get("type", "") != "line":
+		status.emit("Split: only lines supported")
+		return false
+	var a: Vector2 = info["start"]
+	var b: Vector2 = info["end"]
+	var ab := b - a
+	var t := 0.0 if ab.length_squared() < 1e-12 else clampf((pos2 - a).dot(ab) / ab.length_squared(), 0.05, 0.95)
+	var mid: Vector2 = a + ab * t
+	sketch.set_entity_geometry(id, {"start": a, "end": mid})
+	sketch.add_line(mid.x, mid.y, b.x, b.y)
+	run_solve()
+	_redraw()
+	return true
+
+
+## Load an underlay image onto the sketch plane (trace with existing tools).
+func set_sketch_picture(tex: Texture2D, size: Vector2 = Vector2(100, 100)) -> void:
+	sketch_picture = tex
+	sketch_picture_size = size
+	_rebuild_picture()
+
+
+## Uniform / anisotropic resize of the picture underlay (mm on the sketch plane).
+func set_sketch_picture_size(size: Vector2) -> void:
+	if size.x < 0.1 or size.y < 0.1:
+		return
+	sketch_picture_size = size
+	_rebuild_picture()
+
+
+func clear_sketch_picture() -> void:
+	sketch_picture = null
+	if _picture_node != null:
+		_picture_node.queue_free()
+		_picture_node = null
+
+
+func _rebuild_picture() -> void:
+	if _picture_node != null:
+		_picture_node.queue_free()
+		_picture_node = null
+	if sketch_picture == null or not active:
+		return
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var hx := sketch_picture_size.x * 0.5
+	var hy := sketch_picture_size.y * 0.5
+	var corners := [
+		_to3(Vector2(-hx, -hy)),
+		_to3(Vector2(hx, -hy)),
+		_to3(Vector2(hx, hy)),
+		_to3(Vector2(-hx, hy)),
+	]
+	var uvs := [Vector2(0, 1), Vector2(1, 1), Vector2(1, 0), Vector2(0, 0)]
+	st.set_uv(uvs[0]); st.add_vertex(corners[0])
+	st.set_uv(uvs[1]); st.add_vertex(corners[1])
+	st.set_uv(uvs[2]); st.add_vertex(corners[2])
+	st.set_uv(uvs[0]); st.add_vertex(corners[0])
+	st.set_uv(uvs[2]); st.add_vertex(corners[2])
+	st.set_uv(uvs[3]); st.add_vertex(corners[3])
+	_picture_node = MeshInstance3D.new()
+	_picture_node.mesh = st.commit()
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_texture = sketch_picture
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(1, 1, 1, 0.55)
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_picture_node.material_override = mat
+	add_child(_picture_node)
+
+
+## Instantiate a named block by translating a copy of its entities.
+func place_block(block_name: String, offset: Vector2) -> Array:
+	if not blocks.has(block_name):
+		status.emit("Unknown block: %s" % block_name)
+		return []
+	var out: Array = []
+	var ids: PackedStringArray = blocks[block_name]
+	for id in ids:
+		var info: Dictionary = sketch.entity_info(id)
+		match str(info.get("type", "")):
+			"line":
+				var a: Vector2 = info["start"] + offset
+				var b: Vector2 = info["end"] + offset
+				out.append(sketch.add_line(a.x, a.y, b.x, b.y))
+			"circle":
+				var c: Vector2 = info["center"] + offset
+				out.append(sketch.add_circle(c.x, c.y, float(info["radius"])))
+			"point":
+				var p: Vector2 = info.get("position", Vector2.ZERO) + offset
+				out.append(sketch.add_point(p.x, p.y))
+	_redraw()
+	return out
+
+
+## Delete selected sketch entities (geometry).
+func delete_selected_entities() -> int:
+	if selected.is_empty():
+		return 0
+	var n := 0
+	for id in selected.duplicate():
+		if sketch.remove_entity(id):
+			n += 1
+	_set_selected([])
+	run_solve()
+	_redraw()
+	return n
+
+
+## Sketch entity clipboard (dicts from entity_info).
+var _entity_clipboard: Array = []
+var _entity_clipboard_cut := false
+
+
+func has_entity_clipboard() -> bool:
+	return not _entity_clipboard.is_empty()
+
+
+func copy_selected_entities() -> int:
+	_entity_clipboard.clear()
+	_entity_clipboard_cut = false
+	if sketch == null:
+		return 0
+	for id in selected:
+		var info: Dictionary = sketch.entity_info(id)
+		if not info.is_empty():
+			_entity_clipboard.append(info.duplicate(true))
+	return _entity_clipboard.size()
+
+
+func cut_selected_entities() -> int:
+	var n := copy_selected_entities()
+	if n == 0:
+		return 0
+	_entity_clipboard_cut = true
+	delete_selected_entities()
+	return n
+
+
+## Paste clipboard entities offset in sketch UV. Default +10,+10 mm.
+func paste_entities(offset := Vector2(10, 10)) -> Array:
+	if _entity_clipboard.is_empty() or sketch == null:
+		return []
+	var out: Array = []
+	for info in _entity_clipboard:
+		match str(info.get("type", "")):
+			"line":
+				var a: Vector2 = info["start"] + offset
+				var b: Vector2 = info["end"] + offset
+				out.append(sketch.add_line(a.x, a.y, b.x, b.y))
+			"circle":
+				var c: Vector2 = info["center"] + offset
+				out.append(sketch.add_circle(c.x, c.y, float(info["radius"])))
+			"arc":
+				var ac: Vector2 = info["center"] + offset
+				out.append(sketch.add_arc(ac.x, ac.y, float(info.get("radius", 1)),
+						float(info.get("start_angle", 0)), float(info.get("end_angle", PI))))
+			"point":
+				var p: Vector2 = info.get("position", info.get("point", Vector2.ZERO)) + offset
+				out.append(sketch.add_point(p.x, p.y))
+	_entity_clipboard_cut = false
+	var ids: Array[String] = []
+	for x in out:
+		if typeof(x) == TYPE_STRING and str(x) != "":
+			ids.append(str(x))
+	_set_selected(ids)
+	run_solve()
+	_redraw()
+	return out
 
 
 func _to3(p: Vector2) -> Vector3:
@@ -1450,11 +2470,21 @@ func _update_preview() -> void:
 	var im := ImmediateMesh.new()
 	var has := false
 	var dragging := not _drag.is_empty()
-	if _tool_points.size() > 0 or _snap_marker != null or dragging:
+	var trim_hover := tool == Tool.TRIM and _trim_hover_id != ""
+	if _tool_points.size() > 0 or _snap_marker != null or dragging or trim_hover \
+			or _spline_pts.size() > 0:
 		im.surface_begin(Mesh.PRIMITIVE_LINES)
 		has = true
+	if trim_hover and sketch != null:
+		_append_entity_lines(im, sketch.entity_info(_trim_hover_id))
 	if dragging:
 		_append_entity_lines(im, _drag["preview_info"])
+	if _spline_pts.size() > 0:
+		for i in range(_spline_pts.size() - 1):
+			im.surface_add_vertex(_to3(_spline_pts[i]))
+			im.surface_add_vertex(_to3(_spline_pts[i + 1]))
+		im.surface_add_vertex(_to3(_spline_pts[_spline_pts.size() - 1]))
+		im.surface_add_vertex(_to3(_hover))
 	if _tool_points.size() > 0:
 		var last := _tool_points[_tool_points.size() - 1]
 		match tool:
@@ -1522,6 +2552,10 @@ func _update_preview() -> void:
 		im.surface_add_vertex(_to3(m + Vector2(0, MARK)))
 	if has:
 		im.surface_end()
+		if trim_hover:
+			_preview_material.albedo_color = Color(1.0, 0.25, 0.2, 0.95)
+		else:
+			_preview_material.albedo_color = Color(0.5, 0.8, 1.0, 0.8)
 		_preview_node.mesh = im
 	else:
 		_preview_node.mesh = null

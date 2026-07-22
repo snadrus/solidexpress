@@ -7,6 +7,7 @@
 #include "sx/document.hpp"
 #include "sx/features.hpp"
 #include "sx/interop.hpp"
+#include "sx/measure.hpp"
 #include "sx/shape_utils.hpp"
 
 using namespace sx;
@@ -98,6 +99,63 @@ TEST_CASE("featimport: STEP base feature volume, scale, suppress, failure, json"
 
     REQUIRE(std::string(to_string(FeatureType::ImportStep)) == "import_step");
     REQUIRE(feature_type_from_string("import_step") == FeatureType::ImportStep);
+
+    std::remove(path);
+}
+
+TEST_CASE("featimport: STL base feature volume, scale, json", "[featimport]") {
+    const char* path = "/tmp/sx_featimport_box.stl";
+    std::remove(path);
+
+    Document src;
+    src.add_body(shape::make_box(10, 20, 30), "Box");
+    std::string err;
+    REQUIRE(interop::export_stl(src, path, true, &err));
+    REQUIRE(err.empty());
+
+    Document doc;
+    FeatureGraph graph;
+
+    Feature imp;
+    imp.type = FeatureType::ImportStl;
+    imp.params = {{"path", std::string(path)}, {"scale", 1.0}};
+    auto fid = graph.add(std::move(imp));
+
+    REQUIRE(graph.regenerate(doc, &err));
+    EntityId body_id = graph.feature(fid)->output_body;
+    REQUIRE_FALSE(body_id.is_null());
+    const Body* b = doc.body(body_id);
+    REQUIRE(b != nullptr);
+    REQUIRE(shape::is_valid(b->shape));
+    REQUIRE(shape::count(b->shape).faces > 0);
+
+    // Scale 2 → linear extents roughly ×2 (tessellated mesh; bbox check).
+    json p = graph.feature(fid)->params;
+    p["scale"] = 2.0;
+    REQUIRE(graph.set_params(fid, p));
+    REQUIRE(graph.regenerate(doc, &err));
+    REQUIRE(graph.feature(fid)->output_body == body_id);
+    auto bb1 = measure::bounding_box(doc, body_id);
+    REQUIRE(bb1.has_value());
+    // At scale 2 the AABB extents should be ~2× the unit-scale mesh.
+    Document unit;
+    FeatureGraph g0;
+    Feature u;
+    u.type = FeatureType::ImportStl;
+    u.params = {{"path", std::string(path)}, {"scale", 1.0}};
+    auto ufid = g0.add(std::move(u));
+    REQUIRE(g0.regenerate(unit, &err));
+    auto bb0 = measure::bounding_box(unit, g0.feature(ufid)->output_body);
+    REQUIRE(bb0.has_value());
+    REQUIRE((bb1->max[0] - bb1->min[0]) ==
+            Approx((bb0->max[0] - bb0->min[0]) * 2.0).epsilon(1e-3));
+
+    FeatureGraph restored = FeatureGraph::from_json(graph.to_json());
+    REQUIRE(restored.feature(fid)->type == FeatureType::ImportStl);
+    REQUIRE(restored.feature(fid)->params == graph.feature(fid)->params);
+
+    REQUIRE(std::string(to_string(FeatureType::ImportStl)) == "import_stl");
+    REQUIRE(feature_type_from_string("import_stl") == FeatureType::ImportStl);
 
     std::remove(path);
 }

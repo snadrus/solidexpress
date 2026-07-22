@@ -43,6 +43,10 @@ SxSketch::SxSketch()
     : sketch_(std::make_shared<sx::Sketch>("Sketch")),
       solver_(sx::make_planegcs_backend()) {}
 
+void SxSketch::adopt(std::shared_ptr<sx::Sketch> sketch) {
+    if (sketch) sketch_ = std::move(sketch);
+}
+
 void SxSketch::set_plane(const Vector3& origin, const Vector3& x_dir, const Vector3& y_dir) {
     sx::SketchPlane plane;
     plane.origin = {origin.x, origin.y, origin.z};
@@ -51,6 +55,18 @@ void SxSketch::set_plane(const Vector3& origin, const Vector3& x_dir, const Vect
     // Sketch plane is immutable per sketch (features depend on it); recreate,
     // carrying nothing — callers set the plane before drawing.
     sketch_ = std::make_shared<sx::Sketch>(sketch_->name(), plane);
+}
+
+Dictionary SxSketch::plane_info() const {
+    Dictionary out;
+    if (!sketch_) return out;
+    const auto& p = sketch_->plane();
+    out["origin"] = Vector3(p.origin[0], p.origin[1], p.origin[2]);
+    out["x_dir"] = Vector3(p.x_dir[0], p.x_dir[1], p.x_dir[2]);
+    out["y_dir"] = Vector3(p.y_dir[0], p.y_dir[1], p.y_dir[2]);
+    auto n = p.normal();
+    out["normal"] = Vector3(n[0], n[1], n[2]);
+    return out;
 }
 
 String SxSketch::add_point(double x, double y) {
@@ -103,6 +119,21 @@ PackedStringArray SxSketch::offset_entities(const PackedStringArray& ids,
 
 bool SxSketch::trim_entity(const String& id, double px, double py) {
     return sx::sketch_tools::trim_entity(*sketch_, to_std(id), px, py);
+}
+
+bool SxSketch::extend_entity(const String& id, double px, double py) {
+    return sx::sketch_tools::extend_entity(*sketch_, to_std(id), px, py);
+}
+
+PackedStringArray SxSketch::pattern_entities(const PackedStringArray& ids,
+                                             double dx, double dy, int count) {
+    std::vector<std::string> entity_ids;
+    entity_ids.reserve(ids.size());
+    for (int i = 0; i < ids.size(); ++i) entity_ids.push_back(to_std(ids[i]));
+    auto result = sx::sketch_tools::pattern_entities(*sketch_, entity_ids, dx, dy, count);
+    PackedStringArray out;
+    for (const auto& rid : result) out.push_back(to_gd(rid));
+    return out;
 }
 
 Dictionary SxSketch::entity_info(const String& id) const {
@@ -254,6 +285,7 @@ Dictionary SxSketch::solve() {
 
 void SxSketch::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_plane", "origin", "x_dir", "y_dir"), &SxSketch::set_plane);
+    ClassDB::bind_method(D_METHOD("plane_info"), &SxSketch::plane_info);
     ClassDB::bind_method(D_METHOD("add_point", "x", "y"), &SxSketch::add_point);
     ClassDB::bind_method(D_METHOD("add_line", "x1", "y1", "x2", "y2"), &SxSketch::add_line);
     ClassDB::bind_method(D_METHOD("add_circle", "cx", "cy", "r"), &SxSketch::add_circle);
@@ -268,6 +300,10 @@ void SxSketch::_bind_methods() {
                          &SxSketch::offset_entities);
     ClassDB::bind_method(D_METHOD("trim_entity", "id", "px", "py"),
                          &SxSketch::trim_entity);
+    ClassDB::bind_method(D_METHOD("extend_entity", "id", "px", "py"),
+                         &SxSketch::extend_entity);
+    ClassDB::bind_method(D_METHOD("pattern_entities", "ids", "dx", "dy", "count"),
+                         &SxSketch::pattern_entities);
     ClassDB::bind_method(D_METHOD("entity_info", "id"), &SxSketch::entity_info);
     ClassDB::bind_method(D_METHOD("set_entity_geometry", "id", "geo"),
                          &SxSketch::set_entity_geometry);

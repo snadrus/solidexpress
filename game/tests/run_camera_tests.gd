@@ -44,7 +44,7 @@ func _reset_cam(cam: OrbitCamera) -> void:
 	cam.pivot = Vector3.ZERO
 	cam.distance = 400.0
 	cam.yaw = deg_to_rad(-35.0)
-	cam.pitch = deg_to_rad(30.0)
+	cam.pitch = deg_to_rad(40.0)
 	cam._update_transform()
 
 

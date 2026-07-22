@@ -289,27 +289,193 @@ func test_active_plane(main) -> void:
 
 
 func test_view_hud(main) -> void:
-	print("- view HUD buttons")
+	print("- view HUD: dock, Shade, Section, Frame, View strip")
 	var hud: ViewHud = main.view_hud
 	var view: DocumentView = main.view
+	var cam: OrbitCamera = main.camera
 	check(hud != null, "ViewHud mounted")
-	hud.sync_from_view(view)
+
+	# Far bottom-right dock — above the status bar, same chrome pad as File bar.
+	await process_frame
+	check(is_equal_approx(hud.anchor_left, 1.0) and is_equal_approx(hud.anchor_right, 1.0),
+		"HUD anchored to the right edge")
+	check(is_equal_approx(hud.anchor_top, 1.0) and is_equal_approx(hud.anchor_bottom, 1.0),
+		"HUD anchored to the bottom edge")
+	check(is_equal_approx(hud.offset_bottom, -(30.0 + main._CHROME_PAD)),
+		"HUD sits above the status bar")
+	check(is_equal_approx(hud.offset_right, -main._CHROME_PAD), "HUD right pad matches File bar")
+	check(is_equal_approx(hud.offset_left, -main._CHROME_PAD), "HUD grows from right pad")
+	check(hud.origin_triad != null, "OriginTriad sits above the view menu")
+	check(hud.origin_triad.camera == cam, "OriginTriad linked to OrbitCamera")
+	check(not hud.has_signal("nav_preset_changed"), "nav menu signal removed")
+	check(cam.nav_preset == OrbitCamera.NavPreset.FUSION, "Fusion is the only mouse preset")
+
 	check(hud._display_btn != null and hud._section_btn != null and hud._fit_btn != null,
-		"HUD has Shade/Section/Fit")
-	check(hud._nav_option != null, "HUD has nav preset option")
-	var mode0: int = int(view.display_mode)
-	hud.display_cycle_requested.emit()
-	# Signal connected in main; wait a frame for cycle.
-	await process_frame
-	check(int(view.display_mode) != mode0 or true, "display cycle callable")
-	# Call the cycle path directly for a hard assertion.
-	view.cycle_display_mode()
+		"HUD has Shade/Section/Frame")
+	check(hud._fit_btn.text == "Frame", "frame control labeled Frame")
+	check(hud._save_view_btn != null, "View strip has Save button")
+	check(hud._views_drop_btn != null and hud._views_drop_btn.text == "▼",
+		"View strip has down-arrow")
+	check(hud._views_popup != null and hud._views_list != null, "Views popup exists")
+
+	# --- Shade / display cycle ---
+	while int(view.display_mode) != 0:
+		view.cycle_display_mode()
 	hud.sync_from_view(view)
-	check(hud._display_btn.text in ["Shade", "Edges", "Wire"], "display button label synced")
-	hud.nav_preset_changed.emit(OrbitCamera.NavPreset.FUSION)
+	check(hud._display_btn.text == "Shade", "display label Shade at mode 0")
+	hud.display_cycle_requested.emit()
 	await process_frame
-	check(main.camera.nav_preset == OrbitCamera.NavPreset.FUSION, "nav preset applied to camera")
-	main.camera.nav_preset = OrbitCamera.NavPreset.SOLIDEXPRESS
+	check(int(view.display_mode) == 1, "Shade click advances display mode")
+	hud.sync_from_view(view)
+	check(hud._display_btn.text == "Edges", "display label Edges after cycle")
+	hud.display_cycle_requested.emit()
+	await process_frame
+	check(int(view.display_mode) == 2, "second cycle → wireframe mode")
+	hud.sync_from_view(view)
+	check(hud._display_btn.text == "Wire", "display label Wire after second cycle")
+	hud.display_cycle_requested.emit()
+	await process_frame
+	check(int(view.display_mode) == 0, "third cycle wraps to shaded")
+	hud.sync_from_view(view)
+	check(hud._display_btn.text == "Shade", "display label wraps to Shade")
+
+	# --- Section toggle ---
+	check(not view.section_enabled, "section starts off")
+	check(not hud._section_btn.button_pressed, "Section button starts up")
+	hud.section_toggle_requested.emit()
+	await process_frame
+	hud.sync_from_view(view)
+	check(view.section_enabled, "Section click enables section")
+	check(hud._section_btn.button_pressed, "Section button pressed when on")
+	hud.section_toggle_requested.emit()
+	await process_frame
+	hud.sync_from_view(view)
+	check(not view.section_enabled, "second Section click disables")
+	check(not hud._section_btn.button_pressed, "Section button up when off")
+
+	# --- Frame ---
+	view.new_document()
+	var body: String = view.insert_primitive("box", Vector3(80, 0, 0))
+	view.select_entity(body, "")
+	cam.yaw = 0.0
+	cam.pitch = 0.3
+	cam.distance = 900.0
+	cam.pivot = Vector3.ZERO
+	cam._update_transform()
+	var dist_before := cam.distance
+	hud.fit_requested.emit()
+	await process_frame
+	check(cam.distance < dist_before - 1.0, "Frame zooms in on selection")
+	check(cam.pivot.distance_to(Vector3(80, 0, 0)) < 5.0,
+		"Frame recenters pivot near selection")
+
+	# --- ▼ expands defaults + user views ---
+	for existing in cam.named_view_list():
+		cam.remove_named_view(existing)
+	hud.sync_named_views(cam.named_view_list())
+	hud._toggle_views_popup()
+	await process_frame
+	check(hud._views_popup.visible, "▼ opens views popup")
+	var def_labels: Array = []
+	for c in hud._views_list.get_children():
+		if c is Button:
+			def_labels.append(str(c.text))
+	check(def_labels.has("Front") and def_labels.has("Right")
+			and def_labels.has("Top") and def_labels.has("Isometric"),
+		"popup lists default views")
+	check(not def_labels.has("User"), "no user views before save")
+	# Default Front moves the camera.
+	cam.yaw = 1.5
+	cam.pitch = 0.8
+	cam._update_transform()
+	hud.default_view_requested.emit("front")
+	await process_frame
+	check(is_equal_approx(cam.yaw, 0.0), "default Front sets yaw")
+	check(is_equal_approx(cam.pitch, 0.0), "default Front sets pitch")
+	hud._views_popup.hide()
+
+	# --- Save pops rename blank; Enter accepts ---
+	cam.yaw = 0.4
+	cam.pitch = 0.25
+	cam.distance = 180.0
+	cam.pivot = Vector3(12, 3, -4)
+	cam._update_transform()
+	var saved_yaw := cam.yaw
+	var saved_pitch := cam.pitch
+	var saved_dist := cam.distance
+	var saved_pivot: Vector3 = cam.pivot
+
+	hud._begin_save_rename()
+	await process_frame
+	check(hud._rename_popup.visible, "Save opens rename blank")
+	check(hud._rename_edit.text == "", "rename blank starts empty")
+	hud._commit_save_rename("")  # Enter on empty → no save
+	await process_frame
+	check(cam.named_view_list().is_empty(), "empty Enter does not save")
+	hud._begin_save_rename()
+	await process_frame
+	hud._commit_save_rename("Front")  # reserved default label
+	await process_frame
+	check(cam.named_view_list().is_empty(), "cannot shadow default Front name")
+	hud._begin_save_rename()
+	await process_frame
+	hud._commit_save_rename("  Side  ")
+	await process_frame
+	check(not hud._rename_popup.visible, "Enter closes rename blank")
+	var listed := cam.named_view_list()
+	check(listed.size() == 1 and listed.has("Side"), "Enter saves trimmed name Side")
+	hud._toggle_views_popup()
+	await process_frame
+	var restore_btns: Array = []
+	var delete_btns: Array = []
+	for c in hud._views_list.find_children("*", "Button", true, false):
+		if str(c.text) == "Side":
+			restore_btns.append(c)
+		elif str(c.text) == "×" and str(c.tooltip_text).contains("Side"):
+			delete_btns.append(c)
+	check(restore_btns.size() == 1, "Saved section shows Side")
+	check(delete_btns.size() == 1, "Side has delete (×) button")
+	# Defaults are bare Buttons (no × sibling); user rows are HBoxes.
+	var front_is_bare := false
+	for c in hud._views_list.get_children():
+		if c is Button and str(c.text) == "Front":
+			front_is_bare = true
+	check(front_is_bare, "default Front has no delete row")
+
+	cam.yaw = 1.0
+	cam._update_transform()
+	hud._commit_save_rename("Detail")
+	await process_frame
+	check(cam.named_view_list().has("Detail"), "second Save adds Detail")
+
+	cam.yaw = -1.2
+	cam.pitch = -0.5
+	cam.distance = 400.0
+	cam.pivot = Vector3(100, 50, 20)
+	cam._update_transform()
+	check(not is_equal_approx(cam.yaw, saved_yaw), "camera moved away from saved pose")
+	hud.view_restore_requested.emit("Side")
+	await process_frame
+	check(is_equal_approx(cam.yaw, saved_yaw), "restore returns yaw")
+	check(is_equal_approx(cam.pitch, saved_pitch), "restore returns pitch")
+	check(is_equal_approx(cam.distance, saved_dist), "restore returns distance")
+	check(cam.pivot.is_equal_approx(saved_pivot), "restore returns pivot")
+
+	hud.view_delete_requested.emit("Side")
+	await process_frame
+	check(not cam.named_view_list().has("Side"), "delete removes Side from camera")
+	hud._rebuild_views_popup()
+	var still_listed := false
+	for c2 in hud._views_list.find_children("*", "Button", true, false):
+		if str(c2.text) == "Side":
+			still_listed = true
+	check(not still_listed, "delete removes Side from Views popup")
+	check(cam.named_view_list().has("Detail"), "Detail remains after deleting Side")
+	check(not cam.restore_named_view("Side"), "restore after delete fails")
+	hud.view_delete_requested.emit("Detail")
+	await process_frame
+	check(cam.named_view_list().is_empty(), "Views empty after deleting all")
+	hud._views_popup.hide()
 
 
 func test_push_pull_preview_state(main) -> void:

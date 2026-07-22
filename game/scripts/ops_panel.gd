@@ -35,8 +35,8 @@ var _pending_first := ""  # armed source entity (body for boolean, any for measu
 
 var _scroll: ScrollContainer
 var _content: VBoxContainer
-## Cap so the panel never reaches the status bar; content scrolls past this.
-const MAX_HEIGHT := 370.0
+## Cap so left-docked Modify + selection card stay above the timeline.
+const MAX_HEIGHT := 240.0
 
 
 func _ready() -> void:
@@ -50,7 +50,7 @@ func _ready() -> void:
 	_content = vbox
 	var title := Label.new()
 	title.text = "Modify"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.visible = false
 	vbox.add_child(title)
 
 	_body_ops = VBoxContainer.new()
@@ -86,11 +86,14 @@ func _labeled_spin(parent: Container, text: String, min_v: float, max_v: float,
 
 func _op_button(parent: Container, text: String, handler: Callable,
 		icon_name := "", tooltip := "") -> Button:
-	var b := Button.new()
-	b.text = text
+	var tip := tooltip if tooltip != "" else text
+	var b: Button
 	if icon_name != "":
-		b.icon = UIIcons.get_icon(icon_name)
-	b.tooltip_text = tooltip if tooltip != "" else text
+		b = UIIcons.button(icon_name, "", tip)
+	else:
+		b = Button.new()
+		b.text = text
+		b.tooltip_text = tip
 	b.pressed.connect(handler)
 	parent.add_child(b)
 	return b
@@ -186,7 +189,7 @@ func _build_body_ops() -> void:
 			["cut", "Cut: subtract the next body clicked from this one"],
 			["common", "Common: keep only the overlap with the next body clicked"]]:
 		var op: String = entry[0]
-		var b := UIIcons.button(op, op.capitalize(), entry[1])
+		var b := UIIcons.button(op, "", entry[1])
 		b.pressed.connect(_arm_boolean.bind(op))
 		bool_row.add_child(b)
 	_op_button(_body_ops, "Measure to...", _arm_measure, "measure",

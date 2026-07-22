@@ -329,13 +329,15 @@ func test_palette_click_arms_place(main) -> void:
 
 
 func test_place_snap_ui_and_coords(main) -> void:
-	print("- place snap bar + coordinate snap")
+	print("- place snap dock + coordinate snap")
 	var ix: ViewportInteraction = main.interaction
 	main.view.new_document()
 	check(ix.place_snap_enabled, "snap enabled by default")
 	check(is_equal_approx(ix.place_snap_mm, 0.1), "default snap resolution 0.1 mm")
+	check(ix._place_snap_panel != null and ix._place_snap_panel.visible,
+		"snap dock visible before place")
 	ix.insert_at_center("box")
-	check(ix._place_snap_panel != null and ix._place_snap_panel.visible, "snap panel visible while armed")
+	check(ix._place_snap_panel.visible, "snap dock visible while armed")
 	check(ix._place_snap_check != null and ix._place_snap_check.button_pressed, "snap checkbox on")
 	check(ix._place_snap_spin != null and is_equal_approx(ix._place_snap_spin.value, 0.1),
 		"snap spin shows 0.1 mm")
@@ -353,7 +355,7 @@ func test_place_snap_ui_and_coords(main) -> void:
 	check(ix._snap_point(Vector3(1.4, 2.6, 0.4)).is_equal_approx(Vector3(1.0, 3.0, 0.0)),
 		"1.0 mm snap rounds axes")
 	_esc(ix)
-	check(not ix._place_snap_panel.visible, "snap panel hidden after cancel")
+	check(ix._place_snap_panel.visible, "snap dock still visible after cancel")
 
 
 func test_transform_hud_and_resize(main) -> void:
@@ -367,7 +369,7 @@ func test_transform_hud_and_resize(main) -> void:
 	main._update_panel_visibility()
 	check(not ix.transform_hud.visible, "transform HUD idle-hidden when body selected")
 	check(not main.palette.visible, "palette hidden when body selected")
-	check(main.ops_panel.offset_left == 12.0, "modify tools docked left")
+	check(main.ops_panel.offset_left == 8.0, "modify tools docked left")
 	var bb0: Dictionary = view.selection_bbox()
 	check(not bb0.is_empty(), "selection bbox available")
 	# Resize max-X face by +10 mm via kernel helper (mirror of drag commit).

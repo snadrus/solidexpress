@@ -190,7 +190,7 @@ func test_selection_corners(view: DocumentView) -> void:
 
 
 func test_world_gizmos() -> void:
-	print("- world gizmos (origin triad + XY grid)")
+	print("- world gizmos (XY grid; origin sticks are on ViewHud)")
 	var gizmos := WorldGizmos.new()
 	gizmos.name = "WorldGizmos"
 	root.add_child(gizmos)
@@ -198,18 +198,11 @@ func test_world_gizmos() -> void:
 
 	var triad := gizmos.get_node_or_null("Triad") as Node3D
 	var grid := gizmos.get_node_or_null("Grid") as MeshInstance3D
-	check(triad != null, "Triad child exists")
+	check(triad == null, "no Triad on origin plate (sticks moved to ViewHud)")
 	check(grid != null, "Grid child exists")
-	check(triad != null and triad.get_child_count() == 3, "Triad has 3 axis children")
-	check(gizmos.get_child_count() == 2, "WorldGizmos has Triad + Grid")
+	check(gizmos.get_child_count() == 1, "WorldGizmos has Grid only")
 	check(gizmos.gizmos_visible, "gizmos visible by default")
-	check(triad != null and triad.visible, "Triad visible by default")
 	check(grid != null and grid.visible, "Grid visible by default")
-
-	if triad != null:
-		check(triad.get_node_or_null("AxisX") != null, "AxisX exists")
-		check(triad.get_node_or_null("AxisY") != null, "AxisY exists")
-		check(triad.get_node_or_null("AxisZ") != null, "AxisZ exists")
 
 	# Grid lies on the model XY ground plane (thickness along Z ≈ 0).
 	if grid != null and grid.mesh != null:
@@ -223,17 +216,15 @@ func test_world_gizmos() -> void:
 
 	gizmos.set_gizmos_visible(false)
 	check(not gizmos.gizmos_visible, "set_gizmos_visible(false) updates flag")
-	check(triad != null and not triad.visible, "set_gizmos_visible(false) hides Triad")
 	check(grid != null and not grid.visible, "set_gizmos_visible(false) hides Grid")
 
 	gizmos.set_gizmos_visible(true)
-	check(gizmos.gizmos_visible and triad.visible and grid.visible, "set_gizmos_visible(true) restores")
+	check(gizmos.gizmos_visible and grid.visible, "set_gizmos_visible(true) restores")
 
-	# Active plane relocates the grid; triad stays at the world origin.
+	# Active plane relocates the grid.
 	gizmos.set_active_plane(Vector3(0, 0, 10), Vector3(0, 0, 1))
 	check(grid.position.is_equal_approx(Vector3(0, 0, 10)),
 		"grid origin follows active plane (z=10)")
-	check(triad.position.is_equal_approx(Vector3.ZERO), "triad stays at world origin")
 	gizmos.set_active_plane(Vector3(5, 0, 2.5), Vector3(1, 0, 0))
 	var gx: Vector3 = grid.transform.basis.x
 	var gz: Vector3 = grid.transform.basis.z

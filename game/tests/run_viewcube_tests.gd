@@ -62,7 +62,7 @@ func test_zone_hits(widget: ViewWidget) -> void:
 func test_click_zone_top(cam: OrbitCamera, widget: ViewWidget) -> void:
 	print("- click_zone top (snap)")
 	cam.yaw = deg_to_rad(-35.0)
-	cam.pitch = deg_to_rad(30.0)
+	cam.pitch = deg_to_rad(40.0)
 	cam._update_transform()
 	widget.click_zone("top")
 	# KEY_3 / standard top uses pitch ≈ +89° (+1.55 rad).

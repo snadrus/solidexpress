@@ -24,6 +24,7 @@
 #include "sx/measure.hpp"
 #include "sx/features.hpp"
 #include "sx/interop.hpp"
+#include "sx/sketch_json.hpp"
 #include "sx_sketch.hpp"
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
@@ -343,6 +344,23 @@ Dictionary SxDocument::measure_distance(const String& a, const String& b) const 
     return out;
 }
 
+Dictionary SxDocument::closest_point_on(const String& shape_id, const Vector3& from) const {
+    Dictionary out;
+    auto r = sx::measure::closest_point(*doc_, parse_id(shape_id),
+                                        {from.x, from.y, from.z});
+    if (!r) return out;
+    out["distance"] = r->distance;
+    out["point_a"] = Vector3(r->point_a[0], r->point_a[1], r->point_a[2]);
+    out["point_b"] = Vector3(r->point_b[0], r->point_b[1], r->point_b[2]);
+    return out;
+}
+
+Vector3 SxDocument::face_midpoint(const String& face_id) const {
+    auto r = sx::measure::face_midpoint(*doc_, parse_id(face_id));
+    if (!r) return Vector3();
+    return Vector3((*r)[0], (*r)[1], (*r)[2]);
+}
+
 Dictionary SxDocument::measure_bbox(const String& id) const {
     Dictionary out;
     auto r = sx::measure::bounding_box(*doc_, parse_id(id));
@@ -394,6 +412,15 @@ PackedStringArray SxDocument::import_step(const String& path) {
     std::string err;
     auto ids = sx::interop::import_step(*doc_, to_std(path), &err);
     if (ids.empty() && !err.empty()) sx::log::error("import_step: " + err);
+    for (const auto& id : ids) out.push_back(to_gd(id.str()));
+    return out;
+}
+
+PackedStringArray SxDocument::import_stl(const String& path) {
+    PackedStringArray out;
+    std::string err;
+    auto ids = sx::interop::import_stl(*doc_, to_std(path), &err);
+    if (ids.empty() && !err.empty()) sx::log::error("import_stl: " + err);
     for (const auto& id : ids) out.push_back(to_gd(id.str()));
     return out;
 }
@@ -685,6 +712,29 @@ String SxDocument::graph_add_sketch(const Ref<SxSketch>& sketch) {
     return ok ? to_gd(fid.str()) : String();
 }
 
+Ref<SxSketch> SxDocument::graph_get_sketch(const String& fid) const {
+    const sx::Feature* f = doc_->graph().feature(parse_id(fid));
+    if (f == nullptr || f->type != sx::FeatureType::Sketch || !f->sketch) {
+        return {};
+    }
+    // Deep copy so edits don't mutate the graph until graph_update_sketch.
+    auto copy = sx::sketch_from_json(sx::sketch_to_json(*f->sketch));
+    Ref<SxSketch> out;
+    out.instantiate();
+    out->adopt(std::move(copy));
+    return out;
+}
+
+bool SxDocument::graph_update_sketch(const String& fid, const Ref<SxSketch>& sketch) {
+    if (sketch.is_null()) return false;
+    return apply_graph_edit("edit sketch", [&] {
+        sx::Feature* f = doc_->graph().feature(parse_id(fid));
+        if (f == nullptr || f->type != sx::FeatureType::Sketch) return false;
+        f->sketch = sketch->sketch();
+        return true;
+    });
+}
+
 String SxDocument::graph_add_extrude(const String& sketch_fid, double distance,
                                      bool symmetric, const String& op,
                                      const String& target_fid) {
@@ -733,6 +783,38 @@ String SxDocument::graph_add_sweep(const String& sketch_fid, const PackedVector3
         f.type = sx::FeatureType::Sweep;
         f.params["sketch"] = to_std(sketch_fid);
         f.params["path"] = path_json;
+        fid = doc_->graph().add(std::move(f));
+        return true;
+    });
+    return ok ? to_gd(fid.str()) : String();
+}
+
+String SxDocument::graph_add_sweep_along_path(const String& sketch_fid, const String& path_fid) {
+    if (sketch_fid.is_empty() || path_fid.is_empty()) return {};
+    sx::EntityId fid;
+    bool ok = apply_graph_edit("sweep", [&] {
+        sx::Feature f;
+        f.type = sx::FeatureType::Sweep;
+        f.params["sketch"] = to_std(sketch_fid);
+        f.params["path_feature"] = to_std(path_fid);
+        fid = doc_->graph().add(std::move(f));
+        return true;
+    });
+    return ok ? to_gd(fid.str()) : String();
+}
+
+String SxDocument::graph_add_path(const PackedStringArray& sketch_fids, const String& mode) {
+    if (sketch_fids.size() < 2) return {};
+    nlohmann::json sketches = nlohmann::json::array();
+    for (int i = 0; i < sketch_fids.size(); ++i) sketches.push_back(to_std(sketch_fids[i]));
+    std::string m = to_std(mode);
+    if (m.empty()) m = "join_endpoints";
+    sx::EntityId fid;
+    bool ok = apply_graph_edit("path", [&] {
+        sx::Feature f;
+        f.type = sx::FeatureType::Path;
+        f.params["sketches"] = sketches;
+        f.params["mode"] = m;
         fid = doc_->graph().add(std::move(f));
         return true;
     });
@@ -825,6 +907,20 @@ String SxDocument::graph_add_import_step(const String& path, float scale) {
         f.type = sx::FeatureType::ImportStep;
         f.params = {{"path", to_std(path)},
                     {"index", 0},
+                    {"scale", static_cast<double>(scale)}};
+        fid = doc_->graph().add(std::move(f));
+        return true;
+    });
+    return ok ? to_gd(fid.str()) : String();
+}
+
+String SxDocument::graph_add_import_stl(const String& path, float scale) {
+    if (path.is_empty()) return {};
+    sx::EntityId fid;
+    bool ok = apply_graph_edit("import stl", [&] {
+        sx::Feature f;
+        f.type = sx::FeatureType::ImportStl;
+        f.params = {{"path", to_std(path)},
                     {"scale", static_cast<double>(scale)}};
         fid = doc_->graph().add(std::move(f));
         return true;
@@ -1195,6 +1291,9 @@ void SxDocument::_bind_methods() {
                                   "neutral_normal"),
                          &SxDocument::draft_faces);
     ClassDB::bind_method(D_METHOD("measure_distance", "a", "b"), &SxDocument::measure_distance);
+    ClassDB::bind_method(D_METHOD("closest_point_on", "shape_id", "from"),
+                         &SxDocument::closest_point_on);
+    ClassDB::bind_method(D_METHOD("face_midpoint", "face_id"), &SxDocument::face_midpoint);
     ClassDB::bind_method(D_METHOD("measure_bbox", "id"), &SxDocument::measure_bbox);
     ClassDB::bind_method(D_METHOD("measure_mass", "body_id"), &SxDocument::measure_mass);
     ClassDB::bind_method(D_METHOD("measure_edge_length", "edge_id"), &SxDocument::measure_edge_length);
@@ -1203,6 +1302,7 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("export_step", "path"), &SxDocument::export_step);
     ClassDB::bind_method(D_METHOD("export_stl", "path", "binary"), &SxDocument::export_stl);
     ClassDB::bind_method(D_METHOD("import_step", "path"), &SxDocument::import_step);
+    ClassDB::bind_method(D_METHOD("import_stl", "path"), &SxDocument::import_stl);
     ClassDB::bind_method(D_METHOD("get_edge_ids", "body_id"), &SxDocument::get_edge_ids);
     ClassDB::bind_method(D_METHOD("undo"), &SxDocument::undo);
     ClassDB::bind_method(D_METHOD("redo"), &SxDocument::redo);
@@ -1239,9 +1339,15 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("graph_features"), &SxDocument::graph_features);
     ClassDB::bind_method(D_METHOD("graph_add_primitive", "kind", "a", "b", "c", "origin"), &SxDocument::graph_add_primitive);
     ClassDB::bind_method(D_METHOD("graph_add_sketch", "sketch"), &SxDocument::graph_add_sketch);
+    ClassDB::bind_method(D_METHOD("graph_get_sketch", "fid"), &SxDocument::graph_get_sketch);
+    ClassDB::bind_method(D_METHOD("graph_update_sketch", "fid", "sketch"),
+                         &SxDocument::graph_update_sketch);
     ClassDB::bind_method(D_METHOD("graph_add_extrude", "sketch_fid", "distance", "symmetric", "op", "target_fid"), &SxDocument::graph_add_extrude);
     ClassDB::bind_method(D_METHOD("graph_add_revolve", "sketch_fid", "axis_point", "axis_dir", "angle", "op", "target_fid"), &SxDocument::graph_add_revolve);
     ClassDB::bind_method(D_METHOD("graph_add_sweep", "sketch_fid", "path"), &SxDocument::graph_add_sweep);
+    ClassDB::bind_method(D_METHOD("graph_add_sweep_along_path", "sketch_fid", "path_fid"),
+                         &SxDocument::graph_add_sweep_along_path);
+    ClassDB::bind_method(D_METHOD("graph_add_path", "sketch_fids", "mode"), &SxDocument::graph_add_path);
     ClassDB::bind_method(D_METHOD("graph_add_loft", "sketch_fids", "ruled"), &SxDocument::graph_add_loft);
     ClassDB::bind_method(D_METHOD("graph_add_fillet", "target_fid", "edge_ids", "radius"), &SxDocument::graph_add_fillet);
     ClassDB::bind_method(D_METHOD("graph_add_chamfer", "target_fid", "edge_ids", "distance"), &SxDocument::graph_add_chamfer);
@@ -1251,6 +1357,8 @@ void SxDocument::_bind_methods() {
                          &SxDocument::graph_add_hole);
     ClassDB::bind_method(D_METHOD("graph_add_import_step", "path", "scale"),
                          &SxDocument::graph_add_import_step);
+    ClassDB::bind_method(D_METHOD("graph_add_import_stl", "path", "scale"),
+                         &SxDocument::graph_add_import_stl);
     ClassDB::bind_method(D_METHOD("graph_add_boolean", "op", "target_fid", "tool_fid"),
                          &SxDocument::graph_add_boolean);
     ClassDB::bind_method(D_METHOD("graph_set_params", "fid", "params_json"), &SxDocument::graph_set_params);

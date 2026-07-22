@@ -37,6 +37,7 @@ func _init() -> void:
 	test_shift_empty_keeps_selection(main)
 	test_multi_boolean_instant(main)
 	test_copy_paste_offset(main)
+	test_cut_paste_and_special(main)
 	test_delete_key_and_strip(main)
 
 	print("%d checks, %d failures" % [checks, failures])
@@ -436,6 +437,71 @@ func test_copy_paste_offset(main) -> void:
 	check(is_equal_approx((bb_m0["min"] - bb_p["min"]).x, 10.0),
 		"multi paste shares group XY offset")
 	check(q != "", "second source allocated")
+
+
+func test_cut_paste_and_special(main) -> void:
+	print("- Cut / Paste Special / Edit menu")
+	var view: DocumentView = main.view
+	var vi: ViewportInteraction = main.interaction
+	view.new_document()
+	var a: String = view.insert_primitive("box", Vector3.ZERO, Vector3(50, 30, 10))
+	view.select_entity(a, "")
+	var bb0: Dictionary = view.doc.measure_bbox(a)
+	check(not bb0.is_empty(), "cut source bbox")
+
+	var key_x := InputEventKey.new()
+	key_x.keycode = KEY_X
+	key_x.ctrl_pressed = true
+	key_x.pressed = true
+	check(vi._gui_key(key_x), "Ctrl+X cut handled")
+	check(view.doc.body_ids().size() == 0 or view.hidden_bodies.size() >= 1,
+		"cut removed visible original (bodies=%d hidden=%d)" % [
+				view.doc.body_ids().size(), view.hidden_bodies.size()])
+	check(view.has_clipboard(), "clipboard after cut")
+	check(view._clipboard_cut, "clipboard marked cut")
+
+	var key_v := InputEventKey.new()
+	key_v.keycode = KEY_V
+	key_v.ctrl_pressed = true
+	key_v.pressed = true
+	check(vi._gui_key(key_v), "Ctrl+V after cut")
+	check(view.doc.body_ids().size() >= 1, "paste after cut restored a body")
+	check(not view._clipboard_cut, "cut flag cleared after paste")
+	var pasted: String = view.selected_body
+	check(pasted != "", "paste selected body")
+	var bb1: Dictionary = view.doc.measure_bbox(pasted)
+	var delta: Vector3 = bb1["min"] - bb0["min"]
+	check(is_equal_approx(delta.x, 10.0), "cut-paste ΔX 20%% (got %.3f)" % delta.x)
+
+	# Paste Special with custom offset from Edit menu path.
+	view.copy_selection()
+	var n0: int = view.doc.body_ids().size()
+	var made: Array = view.paste_clipboard(Vector3(25, 0, 0))
+	check(made.size() == 1, "paste special offset created one")
+	check(view.doc.body_ids().size() == n0 + 1, "doc gained one from paste special")
+	var bb2: Dictionary = view.doc.measure_bbox(made[0])
+	check(is_equal_approx((bb2["min"] - bb1["min"]).x, 25.0),
+		"paste special ΔX=25 (got %.3f)" % (bb2["min"] - bb1["min"]).x)
+
+	# In-place paste special.
+	view.copy_selection()
+	var at: String = view.selected_body
+	var bb_at: Dictionary = view.doc.measure_bbox(at)
+	var inplace: Array = view.paste_clipboard(Vector3.ZERO)
+	check(inplace.size() == 1, "in-place paste created body")
+	var bb_ip: Dictionary = view.doc.measure_bbox(inplace[0])
+	check((bb_ip["min"] - bb_at["min"]).length() < 0.05, "in-place near source")
+
+	# Edit menu exists and routes.
+	check(main._edit_popup != null, "Edit menu popup mounted")
+	main._refresh_edit_menu()
+	view.select_entity(inplace[0], "")
+	main.edit_copy()
+	check(view.has_clipboard(), "Edit→Copy filled clipboard")
+	main.edit_paste_special()
+	check(main._paste_special_dialog != null and main._paste_special_dialog.visible,
+		"Paste Special dialog opened")
+	main._paste_special_dialog.hide()
 
 
 func test_delete_key_and_strip(main) -> void:

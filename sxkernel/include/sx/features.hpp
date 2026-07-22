@@ -43,8 +43,11 @@ enum class FeatureType {
     CircularPattern, // params: {target, axis_point, axis_dir, count, total_angle}
     Shell,      // params: {target, faces: [1-based face indices], thickness}
     Offset,     // params: {target, offset}
-    Sweep,      // params: {sketch: <fid>, path: [[x,y,z], ...]}
+    Sweep,      // params: {sketch: <fid>, path: [[x,y,z], ...] OR path_feature: <fid>}
     Loft,       // params: {sketches: [<fid>, ...], ruled: bool}
+    Path,       // params: {sketches: [<fid>, ...], mode: "join_endpoints|bridge_spline|composite",
+                //          path: [[x,y,z], ...] rebuilt on regenerate}
+                // No solid output — consumed by Sweep via path_feature.
     HelixSweep, // params: {profile_radius (default 1), axis_point: [x,y,z],
                 //          axis_dir: [x,y,z], radius, pitch, turns,
                 //          left_handed: bool}
@@ -56,6 +59,8 @@ enum class FeatureType {
     ImportStep, // params: {path: string, index: int (default 0),
                 //          scale: double (default 1.0, uniform via gp_Trsf)}
                 // BASE feature: file is re-read on regenerate (document dep).
+    ImportStl,  // params: {path: string, scale: double (default 1.0)}
+                // BASE feature: mesh import as a single body; re-read on regen.
 };
 
 const char* to_string(FeatureType t);
@@ -69,7 +74,7 @@ struct Feature {
     nlohmann::json params;
     std::shared_ptr<Sketch> sketch;  // only for FeatureType::Sketch
     // Stable id of the body this feature creates (Primitive, ImportStep,
-    // new-body Extrude/Revolve, Mirror, Sweep, Loft, HelixSweep). Null for
+    // ImportStl, new-body Extrude/Revolve, Mirror, Sweep, Loft, HelixSweep). Null for
     // sketches and modifying features.
     EntityId output_body;
     // Stable ids of additional bodies created by pattern features

@@ -25,6 +25,7 @@ func _init() -> void:
 	await process_frame
 
 	test_insert_datums(main)
+	test_edit_menu(main)
 	test_export_context(main)
 	test_projection_toggle(main)
 	test_dirty_guard(main)
@@ -50,6 +51,29 @@ func test_insert_datums(main) -> void:
 		check(main.view.datum_node(d["id"]) != null, "datum rendered: " + str(d["kind"]))
 	check(kinds.has("plane") and kinds.has("axis") and kinds.has("point"),
 		"plane, axis, and point kinds present")
+
+
+func test_edit_menu(main) -> void:
+	print("- Edit menu cut/copy/paste")
+	check(main._edit_popup != null, "Edit menu exists")
+	var view: DocumentView = main.view
+	# Don't wipe the document (later tests rely on prior datums); add a disposable body.
+	var before: int = view.doc.body_ids().size()
+	var a: String = view.insert_primitive("box", Vector3(200, 0, 0), Vector3(20, 20, 20))
+	view.select_entity(a, "")
+	main._on_edit_menu(3)  # Copy
+	check(view.has_clipboard(), "Edit→Copy")
+	var n0: int = view.doc.body_ids().size()
+	main._on_edit_menu(4)  # Paste
+	check(view.doc.body_ids().size() == n0 + 1, "Edit→Paste added body")
+	view.select_entity(a, "")
+	main._on_edit_menu(2)  # Cut
+	check(view.has_clipboard(), "Edit→Cut keeps clipboard")
+	check(view.hidden_bodies.size() >= 1 or view.doc.body_ids().size() <= n0,
+		"Edit→Cut removed/hid source")
+	main._on_edit_menu(4)  # Paste after cut
+	check(view.doc.body_ids().size() > before, "Edit→Paste after cut")
+	main._refresh_edit_menu()
 
 
 func test_export_context(main) -> void:

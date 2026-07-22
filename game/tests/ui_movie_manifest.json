@@ -1,0 +1,30 @@
+[
+  {
+    "id": "path_merge_sweep",
+    "title": "Merge sketches → path → sweep solid",
+    "script": "res://tests/films/film_path_merge_sweep.gd",
+    "enabled": true,
+    "quit_after": 900
+  },
+  {
+    "id": "extrude_cylinder",
+    "title": "Circle profile + dim + extrude",
+    "script": "res://tests/films/film_extrude_cylinder.gd",
+    "enabled": true,
+    "quit_after": 1200
+  },
+  {
+    "id": "sketch_spline_tools",
+    "title": "Block + fit spline sketch",
+    "script": "res://tests/films/film_sketch_spline.gd",
+    "enabled": true,
+    "quit_after": 1200
+  },
+  {
+    "id": "sketch_extend",
+    "title": "Extend tool",
+    "script": "res://tests/films/film_sketch_extend.gd",
+    "enabled": true,
+    "quit_after": 900
+  }
+]

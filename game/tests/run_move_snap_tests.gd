@@ -35,7 +35,7 @@ func _init() -> void:
 
 
 func test_aabb_anchors(main) -> void:
-	print("- AABB snap anchors: center + 6 face mids")
+	print("- AABB snap anchors: center + 6 face mids (+ surface mids with body)")
 	var ix: ViewportInteraction = main.interaction
 	var bb := {
 		"min": Vector3(0, 0, 0),
@@ -53,10 +53,22 @@ func test_aabb_anchors(main) -> void:
 		if a["kind"] == "face":
 			faces += 1
 	check(faces == 6, "six face midpoints")
+	# With a live body, surface midpoints are appended.
+	var view: DocumentView = main.view
+	view.new_document()
+	var id: String = view.insert_primitive("box", Vector3.ZERO)
+	var live_bb := view.doc.measure_bbox(id)
+	var with_surf: Array = ix._aabb_snap_anchors(live_bb, id)
+	var surfaces := 0
+	for a in with_surf:
+		if a["kind"] == "surface":
+			surfaces += 1
+	check(surfaces == 6, "box adds 6 surface midpoints (%d)" % surfaces)
+	check(with_surf.size() == 13, "7 AABB + 6 surface anchors")
 
 
 func test_snap_bar_during_move(main) -> void:
-	print("- Snap-to-grid bar visible during MOVE_BODY")
+	print("- Snap-to-grid dock stays visible (top bar)")
 	var view: DocumentView = main.view
 	var ix: ViewportInteraction = main.interaction
 	view.new_document()
@@ -64,7 +76,11 @@ func test_snap_bar_during_move(main) -> void:
 	view.select_entity(id, "")
 	main.camera.frame_contents()
 	await process_frame
-	check(not ix._place_snap_panel.visible, "snap bar hidden when idle")
+	check(ix._place_snap_panel != null and ix._place_snap_panel.visible,
+		"snap dock visible when idle")
+	check(is_equal_approx(ix._place_snap_panel.anchor_top, 0.0),
+		"snap dock anchored at screen top")
+	check(ix._place_snap_panel.offset_bottom <= 48.0, "snap dock stays compact")
 	var center: Vector3 = view.selection_bbox()["center"]
 	var screen: Vector2 = ix._model_to_screen(center)
 	var press := InputEventMouseButton.new()
@@ -76,7 +92,7 @@ func test_snap_bar_during_move(main) -> void:
 	drag.position = screen + Vector2(40, 0)
 	ix._handle_model_pointer(drag)
 	check(ix._drag_mode == ViewportInteraction.DragMode.MOVE_BODY, "move armed")
-	check(ix._place_snap_panel.visible, "snap bar visible during move")
+	check(ix._place_snap_panel.visible, "snap dock still visible during move")
 	check(ix._place_snap_check != null and ix._place_snap_check.button_pressed,
 		"snap checkbox shown")
 	var release := InputEventMouseButton.new()
@@ -84,7 +100,7 @@ func test_snap_bar_during_move(main) -> void:
 	release.pressed = false
 	release.position = screen + Vector2(40, 0)
 	ix._handle_model_pointer(release)
-	check(not ix._place_snap_panel.visible, "snap bar hidden after move release")
+	check(ix._place_snap_panel.visible, "snap dock still visible after move release")
 
 
 func test_center_snap_near_align(main) -> void:

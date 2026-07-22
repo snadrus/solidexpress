@@ -48,6 +48,7 @@ func _init() -> void:
 	test_variables(main)
 	test_graph_move_rename(main)
 	test_graph_import_step(main)
+	test_graph_import_stl(main)
 	test_instances(main)
 
 	print("%d checks, %d failures" % [checks, failures])
@@ -315,7 +316,7 @@ func test_file_actions(main) -> void:
 	print("- file menu actions")
 	var view: DocumentView = main.view
 	check(main.file_dialog is FileDialog, "file dialog exists")
-	check(main.get_node("UI/FileMenu") != null, "file menu exists")
+	check(main.get_node("UI/TopChrome/FileMenu") != null, "file menu exists")
 
 	# Save As via the dialog callback, then New, then Open round-trips.
 	var count0: int = view.doc.body_ids().size()
@@ -604,7 +605,7 @@ func test_sketch_toolbar_no_clickthrough(main) -> void:
 	# Click a labeled Line tool button — switches tool without a canvas point.
 	var line_btn: Button = null
 	for child in _all_buttons(tb):
-		if child.text == "Line" or (child.tooltip_text.begins_with("Line tool")):
+		if child.text == "Line" or str(child.tooltip_text).begins_with("Line"):
 			line_btn = child
 			break
 	check(line_btn != null, "Line toolbar button exists")
@@ -908,6 +909,59 @@ func test_graph_import_step(main) -> void:
 	check(view.doc.graph_features().is_empty(), "timeline empty after undo")
 	check(view.doc.body_ids().size() == bodies0, "body gone after undo")
 	DirAccess.remove_absolute(step_path)
+
+
+func test_graph_import_stl(main) -> void:
+	print("- graph import_stl + scale + select-all")
+	var view: DocumentView = main.view
+	view.new_document()
+	var box_fid: String = view.doc.graph_add_primitive("box", 10.0, 20.0, 30.0, Vector3.ZERO)
+	check(box_fid != "", "source box feature added")
+	var stl_path := "/tmp/sx_ui_import_mesh.stl"
+	check(view.doc.export_stl(stl_path, true), "export_stl wrote box")
+	check(FileAccess.file_exists(stl_path), "stl file exists")
+
+	view.new_document()
+	var imp_fid: String = view.doc.graph_add_import_stl(stl_path, 1.0)
+	check(imp_fid != "", "graph_add_import_stl returned id")
+	var feats: Array = view.doc.graph_features()
+	check(feats.size() == 1, "timeline has one feature")
+	check(feats[0]["type"] == "import_stl", "feature type is import_stl")
+	var body: String = feats[0]["output_body"]
+	check(body != "", "import_stl has output_body")
+	view.graph_changed()
+	check(view.is_import_body(body), "is_import_body true")
+	check(view.is_scalable_body(body), "import is scalable")
+
+	# Drop path: select whole body (one selection) then scale via param.
+	view.select_entity(body, "")
+	check(view.selection_size() == 1, "STL drop default is one body selection")
+	check(view.set_import_scale(body, 2.0), "set_import_scale 2x")
+	var bb: Dictionary = view.doc.measure_bbox(body)
+	check(not bb.is_empty(), "bbox after scale")
+	var extent: float = (bb["max"] - bb["min"]).x
+	check(extent > 15.0, "scaled mesh larger on X (got %.1f)" % extent)
+
+	var nfaces := view.select_all_faces(body)
+	check(nfaces > 0, "select_all_faces on mesh (%d)" % nfaces)
+
+	check(main._import_stl_file(stl_path), "main._import_stl_file path")
+	check(view.selected_body != "", "post-drop body selected")
+
+	# SVG underlay onto ground sketch.
+	var svg_path := "/tmp/sx_ui_drop.svg"
+	var sf := FileAccess.open(svg_path, FileAccess.WRITE)
+	check(sf != null, "wrote temp svg")
+	sf.store_string("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"20\"><rect width=\"40\" height=\"20\" fill=\"#00f\"/></svg>")
+	sf.close()
+	check(main._import_svg_to_surface(svg_path), "svg drop to surface")
+	check(main.sketch_mode.active, "sketch started for svg")
+	check(main.sketch_mode.sketch_picture != null, "svg picture underlay set")
+	check(main.sketch_mode.sketch_picture_size.x > 1.0, "picture has size")
+	main.sketch_mode.cancel()
+
+	DirAccess.remove_absolute(stl_path)
+	DirAccess.remove_absolute(svg_path)
 
 
 func test_instances(main) -> void:

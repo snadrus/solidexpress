@@ -2,7 +2,7 @@ BUILD_DIR := build
 GODOT := tools/godot/godot
 JOBS := $(shell nproc)
 
-.PHONY: all configure build test test-kernel test-godot clean import
+.PHONY: all configure build test test-kernel test-godot clean import movies
 
 all: build
 
@@ -25,6 +25,8 @@ test-godot: build import
 	$(GODOT) --headless --path game --script tests/run_ui_tests.gd
 	$(GODOT) --headless --path game --script tests/run_sketch_tests.gd
 	$(GODOT) --headless --path game --script tests/run_sketch_tools_tests.gd
+	$(GODOT) --headless --path game --script tests/run_sketch_parity_tests.gd
+	$(GODOT) --headless --path game --script tests/run_sweep_loft_solid_tests.gd
 	$(GODOT) --headless --path game --script tests/run_display_tests.gd
 	$(GODOT) --headless --path game --script tests/run_menu_tests.gd
 	$(GODOT) --headless --path game --script tests/run_workflow_tests.gd
@@ -59,6 +61,11 @@ run: build import
 	else \
 		$(GODOT) --path game; \
 	fi
+
+# UI demo movies (needs display + ffmpeg). Output: dist/movies/*.webm + *.vtt
+movies: import
+	chmod +x scripts/sx-movies
+	./scripts/sx-movies all
 
 clean:
 	rm -rf $(BUILD_DIR)

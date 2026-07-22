@@ -1,0 +1,143 @@
+#!/usr/bin/env bash
+# sx-movies — rebuild UI demo movies from game/tests/ui_movie_manifest.json
+#
+# Usage:
+#   scripts/sx-movies              # render all enabled films → dist/movies/
+#   scripts/sx-movies list         # show manifest entries
+#   scripts/sx-movies one ID         # render single film
+#
+# Output: ID.webm (VP9) + ID.vtt (closed captions). Intermediate ID.avi is kept.
+# Requires a display (not --headless). Set SX_MOVIES_OUT to change output dir.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+GODOT="${GODOT:-$ROOT/tools/godot/godot}"
+GAME="$ROOT/game"
+MANIFEST="$GAME/tests/ui_movie_manifest.json"
+OUT="${SX_MOVIES_OUT:-$ROOT/dist/movies}"
+FPS="${SX_MOVIES_FPS:-60}"
+
+if [[ ! -x "$GODOT" ]]; then
+  echo "sx-movies: Godot not found at $GODOT" >&2
+  exit 1
+fi
+
+mkdir -p "$OUT"
+
+"$GODOT" --headless --path "$GAME" --import >/dev/null 2>&1 || true
+
+list_entries() {
+  python3 - "$MANIFEST" <<'PY'
+import json, sys
+path = sys.argv[1]
+with open(path) as f:
+    data = json.load(f)
+for e in data:
+    en = e.get("enabled", True)
+    mark = "on " if en else "off"
+    print(f"{mark}  {e['id']:24s}  {e.get('title', '')}")
+PY
+}
+
+enabled_rows() {
+  python3 - "$MANIFEST" <<'PY'
+import json, sys
+path = sys.argv[1]
+with open(path) as f:
+    data = json.load(f)
+for e in data:
+    if not e.get("enabled", True):
+        continue
+    q = int(e.get("quit_after", 1200))
+    print(f"{e['id']}\t{q}")
+PY
+}
+
+render_one() {
+  local id="$1"
+  local quit_after="$2"
+  local avi="$OUT/${id}.avi"
+  local vtt="$OUT/${id}.vtt"
+  local avi_abs vtt_abs
+  avi_abs="$(cd "$(dirname "$avi")" && pwd)/$(basename "$avi")"
+  vtt_abs="$(cd "$(dirname "$vtt")" && pwd)/$(basename "$vtt")"
+  # quit_after is a safety ceiling only; the film script quit()s when done.
+  echo "=== sx-movies: $id → $avi_abs (max $quit_after frames @ ${FPS}fps)"
+  set +e
+  "$GODOT" --path "$GAME" \
+    --write-movie "$avi_abs" \
+    --fixed-fps "$FPS" \
+    --disable-vsync \
+    --quit-after "$quit_after" \
+    --script tests/movie_maker_run_one.gd -- \
+      --film-id "$id" --movie-capture 1 --captions-out "$vtt_abs"
+  godot_ec=$?
+  set -e
+  if [[ $godot_ec -ne 0 ]]; then
+    if [[ -f "$avi_abs" ]] && [[ $(stat -c%s "$avi_abs" 2>/dev/null || echo 0) -gt 4096 ]]; then
+      echo "sx-movies: warning: Godot exited $godot_ec after writing $avi_abs (known MovieWriter teardown bug on some builds)" >&2
+    else
+      echo "sx-movies: Godot failed (exit $godot_ec) and no usable AVI at $avi_abs" >&2
+      exit "$godot_ec"
+    fi
+  fi
+  if [[ -f "$vtt_abs" ]]; then
+    echo "    vtt: $vtt_abs"
+  else
+    echo "sx-movies: warning: no captions at $vtt_abs" >&2
+  fi
+  if command -v ffmpeg >/dev/null 2>&1; then
+    local webm="$OUT/${id}.webm"
+    # VP9 + soft WebVTT track when captions exist (sidecar .vtt kept for translation).
+    if [[ -f "$vtt_abs" ]]; then
+      ffmpeg -y -loglevel error \
+        -i "$avi_abs" -i "$vtt_abs" \
+        -map 0:v:0 -map 1:0 \
+        -c:v libvpx-vp9 -crf 32 -b:v 0 -row-mt 1 \
+        -c:s webvtt \
+        "$webm"
+    else
+      ffmpeg -y -loglevel error \
+        -i "$avi_abs" \
+        -c:v libvpx-vp9 -crf 32 -b:v 0 -row-mt 1 \
+        "$webm"
+    fi
+    echo "    webm: $webm"
+  else
+    echo "    (install ffmpeg to emit .webm)"
+  fi
+}
+
+cmd="${1:-all}"
+case "$cmd" in
+  list)
+    list_entries
+    ;;
+  one)
+    shift
+    id="${1:?usage: sx-movies one FILM_ID}"
+    quit_after="$(python3 - "$MANIFEST" "$id" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+for e in data:
+    if e["id"] == sys.argv[2]:
+        print(int(e.get("quit_after", 1200)))
+        break
+else:
+    sys.exit(1)
+PY
+)"
+    render_one "$id" "$quit_after"
+    ;;
+  all)
+    while IFS=$'\t' read -r id quit_after; do
+      [[ -z "$id" ]] && continue
+      render_one "$id" "$quit_after"
+    done < <(enabled_rows)
+    echo "sx-movies: done → $OUT"
+    ;;
+  *)
+    echo "usage: sx-movies [all|list|one FILM_ID]" >&2
+    exit 1
+    ;;
+esac

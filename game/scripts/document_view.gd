@@ -46,10 +46,12 @@ var display_mode := DisplayMode.SHADED_EDGES
 var section_enabled := false
 ## Body ids currently hidden from view / picking (id -> true).
 var hidden_bodies := {}
-## Body ids remembered by Ctrl+C for later Ctrl+V paste (may become stale).
+## Body ids remembered by Copy/Cut for Paste (cut clones may be hidden).
 var _clipboard_bodies: Array[String] = []
 ## Pastes since last copy — scales the XY offset so each paste lands further away.
 var _clipboard_paste_count := 0
+## True when clipboard holds cut materializations (hidden until first paste).
+var _clipboard_cut := false
 
 const EDGE_PICK_TOLERANCE := 2.5  # model units (mm)
 const DATUM_PLANE_HALF := 20.0  # ~40 unit square
@@ -64,6 +66,10 @@ var _body_materials := {}  # body_id -> ShaderMaterial (tinted by body color)
 var _instance_materials := {}  # instance_id -> Material
 var _edge_highlight: MeshInstance3D
 var _selection_corners: MeshInstance3D
+## SketchPadOverlay — typed loosely to avoid class_name cycle with DocumentView.
+var sketch_pads: Node3D
+## Sketch feature currently being edited (hides that yellow pad); "" = none.
+var _editing_sketch_fid := ""
 var _base_material: ShaderMaterial
 var _selected_body_material: ShaderMaterial
 var _selected_face_material: ShaderMaterial
@@ -131,6 +137,10 @@ func _ready() -> void:
 	_edge_highlight.name = "EdgeHighlight"
 	_edge_highlight.material_override = _selected_edge_overlay
 	add_child(_edge_highlight)
+	sketch_pads = SketchPadOverlay.new()
+	sketch_pads.name = "SketchPads"
+	sketch_pads.view = self
+	add_child(sketch_pads)
 	var corner_mat := StandardMaterial3D.new()
 	corner_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	corner_mat.albedo_color = Color(0.15, 0.55, 1.0)
@@ -275,7 +285,7 @@ static func default_primitive_size(kind: String) -> Vector3:
 		"sphere":
 			return Vector3(s, s, s)  # diameter
 		"cone":
-			return Vector3(s, s * 0.4, s)  # bottom Ø, top Ø, height
+			return Vector3(s, 0.0, s)  # bottom Ø, top Ø (0 = apex), height
 		"torus":
 			return Vector3(s * 1.2, s * 0.32, s * 0.32)  # major Ø, tube Ø
 		_:
@@ -399,6 +409,20 @@ func is_primitive_body(body_id: String) -> bool:
 	return not info.is_empty() and str(info.get("type", "")) == "primitive"
 
 
+## True when the body is an import_step / import_stl feature (uniform scale).
+func is_import_body(body_id: String) -> bool:
+	var info := feature_info(body_id)
+	if info.is_empty():
+		return false
+	var t := str(info.get("type", ""))
+	return t == "import_step" or t == "import_stl"
+
+
+## True when W×H×D (or uniform scale) can be edited on the selection.
+func is_scalable_body(body_id: String) -> bool:
+	return is_primitive_body(body_id) or is_import_body(body_id)
+
+
 ## Combined selection AABB in model space: {min, max, size, center} or {}.
 func selection_bbox() -> Dictionary:
 	var ids: Array[String] = []
@@ -498,7 +522,7 @@ static func _apply_cyl_cone_aabb_params(params: Dictionary, size: Vector3,
 	var r := minf(r_a, r_b) * 0.5
 	params["a"] = r
 	if is_cone:
-		params["b"] = float(params.get("b", r * 0.2))
+		params["b"] = float(params.get("b", 0.0))
 		params["c"] = height
 	else:
 		params["b"] = height
@@ -711,8 +735,70 @@ func closest_edge_point(body_id: String, point: Vector3) -> Vector3:
 	return best
 
 
+## Snap candidates for tap-measure / planting the X: corners, edge midpoints,
+## and face (surface) midpoints. Nearest Euclidean wins.
+func measure_snap_candidates(body_id: String) -> Array[Vector3]:
+	var candidates: Array[Vector3] = []
+	var bb: Dictionary = doc.measure_bbox(body_id)
+	if not bb.is_empty():
+		var mn: Vector3 = bb["min"]
+		var mx: Vector3 = bb["max"]
+		for x in [mn.x, mx.x]:
+			for y in [mn.y, mx.y]:
+				for z in [mn.z, mx.z]:
+					candidates.append(Vector3(x, y, z))
+	var lines: Dictionary = doc.get_edge_lines(body_id)
+	for edge_id in lines:
+		var pts: PackedVector3Array = lines[edge_id]
+		if pts.is_empty():
+			continue
+		candidates.append(pts[0])
+		if pts.size() > 1:
+			candidates.append(pts[pts.size() - 1])
+			candidates.append(_polyline_midpoint(pts))
+	for face_id in doc.get_face_ids(body_id):
+		candidates.append(doc.face_midpoint(face_id))
+	return candidates
+
+
+func _polyline_midpoint(pts: PackedVector3Array) -> Vector3:
+	if pts.size() < 2:
+		return pts[0] if pts.size() == 1 else Vector3.ZERO
+	var total := 0.0
+	for i in range(pts.size() - 1):
+		total += pts[i].distance_to(pts[i + 1])
+	if total < 1e-12:
+		return pts[0]
+	var half := total * 0.5
+	var acc := 0.0
+	for i in range(pts.size() - 1):
+		var seg := pts[i].distance_to(pts[i + 1])
+		if acc + seg >= half:
+			var t := 0.0 if seg < 1e-12 else (half - acc) / seg
+			return pts[i].lerp(pts[i + 1], t)
+		acc += seg
+	return pts[pts.size() - 1]
+
+
+## Closest measure snap (corner / edge mid / surface mid) to `point`.
+func closest_measure_snap(body_id: String, point: Vector3) -> Vector3:
+	var candidates := measure_snap_candidates(body_id)
+	if candidates.is_empty():
+		return closest_edge_point(body_id, point)
+	var best: Vector3 = candidates[0]
+	var best_d := point.distance_squared_to(best)
+	for i in range(1, candidates.size()):
+		var c: Vector3 = candidates[i]
+		var d := point.distance_squared_to(c)
+		if d < best_d:
+			best_d = d
+			best = c
+	return best
+
+
 ## Closest corner to `point` — AABB corners plus edge endpoints (vertices).
 ## Used when planting / replanting the measure X so it snaps to corners.
+## Prefer `closest_measure_snap` for full corner + mid + surface snap.
 func closest_corner_point(body_id: String, point: Vector3) -> Vector3:
 	var candidates: Array[Vector3] = []
 	var bb: Dictionary = doc.measure_bbox(body_id)
@@ -742,6 +828,15 @@ func closest_corner_point(body_id: String, point: Vector3) -> Vector3:
 			best_d = d
 			best = c
 	return best
+
+
+## Foot of the perpendicular from `from` onto `body_id` (closest surface point).
+## Falls back to closest edge point when the kernel query fails.
+func closest_surface_point(body_id: String, from: Vector3) -> Vector3:
+	var r: Dictionary = doc.closest_point_on(body_id, from)
+	if not r.is_empty() and r.has("point_b"):
+		return r["point_b"] as Vector3
+	return closest_edge_point(body_id, from)
 
 
 func _point_segment_distance3(p: Vector3, a: Vector3, b: Vector3) -> float:
@@ -867,6 +962,77 @@ func select_entity(body_id: String, face_id: String) -> void:
 	selection_changed.emit(selected_body, selected_face)
 
 
+## Select every face on a body (multi-face selection; body stays primary).
+func select_all_faces(body_id: String) -> int:
+	if body_id == "":
+		return 0
+	var faces: PackedStringArray = _face_ids.get(body_id, PackedStringArray())
+	if faces.is_empty():
+		faces = doc.get_face_ids(body_id)
+	if faces.is_empty():
+		return 0
+	selected_body = body_id
+	selected_face = faces[0]
+	selected_edge = ""
+	selected_bodies.clear()
+	selected_faces.clear()
+	selected_edges.clear()
+	for f in faces:
+		selected_faces.append(f)
+	if selected_instance != "":
+		selected_instance = ""
+		_apply_instance_highlight()
+	_apply_selection_materials()
+	_highlight_edge()
+	selection_changed.emit(selected_body, selected_face)
+	return selected_faces.size()
+
+
+## Select every body in the document (whole-body multi-select).
+func select_all_bodies() -> int:
+	var bodies: PackedStringArray = doc.body_ids()
+	selected_faces.clear()
+	selected_edges.clear()
+	selected_edge = ""
+	selected_face = ""
+	selected_bodies.clear()
+	for b in bodies:
+		if not hidden_bodies.has(b):
+			selected_bodies.append(b)
+	selected_body = selected_bodies[0] if not selected_bodies.is_empty() else ""
+	if selected_instance != "":
+		selected_instance = ""
+		_apply_instance_highlight()
+	_apply_selection_materials()
+	_highlight_edge()
+	selection_changed.emit(selected_body, "")
+	return selected_bodies.size()
+
+
+## Uniform scale for an import_step / import_stl body. Returns false on miss.
+func set_import_scale(body_id: String, scale: float) -> bool:
+	if not is_import_body(body_id) or scale <= 0.0:
+		return false
+	var info := feature_info(body_id)
+	var params := feature_params(body_id)
+	if info.is_empty() or params.is_empty():
+		return false
+	params["scale"] = scale
+	var keep := body_id
+	if not doc.graph_set_params(info["id"], JSON.stringify(params)):
+		return false
+	_after_mutation()
+	select_entity(keep, "")
+	return true
+
+
+## Feature id for an import body, or "".
+func import_feature_id(body_id: String) -> String:
+	if not is_import_body(body_id):
+		return ""
+	return feature_of_body(body_id)
+
+
 ## Select a component instance (clears body/face/edge selection).
 func select_instance(instance_id: String) -> void:
 	select_entity("", "")
@@ -971,16 +1137,7 @@ func selection_card() -> String:
 
 ## Outward normal (model space) of the selected face, from its tessellation.
 func selected_face_normal() -> Vector3:
-	if selected_body == "" or selected_face == "":
-		return Vector3.ZERO
-	var node: MeshInstance3D = _body_nodes.get(selected_body)
-	var faces: PackedStringArray = _face_ids.get(selected_body, PackedStringArray())
-	var idx := faces.find(selected_face)
-	if node == null or idx < 0:
-		return Vector3.ZERO
-	var arrays: Array = node.mesh.surface_get_arrays(idx)
-	var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
-	return normals[0] if normals.size() > 0 else Vector3.ZERO
+	return face_normal(selected_body, selected_face)
 
 
 func body_center(body_id: String) -> Vector3:
@@ -1149,6 +1306,13 @@ func delete_selected() -> bool:
 		ids.append(selected_body)
 	if ids.is_empty():
 		return false
+	var any := _delete_body_ids(ids)
+	clear_selection()
+	_after_mutation()
+	return any
+
+
+func _delete_body_ids(ids: Array[String]) -> bool:
 	var any := false
 	for body_id in ids:
 		var fid := feature_of_body(body_id)
@@ -1159,13 +1323,48 @@ func delete_selected() -> bool:
 			ok = doc.delete_body(body_id)
 		if ok:
 			any = true
-	clear_selection()
-	_after_mutation()
+			hidden_bodies.erase(body_id)
 	return any
+
+
+## True when Paste / Paste Special have something to place.
+func has_clipboard() -> bool:
+	_prune_clipboard()
+	return not _clipboard_bodies.is_empty()
+
+
+func _prune_clipboard() -> void:
+	var live := {}
+	for id in doc.body_ids():
+		live[id] = true
+	var keep: Array[String] = []
+	for id in _clipboard_bodies:
+		if live.has(id):
+			keep.append(id)
+	_clipboard_bodies = keep
+	if _clipboard_bodies.is_empty():
+		_clipboard_cut = false
+
+
+## Drop hidden cut orphans when starting a fresh copy/cut.
+func _discard_cut_orphans() -> void:
+	if not _clipboard_cut:
+		return
+	var orphans: Array[String] = []
+	for id in _clipboard_bodies:
+		if hidden_bodies.has(id):
+			orphans.append(id)
+	if not orphans.is_empty():
+		_delete_body_ids(orphans)
+		_after_mutation()
+	_clipboard_bodies.clear()
+	_clipboard_cut = false
+	_clipboard_paste_count = 0
 
 
 ## Remember currently selected bodies for paste. Returns how many were copied.
 func copy_selection() -> int:
+	_discard_cut_orphans()
 	var ids: Array[String] = []
 	for b in selected_bodies:
 		ids.append(b)
@@ -1173,6 +1372,7 @@ func copy_selection() -> int:
 		ids.append(selected_body)
 	_clipboard_bodies.clear()
 	_clipboard_paste_count = 0
+	_clipboard_cut = false
 	var live := {}
 	for id in doc.body_ids():
 		live[id] = true
@@ -1182,24 +1382,53 @@ func copy_selection() -> int:
 	return _clipboard_bodies.size()
 
 
-## Paste clipboard bodies offset by 20% of their combined AABB in the ground
-## plane (XY). Each successive paste without re-copy steps further by that
-## same delta. Returns the new body ids (selection is set to them).
-func paste_clipboard() -> Array[String]:
-	var live := {}
-	for id in doc.body_ids():
-		live[id] = true
-	var sources: Array[String] = []
-	for id in _clipboard_bodies:
-		if live.has(id):
-			sources.append(id)
-	if sources.is_empty():
-		return []
+## Cut = copy + remove. Materializes independent clones (hidden) so Paste works
+## after the originals are gone. Returns how many landed on the clipboard.
+func cut_selection() -> int:
+	var n := copy_selection()
+	if n == 0:
+		return 0
+	var sources: Array[String] = _clipboard_bodies.duplicate()
+	var clones: Array[String] = []
+	for id in sources:
+		var bb0: Dictionary = doc.measure_bbox(id)
+		if bb0.is_empty():
+			continue
+		# Pattern once, then snap the clone back onto the source pose.
+		var made: PackedStringArray = doc.linear_pattern(id, Vector3(1, 0, 0), 1.0, 2)
+		if made.is_empty():
+			continue
+		var c: String = made[0]
+		var bb1: Dictionary = doc.measure_bbox(c)
+		if not bb1.is_empty():
+			doc.translate_body(c, bb0["min"] - bb1["min"])
+		var src_name := doc.body_name(id)
+		if src_name != "":
+			doc.rename_body(c, src_name)
+		clones.append(c)
+	if clones.is_empty():
+		_clipboard_bodies.clear()
+		return 0
+	_delete_body_ids(sources)
+	for c in clones:
+		set_body_hidden(c, true)
+	_clipboard_bodies = clones
+	_clipboard_cut = true
+	_clipboard_paste_count = 0
+	clear_selection()
+	_after_mutation()
+	return clones.size()
 
+
+## Default Paste step: 20% of combined AABB on the ground plane (XY).
+func clipboard_paste_step() -> Vector3:
+	_prune_clipboard()
+	if _clipboard_bodies.is_empty():
+		return Vector3(10, 10, 0)
 	var mn := Vector3(1e12, 1e12, 1e12)
 	var mx := Vector3(-1e12, -1e12, -1e12)
 	var any := false
-	for id in sources:
+	for id in _clipboard_bodies:
 		var bb: Dictionary = doc.measure_bbox(id)
 		if bb.is_empty():
 			continue
@@ -1207,22 +1436,75 @@ func paste_clipboard() -> Array[String]:
 		mn = mn.min(bb["min"])
 		mx = mx.max(bb["max"])
 	if not any:
-		return []
+		return Vector3(10, 10, 0)
 	var size: Vector3 = mx - mn
-	# Ground plane is kernel XY (Z-up). Offset 20% of planar bounds in each axis.
 	var step := Vector3(size.x * 0.2, size.y * 0.2, 0.0)
 	if step.length_squared() < 1e-8:
 		step = Vector3(1.0, 1.0, 0.0)
-	_clipboard_paste_count += 1
-	var offset := step * float(_clipboard_paste_count)
-	var spacing := offset.length()
-	var direction := offset / spacing
+	return step
+
+
+## Paste clipboard bodies. When `offset` is omitted (NaN sentinel), uses the
+## stepped 20% ground-plane delta. Cut bodies are revealed on first paste.
+## Returns the new (or revealed) body ids; selection is set to them.
+func paste_clipboard(offset := Vector3(NAN, NAN, NAN)) -> Array[String]:
+	_prune_clipboard()
+	if _clipboard_bodies.is_empty():
+		return []
+
+	var use_custom := not is_nan(offset.x)
+	var step := offset if use_custom else clipboard_paste_step()
+	if not use_custom:
+		_clipboard_paste_count += 1
+		step = step * float(_clipboard_paste_count)
+	elif _clipboard_cut:
+		# First paste after cut with an explicit offset — still a "first" paste.
+		pass
+	else:
+		_clipboard_paste_count += 1
+
+	if _clipboard_cut:
+		var revealed: Array[String] = []
+		for id in _clipboard_bodies:
+			set_body_hidden(id, false)
+			if step.length_squared() > 1e-12:
+				doc.translate_body(id, step)
+			revealed.append(id)
+		_clipboard_cut = false
+		_clipboard_paste_count = 1 if use_custom else _clipboard_paste_count
+		selected_body = revealed[revealed.size() - 1]
+		selected_face = ""
+		selected_edge = ""
+		selected_bodies.assign(revealed)
+		selected_faces.clear()
+		selected_edges.clear()
+		if selected_instance != "":
+			selected_instance = ""
+			_apply_instance_highlight()
+		_after_mutation()
+		selection_changed.emit(selected_body, selected_face)
+		return revealed
+
+	var sources: Array[String] = _clipboard_bodies.duplicate()
+	var spacing := step.length()
+	if spacing < 1e-8:
+		# In-place paste: still need distinct bodies — nudge then snap via pattern+translate.
+		spacing = 1.0
+		step = Vector3(1, 0, 0)
+	var direction := step / spacing
 
 	var created: Array[String] = []
 	for id in sources:
 		var made: PackedStringArray = doc.linear_pattern(id, direction, spacing, 2)
 		if made.size() > 0:
-			created.append(made[0])
+			var c: String = made[0]
+			# When custom offset was not a pure step from pattern origin, snap.
+			if use_custom:
+				var bb0: Dictionary = doc.measure_bbox(id)
+				var bb1: Dictionary = doc.measure_bbox(c)
+				if not bb0.is_empty() and not bb1.is_empty():
+					doc.translate_body(c, (bb0["min"] + offset) - bb1["min"])
+			created.append(c)
 	if created.is_empty():
 		return []
 	selected_body = created[created.size() - 1]
@@ -1275,6 +1557,7 @@ func load_from(path: String) -> bool:
 	hidden_bodies.clear()
 	_clipboard_bodies.clear()
 	_clipboard_paste_count = 0
+	_clipboard_cut = false
 	_after_mutation()
 	return ok
 
@@ -1285,6 +1568,7 @@ func new_document() -> void:
 	hidden_bodies.clear()
 	_clipboard_bodies.clear()
 	_clipboard_paste_count = 0
+	_clipboard_cut = false
 	_after_mutation()
 
 
@@ -1304,6 +1588,34 @@ func refresh() -> void:
 			hidden_bodies.erase(body_id)
 	_refresh_datums()
 	_refresh_instances()
+	refresh_sketch_pads(_editing_sketch_fid)
+	# refresh() rebuilds meshes; surface overrides must be reapplied or bodies
+	# keep Godot's default matte white (films call refresh without _after_mutation).
+	_apply_selection_materials()
+	_highlight_edge()
+
+
+## Rebuild yellow sketch pads. Pass editing_fid to hide that pad while editing.
+func refresh_sketch_pads(editing_fid: String = "") -> void:
+	_editing_sketch_fid = editing_fid
+	if sketch_pads != null and sketch_pads.has_method("refresh"):
+		sketch_pads.call("refresh", doc, editing_fid)
+
+
+## Face normal from tessellation (model space), or ZERO if unknown.
+func face_normal(body_id: String, face_id: String) -> Vector3:
+	if body_id == "" or face_id == "":
+		return Vector3.ZERO
+	var node: MeshInstance3D = _body_nodes.get(body_id)
+	var faces: PackedStringArray = _face_ids.get(body_id, PackedStringArray())
+	var idx := faces.find(face_id)
+	if node == null or idx < 0 or node.mesh == null:
+		return Vector3.ZERO
+	if idx >= node.mesh.get_surface_count():
+		return Vector3.ZERO
+	var arrays: Array = node.mesh.surface_get_arrays(idx)
+	var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+	return normals[0] if normals.size() > 0 else Vector3.ZERO
 
 
 func body_node(body_id: String) -> MeshInstance3D:

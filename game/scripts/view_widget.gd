@@ -59,6 +59,8 @@ func zone_at(local_pos: Vector2) -> String:
 func click_zone(zone: String) -> void:
 	if camera == null or not has_zone(zone):
 		return
+	if camera.sketch_orientation_locked:
+		return
 	var angles: Vector2 = angles_for(zone)
 	var duration := 0.0 if snap else 0.25
 	camera.animate_to(angles.x, angles.y, duration)
@@ -84,7 +86,7 @@ func angles_for(zone: String) -> Vector2:
 		"bottom":
 			return Vector2(deg_to_rad(0.0), deg_to_rad(-89.0))
 		"iso":
-			return Vector2(deg_to_rad(-35.0), deg_to_rad(30.0))
+			return Vector2(deg_to_rad(-35.0), deg_to_rad(40.0))
 	return Vector2.ZERO
 
 

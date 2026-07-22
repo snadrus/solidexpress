@@ -38,6 +38,7 @@ Key files: `game/scripts/document_view.gd` (view-model), `viewport_interaction.g
 - [x] 2.5 SxSketch GDExtension binding (entities, constraints, solve, entity_info snapshots) + `SxDocument.extrude_sketch/revolve_sketch`
 - [x] 2.6 Sketch mode UI v1: sketch on ground plane or selected planar face; line-chain/rect/circle tools with live preview; toolbar with extrude distance; Esc cancel (`game/scripts/sketch_mode.gd`) — constraint toolbar + dimension input still TODO
 - [x] 2.7 Sketch persistence: sketches embed in features.json inside .sxp (sketch_json.cpp); sketch entity cards still TODO
+- [x] SW sketch parity (visual-first): compact left rail + on-canvas chips; Power Trim hover/drag; entity variants (rect/circle/arc), ellipse/slot/point/centerline/spline approximations; Convert/Mirror/Pattern; Smart Dim; sketch blocks + picture underlay; multi-sketch **Path** feature (no free 3D sketch). Howtos: `docs/howto/visual-sketch-tools.md`, `docs/howto/multi-sketch-merge.md`.
 
 Test state additions: kernel [sketch]+[extrude] 14 cases; Godot sketch binding 23 checks PASS (parametric re-solve verified).
 
@@ -57,7 +58,8 @@ Kernel suite now 51 cases / 5492 assertions.
 ## Modeling operations round 2 (parallel agents, merged)
 - [x] Transforms: MirrorBody, LinearPattern, CircularPattern, RotateBody (in-place, ids preserved) ([transform], 5 cases)
 - [x] Shell (open-face hollow via MakeThickSolidByJoin) + OffsetBody ([hollow], 3 cases). Note: oversized shell must use thickness ≥ half the box to reliably fail in OCCT
-- [x] Measure: min_distance, bounding_box, mass_properties (incl. inertia), edge_length, face_area, angle_between_faces ([measure], 6 cases)
+- [x] Measure: min_distance, closest_point (perp foot), face_midpoint, bounding_box, mass_properties (incl. inertia), edge_length, face_area, angle_between_faces ([measure])
+- [x] Hover tap-measure: X snaps to corner / edge mid / surface mid; approach shows perpendicular onto near body before X relocates; move magnets include real face mids
 
 Kernel suite: 72 cases / 5678 assertions.
 
@@ -174,6 +176,12 @@ Round 19 test state: kernel 210 cases / 7043 assertions; Godot voice 29 + help 1
 - [x] Stack-on-face: `insert_primitive` uses floor z; place ray hits body top → stack; three boxes → height 150
 - [x] How-tos: `docs/howto/place-and-orbit.md`, `stack-three-blocks.md`, `extrude-s-shape.md`, `horizontal-hole.md` + README links; `run_howto_tests.gd` mirrors goals
 - [x] Place suite extended (34 checks)
+
+## File drop / mesh import (in progress → landed)
+- [x] OS `files_dropped`: STL → `ImportStl` feature (scale param) + whole-body select + HUD/property Scale; SVG → sketch picture on face/ground; STEP → `ImportStep`; `.sxp` → open
+- [x] File menu Import STL; Ctrl+A select-all (sketch entities / faces / imported body as one selection)
+- [x] Kernel `[featimport]` STL case; UI `test_graph_import_stl` (269 UI checks)
+- [x] Edit menu: Undo/Redo/Cut/Copy/Paste/Paste Special/Select All/Delete; Ctrl+X cut (materialized clipboard); Ctrl+Shift+V paste special; sketch entity clipboard; context-menu clipboard
 
 ## Later phases
 See friendliness plan (phases 21-27) + AI-first solver upgrade for unmatched voice.

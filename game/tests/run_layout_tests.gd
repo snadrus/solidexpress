@@ -57,7 +57,7 @@ func test_selection_toggles_card(main) -> void:
 	check(main.card_box.visible, "card visible with selection")
 	check(main.ops_panel.visible, "ops panel visible with selection")
 	check(not main.palette.visible, "primitives palette hidden while selected")
-	check(main.ops_panel.offset_left == 12.0, "ops panel docked left while selected")
+	check(main.ops_panel.offset_left == 8.0, "ops panel docked left while selected")
 	main.view.clear_selection()
 	main._update_panel_visibility()
 	check(not main.card_box.visible, "card hidden after deselect")

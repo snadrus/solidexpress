@@ -17,12 +17,12 @@ var pivot := Vector3.ZERO
 ## Empty-scene start: close enough that 0.1 mm grid cells resolve on screen.
 var distance := DEFAULT_DISTANCE
 var yaw := deg_to_rad(-35.0)
-var pitch := deg_to_rad(30.0)
+var pitch := deg_to_rad(40.0)
 ## Set by main; used by frame_contents (F) to fit all bodies.
 var view: DocumentView
 var model_space: Node3D
-## Mouse binding preset for middle-drag (and Shift+middle).
-var nav_preset := NavPreset.SOLIDEXPRESS
+## Mouse binding preset for middle-drag (and Shift+middle). Fusion-only in UI.
+var nav_preset := NavPreset.FUSION
 
 ## ~15 mm puts ≈4 px on a 0.1 mm cell at 900p / 75° FOV.
 const DEFAULT_DISTANCE := 15.0
@@ -47,6 +47,11 @@ const VIEWS_CFG := "user://views.cfg"
 ## name -> {yaw, pitch, distance, pivot, projection}
 var _named_views: Dictionary = {}
 var _view_tween: Tween
+## When true, orientation changes (orbit / view snaps / ortho toggle) are blocked;
+## pan and zoom still work. Set by sketch enter/leave.
+var sketch_orientation_locked := false
+## In-memory pose captured before entering sketch view (not persisted).
+var _sketch_pose: Dictionary = {}
 
 
 func _ready() -> void:
@@ -56,6 +61,8 @@ func _ready() -> void:
 
 
 func _orbit_by(dx: float, dy: float) -> void:
+	if sketch_orientation_locked:
+		return
 	yaw -= dx * ORBIT_SPEED
 	pitch = clampf(pitch + dy * ORBIT_SPEED, MIN_PITCH, MAX_PITCH)
 	_update_transform()
@@ -167,6 +174,10 @@ func handle_input(event: InputEvent, allow_scroll_gestures := true) -> bool:
 		if do_pan:
 			_pan_by(pg.delta.x * PAN_GESTURE_MOVE_SCALE, pg.delta.y * PAN_GESTURE_MOVE_SCALE)
 			return true
+		if sketch_orientation_locked:
+			# Locked sketch view: treat two-finger as pan instead of orbit.
+			_pan_by(pg.delta.x * PAN_GESTURE_MOVE_SCALE, pg.delta.y * PAN_GESTURE_MOVE_SCALE)
+			return true
 		var scale := PAN_GESTURE_SCALE
 		# Left-click held under the fingers → slightly snappier turn.
 		if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
@@ -217,18 +228,28 @@ func handle_input(event: InputEvent, allow_scroll_gestures := true) -> bool:
 				frame_selection_or_all(k.shift_pressed)
 				return true
 			KEY_1:  # front: looking along -Y in model space (Z-up kernel)
+				if sketch_orientation_locked:
+					return true
 				set_view(deg_to_rad(0.0), deg_to_rad(0.0))
 				return true
 			KEY_2:  # right: looking along -X
+				if sketch_orientation_locked:
+					return true
 				set_view(deg_to_rad(90.0), deg_to_rad(0.0))
 				return true
 			KEY_3:  # top: looking down model +Z (world +Y)
+				if sketch_orientation_locked:
+					return true
 				set_view(deg_to_rad(0.0), deg_to_rad(89.0))
 				return true
 			KEY_7:  # isometric
-				set_view(deg_to_rad(-35.0), deg_to_rad(30.0))
+				if sketch_orientation_locked:
+					return true
+				set_view(deg_to_rad(-35.0), deg_to_rad(40.0))
 				return true
 			KEY_5:
+				if sketch_orientation_locked:
+					return true
 				toggle_projection()
 				return true
 	return false
@@ -406,6 +427,54 @@ func look_along_model_normal(normal: Vector3) -> void:
 		frame_selection()
 
 
+## Capture current pose into an in-memory dict (not written to views.cfg).
+func capture_pose() -> Dictionary:
+	return {
+		"yaw": yaw,
+		"pitch": pitch,
+		"distance": distance,
+		"pivot": pivot,
+		"projection": projection,
+	}
+
+
+## Apply a pose dict from capture_pose / enter_sketch_view.
+func apply_pose(pose: Dictionary) -> void:
+	if pose.is_empty():
+		return
+	yaw = float(pose.get("yaw", yaw))
+	pitch = float(pose.get("pitch", pitch))
+	distance = float(pose.get("distance", distance))
+	pivot = pose.get("pivot", pivot) as Vector3
+	projection = int(pose.get("projection", projection)) as ProjectionType
+	_update_transform()
+
+
+## Enter locked sketch view: save pose, force ortho, look along normal, frame.
+func enter_sketch_view(normal: Vector3, frame_center: Vector3, frame_radius: float) -> void:
+	_sketch_pose = capture_pose()
+	sketch_orientation_locked = true
+	projection = PROJECTION_ORTHOGONAL
+	var n := normal.normalized()
+	if n.length_squared() > 1e-8:
+		yaw = atan2(n.x, -n.y)
+		pitch = asin(clampf(n.z, -1.0, 1.0))
+	pivot = frame_center
+	var r := maxf(frame_radius, 5.0)
+	distance = clampf(r / tan(deg_to_rad(fov) / 2.0) * 1.35, MIN_DISTANCE, MAX_DISTANCE)
+	_update_transform()
+
+
+## Leave sketch view: unlock orientation and restore the pre-entry pose.
+func leave_sketch_view() -> void:
+	sketch_orientation_locked = false
+	if not _sketch_pose.is_empty():
+		apply_pose(_sketch_pose)
+		_sketch_pose.clear()
+	else:
+		_update_transform()
+
+
 func save_named_view(view_name: String) -> void:
 	_named_views[view_name] = {
 		"yaw": yaw,
@@ -420,6 +489,9 @@ func save_named_view(view_name: String) -> void:
 func restore_named_view(view_name: String) -> bool:
 	if not _named_views.has(view_name):
 		return false
+	if _view_tween != null and _view_tween.is_valid():
+		_view_tween.kill()
+		_view_tween = null
 	var v: Dictionary = _named_views[view_name]
 	yaw = float(v["yaw"])
 	pitch = float(v["pitch"])

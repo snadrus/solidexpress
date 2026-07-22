@@ -79,6 +79,11 @@ public:
     // --- measurement ---
     // {distance: float, point_a: Vector3, point_b: Vector3} or {} on failure.
     godot::Dictionary measure_distance(const godot::String& a, const godot::String& b) const;
+    // Closest point on `shape_id` to `from` — {distance, point_a, point_b} or {}.
+    godot::Dictionary closest_point_on(const godot::String& shape_id,
+                                       const godot::Vector3& from) const;
+    // UV midpoint of a face in model space, or ZERO if invalid.
+    godot::Vector3 face_midpoint(const godot::String& face_id) const;
     // {min: Vector3, max: Vector3} or {}.
     godot::Dictionary measure_bbox(const godot::String& id) const;
     // {volume, surface_area, center_of_mass: Vector3} or {}.
@@ -93,6 +98,7 @@ public:
     bool export_stl(const godot::String& path, bool binary);
     // Returns uuids of imported bodies (empty on failure).
     godot::PackedStringArray import_step(const godot::String& path);
+    godot::PackedStringArray import_stl(const godot::String& path);
 
     // --- undo/redo ---
     bool undo();
@@ -148,6 +154,10 @@ public:
     godot::String graph_add_primitive(const godot::String& kind, double a, double b, double c,
                                       const godot::Vector3& origin);
     godot::String graph_add_sketch(const godot::Ref<class SxSketch>& sketch);
+    // Deep-copy of a Sketch feature's geometry (null Ref if missing / wrong type).
+    godot::Ref<class SxSketch> graph_get_sketch(const godot::String& fid) const;
+    // Replace a Sketch feature's geometry and regenerate dependents (undoable).
+    bool graph_update_sketch(const godot::String& fid, const godot::Ref<class SxSketch>& sketch);
     // op: "new" | "fuse" | "cut"; target_fid required for fuse/cut.
     godot::String graph_add_extrude(const godot::String& sketch_fid, double distance,
                                     bool symmetric, const godot::String& op,
@@ -160,6 +170,13 @@ public:
     // Sweep a sketch profile along a 3D polyline path (at least two points).
     godot::String graph_add_sweep(const godot::String& sketch_fid,
                                   const godot::PackedVector3Array& path);
+    // Sweep along a Path feature (params rebuilt associatively from source sketches).
+    godot::String graph_add_sweep_along_path(const godot::String& sketch_fid,
+                                             const godot::String& path_fid);
+    // Composite 3D path from two or more planar sketches (SW 3D-sketch substitute).
+    // mode: "join_endpoints" | "bridge_spline" | "composite"
+    godot::String graph_add_path(const godot::PackedStringArray& sketch_fids,
+                                 const godot::String& mode);
     // Loft through two or more sketch profiles (each on its own plane).
     godot::String graph_add_loft(const godot::PackedStringArray& sketch_fids, bool ruled);
     // Dress-up features on a timeline body. Edge ids are converted to the
@@ -176,6 +193,8 @@ public:
                                  float cs_diameter, float cs_angle_deg);
     // Import a STEP solid as a timeline BASE feature (index 0, uniform scale).
     godot::String graph_add_import_step(const godot::String& path, float scale);
+    // Import an STL mesh as a timeline BASE feature (uniform scale).
+    godot::String graph_add_import_stl(const godot::String& path, float scale);
     // Body-level boolean on the timeline. op: "fuse" | "cut" | "common".
     // Target keeps the result; tool feature's body is consumed on regenerate.
     godot::String graph_add_boolean(const godot::String& op, const godot::String& target_fid,
