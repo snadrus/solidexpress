@@ -12,6 +12,8 @@ var _badge: Label
 const _FilmPointerScript = preload("res://tests/lib/film_pointer.gd")
 
 var _pointer: Control
+var _toast_panel: PanelContainer
+var _toast: Label
 var _move_tween: Tween
 
 ## Closed cues: { "start_frame": int, "end_frame": int, "text": String }
@@ -56,7 +58,10 @@ func _ready() -> void:
 	_cc_panel.add_child(_cc)
 
 	_badge = Label.new()
-	_badge.position = Vector2(16, 16)
+	_badge.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_badge.offset_left = 16
+	_badge.offset_top = 50
+	_badge.offset_right = 480
 	_badge.add_theme_font_size_override("font_size", 16)
 	_badge.add_theme_color_override("font_color", Color(0.9, 0.95, 1))
 	_badge.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.8))
@@ -67,6 +72,30 @@ func _ready() -> void:
 	_pointer = _FilmPointerScript.new()
 	_pointer.visible = false
 	_root.add_child(_pointer)
+
+	_toast_panel = PanelContainer.new()
+	_toast_panel.visible = false
+	_toast_panel.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_toast_panel.offset_top = 88
+	_toast_panel.offset_bottom = 88 + 52
+	_toast_panel.offset_left = -360
+	_toast_panel.offset_right = 360
+	_toast_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	var toast_style := StyleBoxFlat.new()
+	toast_style.bg_color = Color(0.08, 0.12, 0.22, 0.88)
+	toast_style.set_corner_radius_all(6)
+	toast_style.content_margin_left = 20
+	toast_style.content_margin_right = 20
+	toast_style.content_margin_top = 12
+	toast_style.content_margin_bottom = 12
+	_toast_panel.add_theme_stylebox_override("panel", toast_style)
+	_root.add_child(_toast_panel)
+	_toast = Label.new()
+	_toast.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_toast.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_toast.add_theme_font_size_override("font_size", 20)
+	_toast.add_theme_color_override("font_color", Color(0.95, 0.98, 1))
+	_toast_panel.add_child(_toast)
 
 
 ## Show a closed caption and open a soft-subtitle cue (ended by the next caption or finish).
@@ -128,6 +157,17 @@ static func cues_to_webvtt(cue_list: Array, cue_fps: float = 60.0) -> String:
 	return "\n".join(lines)
 
 
+func show_toast(text: String) -> void:
+	var t := text.strip_edges()
+	_toast.text = t
+	_toast_panel.visible = not t.is_empty()
+
+
+func hide_toast() -> void:
+	_toast.text = ""
+	_toast_panel.visible = false
+
+
 func show_keys(text: String) -> void:
 	_badge.text = text
 
@@ -158,10 +198,14 @@ func animate_pointer_click(screen_pos: Vector2, keys: String = "Click", desc: St
 	if not _pointer.visible or start == Vector2.ZERO:
 		start = target
 		_pointer.global_position = start
+	if _pointer.has_method("set_moving"):
+		_pointer.set_moving(true)
 	_move_tween = create_tween()
 	_move_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
-	_move_tween.tween_property(_pointer, "global_position", target, 0.45)
+	_move_tween.tween_property(_pointer, "global_position", target, 0.55)
 	await _move_tween.finished
+	if _pointer.has_method("set_moving"):
+		_pointer.set_moving(false)
 	if _pointer.has_method("play_click_flash"):
 		await _pointer.play_click_flash()
 	await get_tree().create_timer(0.08).timeout

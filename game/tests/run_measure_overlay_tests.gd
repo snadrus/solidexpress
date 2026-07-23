@@ -69,11 +69,22 @@ func test_perp_before_relocate(main) -> void:
 	var view: DocumentView = main.view
 	var ix: ViewportInteraction = main.interaction
 	view.new_document()
-	var a: String = view.insert_primitive("box", Vector3(-40, 0, 0))
-	var b: String = view.insert_primitive("box", Vector3(40, 0, 0))
+	var a: String = view.insert_primitive("box", Vector3(-200, 0, 0), Vector3(80, 80, 80))
+	var b: String = view.insert_primitive("box", Vector3(200, 0, 0), Vector3(80, 80, 80))
 	var mo: MeasureOverlay = ix.measure_overlay
 	mo.clear_all()
-	main.camera.frame_contents()
+	# Top-down on B so face UV maps cleanly to screen pixels.
+	var bb_b: Dictionary = view.doc.measure_bbox(b)
+	var mn: Vector3 = bb_b["min"]
+	var mx: Vector3 = bb_b["max"]
+	var face_mid := Vector3((mn.x + mx.x) * 0.5, (mn.y + mx.y) * 0.5, mx.z)
+	main.camera.apply_pose({
+		"yaw": 0.0,
+		"pitch": deg_to_rad(89.0),
+		"distance": 120.0,
+		"pivot": face_mid,
+		"projection": main.camera.projection,
+	})
 	await process_frame
 
 	var bb_a: Dictionary = view.doc.measure_bbox(a)
@@ -84,13 +95,14 @@ func test_perp_before_relocate(main) -> void:
 	var pinned: Vector3 = mo.anchor_point as Vector3
 
 	# Hit B on a face interior away from corners / face mid so relocate stays off.
-	var bb_b: Dictionary = view.doc.measure_bbox(b)
-	var mn: Vector3 = bb_b["min"]
-	var mx: Vector3 = bb_b["max"]
 	var off_mid := Vector3(
 			lerpf(mn.x, mx.x, 0.22),
 			lerpf(mn.y, mx.y, 0.22),
 			mx.z)
+	var snap_off := view.closest_measure_snap(b, off_mid)
+	var px_off: float = ix._screen_delta_px(off_mid, snap_off)
+	check(px_off > ViewportInteraction.MEASURE_RELOCATE_PX,
+			"off-mid is outside relocate pixel radius (%.1f px)" % px_off)
 	ix._update_measure_hover(b, off_mid)
 	check(mo.anchor_body == a, "X stays on A when not near a snap")
 	check(mo.anchor_point == pinned, "pinned X unchanged")
@@ -100,7 +112,6 @@ func test_perp_before_relocate(main) -> void:
 	check(foot.distance_to(expected) < 1e-3, "B is perpendicular foot from X onto B")
 
 	# Approach the surface midpoint — X relocates.
-	var face_mid := Vector3((mn.x + mx.x) * 0.5, (mn.y + mx.y) * 0.5, mx.z)
 	ix._update_measure_hover(b, face_mid)
 	check(mo.anchor_body == b, "near surface mid relocates X onto B")
 	check(mo.following, "following after relocate")

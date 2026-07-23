@@ -1,0 +1,46 @@
+---
+description: GDScript tests drive the app via user-visible controls; fail loudly when UI is missing
+globs: game/tests/**/*.gd
+alwaysApply: false
+---
+
+# Click-driven GDScript tests
+
+UI movies, FilmUI helpers, and UI smoke tests must exercise the **same path a user takes**. Silent private-API fallbacks hide missing chrome and regress real workflows.
+
+## Split by test kind
+
+| Kind | Examples | May call kernel / private APIs? |
+|------|----------|----------------------------------|
+| **UI / film** | `films/*.gd`, `FilmUI`, `run_film_*_ui_tests.gd` | **No** — click only |
+| **Validation** | `run_sketch_tools_tests.gd`, `run_tests.gd`, kernel checks | **Yes** — assert geometry / graph directly |
+
+When a workflow has no clickable UI yet: **fail the UI test** (`push_error` / `check(false, …)`). Add or fix the control, or cover the behavior in a **validation** test — do not pretend the UI worked.
+
+## UI / film rules
+
+Prefer `FilmUI` (`game/tests/lib/film_ui.gd`). It already encodes this policy.
+
+- Drive **visible** controls only (`is_visible_in_tree()`). Cue the pointer, then activate (`pressed.emit()`, or `PaletteButton._pressed()`).
+- Viewport picks (sketch points, pads, ground/face) go through `Interaction` `_input` / `FilmUI.viewport_click` — not `sm.click(uv)`.
+- Do **not** silently call `_start_sketch`, `sm.set_tool`, `sm.exit_sketch`, `begin_on_plane`, `_on_sketch_action`, or mutate `selected_sketch_pads`.
+- If the control is missing or hidden: **error and stop**. No “also try the private method” branch.
+
+```gdscript
+# ❌ BAD — looks like a click, then cheats
+await cue_click(sketch_btn)
+main._start_sketch()
+
+# ✅ GOOD — the button’s real handler starts the session
+await FilmUI.click_control(ctx, sketch_btn, FilmUICues.toolbar_sketch())
+```
+
+## When UI is impossible
+
+1. Document the gap in the failing assertion message.
+2. Keep kernel coverage in a `run_*_tests.gd` validation script.
+3. Do not add `enter_sketch_on_plane`-style film helpers that bypass chrome.
+
+## Product bugs vs test cheats
+
+If a real click cannot reach a feature (e.g. pad under a body, Ctrl+click ignored), **fix the app** so the user path works. Do not paper over it in FilmUI.

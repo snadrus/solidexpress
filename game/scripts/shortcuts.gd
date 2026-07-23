@@ -69,6 +69,7 @@ const TABLE: Array[Dictionary] = [
 	{"keys": "Click badge", "context": "Sketch", "desc": "Select a constraint (H/V/∥/⊥/=/◉ glyphs)"},
 	{"keys": "Del", "context": "Sketch", "desc": "Delete the selected constraint badge"},
 	{"keys": "Click dimension", "context": "Sketch", "desc": "Edit the value in place (Enter commits)"},
+	{"keys": "Digits / finish-bar mm", "context": "Sketch", "desc": "While rubber-banding (1 DOF): type length/radius; Enter places; Esc unlocks"},
 	{"keys": "Right-click", "context": "Sketch", "desc": "End line chain"},
 	{"keys": "Esc", "context": "Sketch", "desc": "Clear measure ✕, then discard sketch"},
 	{"keys": "Exit Sketch", "context": "Sketch", "desc": "Commit sketch (yellow pad) and restore camera"},

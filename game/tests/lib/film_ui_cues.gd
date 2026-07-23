@@ -50,3 +50,25 @@ static func dim_value(v: float) -> Dictionary:
 
 static func toolbar_sketch() -> Dictionary:
 	return alert("Sketch", "Start sketch on picked face or ground")
+
+
+static func revolve(angle_deg: float = 360.0) -> Dictionary:
+	return alert("Revolve", "Revolve profile %.0f° (New body)" % angle_deg)
+
+
+static func loft(ruled: bool) -> Dictionary:
+	var mode := "ruled" if ruled else "smooth"
+	return alert("Loft %s" % mode.capitalize(), "Loft closed profiles (%s surfaces)" % mode)
+
+
+static func place_primitive(kind: String) -> Dictionary:
+	return alert(kind.capitalize(), "Arm %s — click ground to place" % kind)
+
+
+static func place_click(kind: String) -> Dictionary:
+	return alert("Click", "Place %s on ground" % kind)
+
+
+static func edit_pad() -> Dictionary:
+	return alert("Click", "Reopen sketch pad for editing")
+

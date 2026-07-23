@@ -34,6 +34,8 @@ var origin_triad: OriginTriadHud
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
+	# Transparent shell so the RGB sticks float without a panel backdrop.
+	add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 4)
 	add_child(col)
@@ -41,17 +43,23 @@ func _ready() -> void:
 	origin_triad = OriginTriadHud.new()
 	origin_triad.name = "OriginTriad"
 	col.add_child(origin_triad)
+	var controls := PanelContainer.new()
+	controls.name = "Controls"
+	col.add_child(controls)
+	var btn_col := VBoxContainer.new()
+	btn_col.add_theme_constant_override("separation", 4)
+	controls.add_child(btn_col)
 	_display_btn = Button.new()
 	_display_btn.text = "Shade"
 	_display_btn.tooltip_text = "Cycle display mode (W)"
 	_display_btn.pressed.connect(func() -> void: display_cycle_requested.emit())
-	col.add_child(_display_btn)
+	btn_col.add_child(_display_btn)
 	_section_btn = Button.new()
 	_section_btn.text = "Section"
 	_section_btn.toggle_mode = true
 	_section_btn.tooltip_text = "Toggle section view (K)"
 	_section_btn.toggled.connect(func(_on: bool) -> void: section_toggle_requested.emit())
-	col.add_child(_section_btn)
+	btn_col.add_child(_section_btn)
 	_fit_btn = Button.new()
 	_fit_btn.text = "Frame"
 	_fit_btn.tooltip_text = (
@@ -60,14 +68,14 @@ func _ready() -> void:
 		+ "Shift+F always frames everything."
 	)
 	_fit_btn.pressed.connect(func() -> void: fit_requested.emit())
-	col.add_child(_fit_btn)
+	btn_col.add_child(_fit_btn)
 
 	# One strip: [ View ] [ ▼ ] [ Save ] — same type size as Shade/Section/Frame.
 	var view_strip := PanelContainer.new()
 	view_strip.name = "ViewStrip"
 	var strip_style := StyleBoxEmpty.new()
 	view_strip.add_theme_stylebox_override("panel", strip_style)
-	col.add_child(view_strip)
+	btn_col.add_child(view_strip)
 	var strip_row := HBoxContainer.new()
 	strip_row.add_theme_constant_override("separation", 0)
 	view_strip.add_child(strip_row)

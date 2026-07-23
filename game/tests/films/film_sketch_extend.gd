@@ -18,7 +18,7 @@ func run_film(ctx: FilmContext) -> void:
 	await ctx.beat("Extend the line until it meets the target", 0.4)
 	await FilmUI.select_sketch_tool(ctx, sm, SketchMode.Tool.EXTEND)
 	var hit := Vector2(9, 0)
-	var screen := _sketch_to_screen(ctx, hit)
+	var screen := FilmUI.sketch_uv_to_screen(ctx, hit)
 	var cue: Dictionary = FilmUICues.tool_keys(SketchMode.Tool.EXTEND)
 	await ctx.chrome.animate_pointer_click(screen, str(cue.keys), str(cue.desc))
 	sm.extend_at(hit)
@@ -30,9 +30,3 @@ func run_film(ctx: FilmContext) -> void:
 	await ctx.beat("Line extended to intersection", 1.0)
 	await ctx.camera.showcase_smooth(0.9, 28.0)
 
-
-func _sketch_to_screen(ctx: FilmContext, sketch_uv: Vector2) -> Vector2:
-	var r := ctx.tree.root.get_viewport().get_visible_rect()
-	var u := clampf(sketch_uv.x / 20.0, 0.0, 1.0)
-	var v := clampf(sketch_uv.y / 30.0, 0.0, 1.0)
-	return Vector2(r.position.x + r.size.x * (0.35 + u * 0.3), r.position.y + r.size.y * (0.35 + v * 0.35))

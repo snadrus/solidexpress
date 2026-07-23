@@ -1,24 +1,48 @@
-# Multi-sketch merge (3D path substitute)
+# Multi-sketch → 3D (SolidWorks comparison)
 
-SolidExpress has no free 3D sketch environment. Build sweep/loft paths by merging planar sketches.
+SolidWorks turns multiple 2D sketches into solids through several parallel paths. SolidExpress covers the core set with **planar sketches + merge path + sweep/loft**, using yellow pads and on-canvas chips instead of a free 3D sketch environment.
 
-## Steps
+## SolidWorks vs SolidExpress
 
-1. Create **Sketch A** on one plane (e.g. ground) with an open line path; Exit Sketch.
-2. Create **Sketch B** on a second plane (e.g. a vertical face) with another open segment; Exit Sketch.
-3. **Ctrl+click** (or Cmd+click) each yellow sketch pad until two or more are selected. Status reports the count.
-4. On-canvas chips appear:
-   - **Merge join** — nearest-neighbor polyline through line endpoints (`join_endpoints`)
-   - **Merge spline** — Catmull densify through those points (`bridge_spline`)
-   - **Merge composite** — same chain packing (`composite`)
-   - **Merge clear** — drop the pad selection
-5. A **Path** feature is added to the timeline (no solid). It stores sketch refs and regenerates `path` points when those sketches change.
-6. Create a closed profile sketch, then sweep with `graph_add_sweep_along_path(profile_fid, path_fid)` (or voice/script). Edit source planar sketches to update the path associatively.
+| Capability | SolidWorks | SolidExpress |
+|---|---|---|
+| Free 3D sketch | Full 3D sketch mode | **Path feature** — merge open rails on different planes |
+| Boss extrude / cut | Extrude from closed profile | **Extrude** (New / Cut / Fuse) from sketch |
+| Revolve | Revolve boss/cut | **Revolve** from sketch + axis line |
+| Sweep | Profile + path (open or closed) | **Sweep along path** — profile sketch + Path feature |
+| Loft | 2+ closed profiles | **Loft ruled / smooth** — Ctrl+select profile pads |
+| Guide curves | Sweep/loft guides | Not yet |
+| Thin feature | Wall thickness on extrude/sweep | Not yet |
+| Convert entities | Project model edges into sketch | Partial (Convert tool in sketch) |
+| Intersection curve | Curve at face intersection | Not yet |
+| 2D→3D wizard | Front/top/side view import | Not yet — use explicit planes + merge |
+| Path preview | 3D sketch visible | **Cyan path tube** on Path features |
+| Pad profile in 3D | — | **Bold yellow strokes** on committed pads |
 
-## What “good” looks like
+## Workflow A — Path + sweep (L-shaped tube, pipe, rail)
 
-- No freeform 3D doodling — edit planar sources.
-- Path appears in the timeline as type `path`.
-- Sweep along that path produces a solid; regenerating after editing a source sketch updates the path polyline.
+1. **Sketch A** on ground — open spline or line chain (rail). **Exit Sketch**.
+2. **Sketch B** on a vertical face or custom plane — open leg. **Exit Sketch**.
+3. **Ctrl+click** both yellow pads → **Merge join** (or **Merge spline** for smooth bridge).
+4. A **Path** row appears on the timeline; a **cyan tube** shows the merged rail in 3D.
+5. **Sketch C** — closed circle (profile). **Exit Sketch**.
+6. **Ctrl+click** the profile pad → **Sweep along path** (or select the Path row first, then Ctrl+click profile → Sweep).
 
-Verified by kernel `[featsweep][path]` and Godot sketch-parity tests.
+## Workflow B — Loft between profiles (funnel, transition)
+
+1. Create **Sketch A** and **Sketch B** on different planes — each a **closed** profile (circle, rectangle, closed loop).
+2. **Ctrl+click** both profile pads (no open rails in the selection).
+3. Choose **Loft ruled** or **Loft smooth**.
+
+## Workflow C — Simple extrude (baseline)
+
+Single closed profile → **Extrude** — see [extrude-s-shape.md](extrude-s-shape.md).
+
+## Tips
+
+- **Open chains** → merge chips (path). **Closed profiles only** → loft chips.
+- Mixed selection shows merge + loft options; pick the operation you intend.
+- Select a **Path** row on the timeline, then Ctrl+click one profile pad → **Sweep along path**.
+- Edit source sketches to update paths and solids associatively.
+
+Verified by `run_sketch_parity_tests.gd`, `run_sweep_loft_solid_tests.gd`, and `run_sketch_to_3d_ui_tests.gd`.

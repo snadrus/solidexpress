@@ -290,9 +290,11 @@ func _add_profile_seg(st: SurfaceTool, a: Vector3, b: Vector3, normal: Vector3,
 	st.add_vertex(i1)
 
 
-## Ray-pick the nearest sketch pad. Returns feature id or "".
+## Ray-pick a sketch pad. When several pads stack in depth (face-hosted over
+## ground), prefer the hit closest to that pad's own center — not merely the
+## nearest plane — so a click aimed at a back pad still resolves correctly.
 func pick_pad(ray_origin: Vector3, ray_dir: Vector3) -> String:
-	var best_t := INF
+	var best_score := INF
 	var best_fid := ""
 	for fid in _pads:
 		var e: Dictionary = _pads[fid]
@@ -302,7 +304,7 @@ func pick_pad(ray_origin: Vector3, ray_dir: Vector3) -> String:
 			continue
 		var origin: Vector3 = e["origin"]
 		var t := (origin - ray_origin).dot(n) / denom
-		if t < 0.0 or t >= best_t:
+		if t < 0.0:
 			continue
 		var hit: Vector3 = ray_origin + ray_dir * t
 		var local := hit - origin
@@ -310,7 +312,14 @@ func pick_pad(ray_origin: Vector3, ray_dir: Vector3) -> String:
 		var v := local.dot(e["y"] as Vector3)
 		var mn2: Vector2 = e["min2"]
 		var mx2: Vector2 = e["max2"]
-		if u >= mn2.x and u <= mx2.x and v >= mn2.y and v <= mx2.y:
-			best_t = t
+		if u < mn2.x or u > mx2.x or v < mn2.y or v > mx2.y:
+			continue
+		var center := (mn2 + mx2) * 0.5
+		var extent := (mx2 - mn2).length()
+		var radial := Vector2(u, v).distance_to(center)
+		# Normalize by pad size; tiny depth bias so equal scores prefer nearer.
+		var score := radial / maxf(extent, 1.0) + t * 1e-4
+		if score < best_score:
+			best_score = score
 			best_fid = fid
 	return best_fid

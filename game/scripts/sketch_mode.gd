@@ -92,6 +92,9 @@ var _infer_label: Label3D
 var _selected_material: StandardMaterial3D
 var _tool_points: Array[Vector2] = []  # committed anchor points of current tool
 var _hover: Vector2 = Vector2.ZERO
+## When ≥ 0, rubber-band length/radius is locked to this value; mouse only
+## steers direction. Cleared on tool change / Esc / after the next commit click.
+var _length_override: float = -1.0
 ## Set by snap_point when a snap applied; drawn as a small cross in preview.
 var _snap_marker: Variant = null  # Vector2 | null
 ## Active SELECT-tool geometry drag. Empty when idle. Keys when dragging:
@@ -378,7 +381,7 @@ func _enter_camera() -> void:
 	if not ext.is_empty():
 		center = ext["center"]
 		radius = float(ext["radius"])
-	camera.enter_sketch_view(plane_normal(), center, radius)
+	camera.enter_sketch_view(plane_normal(), center, radius, plane_y)
 
 
 func _leave_camera() -> void:
@@ -393,6 +396,7 @@ func cancel() -> void:
 	active = false
 	editing_fid = ""
 	_tool_points.clear()
+	_length_override = -1.0
 	_snap_marker = null
 	_drag.clear()
 	intersection_points.clear()
@@ -545,6 +549,8 @@ func ray_to_sketch(origin: Vector3, direction: Vector3) -> Variant:
 signal tool_changed(tool: int)
 ## Emitted when selection chips should refresh (ids may be empty).
 signal selection_actions_needed
+## Live rubber-band distance (mm) while a single-DOF draw step is active.
+signal preview_distance_changed(distance: float)
 
 
 func set_tool(t: Tool) -> void:
@@ -554,6 +560,7 @@ func set_tool(t: Tool) -> void:
 	_tool_points.clear()
 	_spline_pts.clear()
 	_smart_dim_first = null
+	_length_override = -1.0
 	_trim_hover_id = ""
 	_trim_dragging = false
 	_trim_drag_ids.clear()
@@ -580,8 +587,76 @@ func set_tool(t: Tool) -> void:
 func set_tool_variant(v: String) -> void:
 	tool_variant = v
 	_tool_points.clear()
+	_length_override = -1.0
 	_update_preview()
 	status.emit("Variant: %s" % v.replace("_", " "))
+
+
+## True when the current tool step has exactly one free length/radius DOF
+## (line from last anchor, center-circle radius, polygon radius, slot length,
+## or center-arc radius after the center click).
+func has_single_dof_preview() -> bool:
+	if _tool_points.is_empty():
+		return false
+	match tool:
+		Tool.LINE, Tool.CENTERLINE, Tool.POLYGON, Tool.SLOT:
+			return true
+		Tool.CIRCLE:
+			return tool_variant == "center" and _tool_points.size() == 1
+		Tool.ARC:
+			return tool_variant == "center" and _tool_points.size() == 1
+		_:
+			return false
+
+
+## Rubber-band length currently shown (override or mouse distance).
+func preview_distance() -> float:
+	if not has_single_dof_preview():
+		return 0.0
+	if _length_override >= 0.0:
+		return _length_override
+	return _tool_points[_tool_points.size() - 1].distance_to(_hover)
+
+
+## Lock rubber-band length; mouse keeps steering direction.
+func set_length_override(v: float) -> void:
+	_length_override = maxf(v, 0.01)
+	_update_preview()
+	preview_distance_changed.emit(_length_override)
+
+
+func clear_length_override() -> void:
+	if _length_override < 0.0:
+		return
+	_length_override = -1.0
+	_update_preview()
+	if has_single_dof_preview():
+		preview_distance_changed.emit(preview_distance())
+
+
+func has_length_override() -> bool:
+	return _length_override >= 0.0
+
+
+## Hover / preview endpoint: mouse when free; last + dir×override when locked.
+func effective_hover() -> Vector2:
+	if _length_override < 0.0 or not has_single_dof_preview():
+		return _hover
+	var last: Vector2 = _tool_points[_tool_points.size() - 1]
+	var d := _hover - last
+	if d.length_squared() < 1e-12:
+		return last + Vector2(_length_override, 0.0)
+	return last + d.normalized() * _length_override
+
+
+## Commit the next click at `length` along the current hover direction.
+## Returns false when no single-DOF preview is active.
+func commit_at_length(length: float) -> bool:
+	if not has_single_dof_preview():
+		return false
+	set_length_override(length)
+	click(effective_hover())
+	return true
 
 
 func variants_for_tool(t: Tool = tool) -> Array:
@@ -1339,20 +1414,7 @@ func _commit_spline() -> void:
 	if _spline_pts.size() < 2:
 		_spline_pts.clear()
 		return
-	# Dense polyline approximation of a fit spline (Catmull-Rom samples).
-	var densified: Array[Vector2] = []
-	if _spline_pts.size() == 2:
-		densified = _spline_pts.duplicate()
-	else:
-		for i in range(_spline_pts.size() - 1):
-			var p0: Vector2 = _spline_pts[maxi(i - 1, 0)]
-			var p1: Vector2 = _spline_pts[i]
-			var p2: Vector2 = _spline_pts[i + 1]
-			var p3: Vector2 = _spline_pts[mini(i + 2, _spline_pts.size() - 1)]
-			for s in range(8):
-				var t := float(s) / 8.0
-				densified.append(_catmull(p0, p1, p2, p3, t))
-		densified.append(_spline_pts[_spline_pts.size() - 1])
+	var densified := _densify_fit_spline(_spline_pts)
 	for i in range(densified.size() - 1):
 		var a: Vector2 = densified[i]
 		var b: Vector2 = densified[i + 1]
@@ -1360,6 +1422,25 @@ func _commit_spline() -> void:
 			sketch.add_line(a.x, a.y, b.x, b.y)
 	_spline_pts.clear()
 	_redraw()
+
+
+## Dense polyline approximation of a fit spline (Catmull-Rom samples).
+func _densify_fit_spline(pts: Array[Vector2]) -> Array[Vector2]:
+	var densified: Array[Vector2] = []
+	if pts.size() < 2:
+		return densified
+	if pts.size() == 2:
+		return pts.duplicate()
+	for i in range(pts.size() - 1):
+		var p0: Vector2 = pts[maxi(i - 1, 0)]
+		var p1: Vector2 = pts[i]
+		var p2: Vector2 = pts[i + 1]
+		var p3: Vector2 = pts[mini(i + 2, pts.size() - 1)]
+		for s in range(8):
+			var t := float(s) / 8.0
+			densified.append(_catmull(p0, p1, p2, p3, t))
+	densified.append(pts[pts.size() - 1])
+	return densified
 
 
 func _catmull(p0: Vector2, p1: Vector2, p2: Vector2, p3: Vector2, t: float) -> Vector2:
@@ -1473,6 +1554,15 @@ func click(pos2: Vector2) -> void:
 	# TRIM/EXTEND need the raw pick along the curve; snap would pull away.
 	if tool != Tool.TRIM and tool != Tool.EXTEND:
 		pos2 = snap_point(pos2)
+	# Typed length wins over snap: keep direction toward the pick, lock distance.
+	if _length_override >= 0.0 and has_single_dof_preview():
+		var last: Vector2 = _tool_points[_tool_points.size() - 1]
+		var d := pos2 - last
+		if d.length_squared() < 1e-12:
+			pos2 = last + Vector2(_length_override, 0.0)
+		else:
+			pos2 = last + d.normalized() * _length_override
+		_length_override = -1.0
 	match tool:
 		Tool.SELECT:
 			var chit := constraint_hit(pos2)
@@ -1568,6 +1658,8 @@ func click(pos2: Vector2) -> void:
 		Tool.CHAMFER:
 			chamfer_selected(2.0)
 	_update_preview()
+	if has_single_dof_preview():
+		preview_distance_changed.emit(preview_distance())
 
 
 func _click_rect(pos2: Vector2) -> void:
@@ -1865,6 +1957,7 @@ func end_chain() -> void:
 	if tool == Tool.SPLINE and _spline_pts.size() >= 2:
 		_commit_spline()
 	_tool_points.clear()
+	_length_override = -1.0
 	_update_preview()
 
 
@@ -1875,13 +1968,16 @@ func hover(pos2: Vector2) -> void:
 		_update_preview()
 		return
 	_hover = snap_point(pos2)
+	var tip := effective_hover()
 	if _infer_label != null:
-		var hint := _infer_hint_text(_hover)
+		var hint := _infer_hint_text(tip)
 		_infer_label.visible = hint != ""
 		if hint != "":
 			_infer_label.text = hint
-			_infer_label.position = _to3(_hover + Vector2(2.0, 2.0))
+			_infer_label.position = _to3(tip + Vector2(2.0, 2.0))
 	_update_preview()
+	if has_single_dof_preview():
+		preview_distance_changed.emit(preview_distance())
 
 
 ## Power-trim drag: trim every entity the cursor crosses.
@@ -2480,27 +2576,30 @@ func _update_preview() -> void:
 	if dragging:
 		_append_entity_lines(im, _drag["preview_info"])
 	if _spline_pts.size() > 0:
-		for i in range(_spline_pts.size() - 1):
-			im.surface_add_vertex(_to3(_spline_pts[i]))
-			im.surface_add_vertex(_to3(_spline_pts[i + 1]))
-		im.surface_add_vertex(_to3(_spline_pts[_spline_pts.size() - 1]))
-		im.surface_add_vertex(_to3(_hover))
+		# Preview = committed fit points plus an imaginary point at the cursor.
+		var preview_pts: Array[Vector2] = _spline_pts.duplicate()
+		preview_pts.append(_hover)
+		var densified := _densify_fit_spline(preview_pts)
+		for i in range(densified.size() - 1):
+			im.surface_add_vertex(_to3(densified[i]))
+			im.surface_add_vertex(_to3(densified[i + 1]))
 	if _tool_points.size() > 0:
 		var last := _tool_points[_tool_points.size() - 1]
+		var tip := effective_hover()
 		match tool:
-			Tool.LINE:
+			Tool.LINE, Tool.CENTERLINE:
 				im.surface_add_vertex(_to3(last))
-				im.surface_add_vertex(_to3(_hover))
+				im.surface_add_vertex(_to3(tip))
 			Tool.RECT:
 				var a := _tool_points[0]
-				var b := _hover
+				var b := tip
 				im.surface_add_vertex(_to3(a)); im.surface_add_vertex(_to3(Vector2(b.x, a.y)))
 				im.surface_add_vertex(_to3(Vector2(b.x, a.y))); im.surface_add_vertex(_to3(b))
 				im.surface_add_vertex(_to3(b)); im.surface_add_vertex(_to3(Vector2(a.x, b.y)))
 				im.surface_add_vertex(_to3(Vector2(a.x, b.y))); im.surface_add_vertex(_to3(a))
 			Tool.CIRCLE:
 				var c := _tool_points[0]
-				var r := c.distance_to(_hover)
+				var r := c.distance_to(tip)
 				var steps := 48
 				for i in range(steps):
 					var a0 := TAU * i / steps
@@ -2511,12 +2610,12 @@ func _update_preview() -> void:
 				var c := _tool_points[0]
 				if _tool_points.size() == 1:
 					im.surface_add_vertex(_to3(c))
-					im.surface_add_vertex(_to3(_hover))
+					im.surface_add_vertex(_to3(tip))
 				else:
 					var start_pt := _tool_points[1]
 					var r := c.distance_to(start_pt)
 					var s := (start_pt - c).angle()
-					var e := (_hover - c).angle()
+					var e := (tip - c).angle()
 					if e < s:
 						e += TAU
 					var steps2 := 32
@@ -2527,9 +2626,9 @@ func _update_preview() -> void:
 						im.surface_add_vertex(_to3(c + Vector2(cos(a1), sin(a1)) * r))
 			Tool.POLYGON:
 				var c := _tool_points[0]
-				var r := c.distance_to(_hover)
+				var r := c.distance_to(tip)
 				var n := polygon_sides
-				var start_angle := (_hover - c).angle()
+				var start_angle := (tip - c).angle()
 				var steps := 48
 				for i in range(steps):
 					var a0 := TAU * i / steps
@@ -2543,6 +2642,9 @@ func _update_preview() -> void:
 				for i in range(n):
 					im.surface_add_vertex(_to3(verts[i]))
 					im.surface_add_vertex(_to3(verts[(i + 1) % n]))
+			Tool.SLOT:
+				im.surface_add_vertex(_to3(last))
+				im.surface_add_vertex(_to3(tip))
 	if _snap_marker != null:
 		var m: Vector2 = _snap_marker
 		const MARK := 0.6

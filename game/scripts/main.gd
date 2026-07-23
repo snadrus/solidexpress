@@ -7,6 +7,8 @@ var model_space: Node3D
 var view: DocumentView
 var camera: OrbitCamera
 var interaction: ViewportInteraction
+## Canyon HDRI world env; section mode swaps to a flat clear color.
+var _world_env: WorldEnvironment
 var card_panel: RichTextLabel
 var card_box: PanelContainer
 var status_label: Label
@@ -17,6 +19,8 @@ var sketch_toolbar: PanelContainer
 var sketch_chrome: SketchContextChrome
 ## Multi-selected sketch pad feature ids (Ctrl+click outside sketch mode).
 var selected_sketch_pads: Array[String] = []
+## Timeline-selected Path feature (for sweep-along-path UI).
+var selected_path_fid := ""
 var timeline: TimelinePanel
 var help_overlay: HelpOverlay
 var voice_capture: VoiceCapture
@@ -108,9 +112,10 @@ func _build_world() -> void:
 	sun.shadow_enabled = true
 	add_child(sun)
 
-	var env := WorldEnvironment.new()
-	env.environment = _make_canyon_environment()
-	add_child(env)
+	_world_env = WorldEnvironment.new()
+	_world_env.name = "WorldEnvironment"
+	_world_env.environment = _make_canyon_environment()
+	add_child(_world_env)
 
 	# Kernel is Z-up; Godot is Y-up. ModelSpace maps kernel +Z to world +Y.
 	model_space = Node3D.new()
@@ -120,6 +125,7 @@ func _build_world() -> void:
 
 	view = DocumentView.new()
 	view.name = "DocumentView"
+	view.section_changed.connect(_on_section_changed)
 	model_space.add_child(view)
 
 	sketch_mode = SketchMode.new()
@@ -132,6 +138,30 @@ func _build_world() -> void:
 	# RGB origin sticks live on ViewHud as OriginTriadHud.
 	camera.view = view
 	camera.model_space = model_space
+
+
+## Section cuts / sketch ortho reveal the infinite sky through the workplane;
+## a flat clear color reads better than the canyon panorama in those modes.
+func _on_section_changed(_enabled: bool) -> void:
+	_sync_world_background()
+
+
+## Flat clear color while sectioning or sketching; canyon HDRI otherwise.
+## IBL/ambient keep using the sky — only the visible background swaps.
+func _sync_world_background() -> void:
+	if _world_env == null or _world_env.environment == null:
+		return
+	var e := _world_env.environment
+	var flat := (view != null and view.section_enabled) \
+			or (sketch_mode != null and sketch_mode.active)
+	if flat:
+		e.background_mode = Environment.BG_COLOR
+		e.background_color = Color(0.16, 0.17, 0.20)
+	elif e.sky != null:
+		e.background_mode = Environment.BG_SKY
+	else:
+		e.background_mode = Environment.BG_COLOR
+		e.background_color = Color(0.16, 0.17, 0.20)
 
 
 ## Canyon HDRI as infinite background + IBL. The sky shader pins the workplane
@@ -455,6 +485,7 @@ func _build_ui() -> void:
 	timeline.offset_bottom = -42
 	ui.add_child(timeline)
 	timeline.status.connect(_on_status)
+	timeline.feature_selected.connect(_on_timeline_feature_selected)
 
 	variables_panel = VariablesPanel.new()
 	variables_panel.name = "Variables"
@@ -571,6 +602,9 @@ func _build_ui() -> void:
 	sketch_chrome.variant_chosen.connect(_on_sketch_variant)
 	sketch_chrome.action_chosen.connect(_on_sketch_action)
 	sketch_chrome.finish_requested.connect(_on_sketch_finish)
+	sketch_chrome.dim_submitted.connect(_on_sketch_dim_submitted)
+	sketch_mode.preview_distance_changed.connect(_on_sketch_preview_distance)
+	interaction.sketch_chrome = sketch_chrome
 
 	view.selection_changed.connect(_on_selection_changed)
 	view.document_changed.connect(_on_document_changed)
@@ -696,20 +730,29 @@ func _start_sketch() -> void:
 		_start_sketch_on_ground()
 
 
+## Explicit plane (films / path legs) — same chrome as ground/face entry.
+func _start_sketch_on_plane(origin: Vector3, x_dir: Vector3, y_dir: Vector3) -> void:
+	if sketch_mode.active:
+		return
+	if sketch_mode.begin_on_plane(origin, x_dir, y_dir):
+		_on_sketch_session_started("Sketch on plane")
+
+
 func _on_sketch_host_picked(kind: String, face_id: String, body_id: String, pad_fid: String) -> void:
 	if kind == "pad" and pad_fid != "":
-		_on_sketch_pad_clicked(pad_fid)
+		_on_sketch_pad_clicked(pad_fid, false)
 	elif kind == "face":
 		_start_sketch_on_face(face_id, body_id)
 	else:
 		_start_sketch_on_ground()
 
 
-func _on_sketch_pad_clicked(fid: String) -> void:
+func _on_sketch_pad_clicked(fid: String, additive: bool = false) -> void:
 	if sketch_mode.active:
 		return
-	# Ctrl+click accumulates pads for Merge sketches… (SW 3D-sketch substitute).
-	if Input.is_key_pressed(KEY_CTRL) or Input.is_key_pressed(KEY_META):
+	# Ctrl/Cmd+click accumulates pads for Merge sketches… (SW 3D-sketch substitute).
+	var multi := additive or Input.is_key_pressed(KEY_CTRL) or Input.is_key_pressed(KEY_META)
+	if multi:
 		if fid in selected_sketch_pads:
 			selected_sketch_pads.erase(fid)
 		else:
@@ -728,13 +771,128 @@ func _on_sketch_pad_clicked(fid: String) -> void:
 func _refresh_merge_chrome() -> void:
 	if sketch_chrome == null:
 		return
-	if selected_sketch_pads.size() >= 2:
-		sketch_chrome.visible = true
-		sketch_chrome.show_merge_menu(get_viewport().get_mouse_position())
-	else:
+	var actions := _sketch_to_3d_actions()
+	if actions.is_empty():
 		sketch_chrome.hide_selection_actions()
 		if not sketch_mode.active:
 			sketch_chrome.visible = false
+		return
+	sketch_chrome.visible = true
+	sketch_chrome.show_sketch_to_3d_menu(actions, get_viewport().get_mouse_position())
+
+
+## Classify a committed sketch pad for multi-sketch → 3D workflows.
+func _sketch_pad_role(fid: String) -> String:
+	var sk: SxSketch = view.doc.graph_get_sketch(fid)
+	if sk == null:
+		return "unknown"
+	var has_circle := false
+	var line_count := 0
+	for id in sk.entity_ids():
+		var info: Dictionary = sk.entity_info(id)
+		match str(info.get("type", "")):
+			"circle":
+				has_circle = true
+			"line", "arc":
+				line_count += 1
+	if has_circle:
+		return "profile"
+	if line_count >= 1:
+		return "rail"
+	return "unknown"
+
+
+func _latest_path_fid() -> String:
+	var feats: Array = view.doc.graph_features()
+	for i in range(feats.size() - 1, -1, -1):
+		if str(feats[i].get("type", "")) == "path":
+			return str(feats[i].get("id", ""))
+	return ""
+
+
+func _sketch_to_3d_actions() -> Array:
+	var actions: Array = []
+	var n := selected_sketch_pads.size()
+	if n == 0:
+		return actions
+	var profiles := 0
+	var rails := 0
+	for fid in selected_sketch_pads:
+		match _sketch_pad_role(fid):
+			"profile":
+				profiles += 1
+			"rail":
+				rails += 1
+	if n >= 2 and rails >= 1:
+		actions.append("merge_join")
+		actions.append("merge_spline")
+		actions.append("merge_composite")
+	if n >= 2 and profiles >= 2 and rails == 0:
+		actions.append("loft_ruled")
+		actions.append("loft_smooth")
+	if n == 1 and profiles == 1:
+		var path_fid := selected_path_fid if selected_path_fid != "" else _latest_path_fid()
+		if path_fid != "":
+			actions.append("sweep_path")
+	if actions.is_empty() and n >= 2:
+		# Mixed or unknown — offer everything.
+		actions.append("merge_join")
+		actions.append("merge_spline")
+		actions.append("loft_ruled")
+	if not actions.is_empty():
+		actions.append("merge_clear")
+	return actions
+
+
+func _on_timeline_feature_selected(fid: String, ftype: String) -> void:
+	if ftype == "path":
+		selected_path_fid = fid
+		_on_status("Path selected — Ctrl+click a profile pad, then Sweep along path")
+	else:
+		selected_path_fid = ""
+	_refresh_merge_chrome()
+
+
+func _loft_selected_sketches(ruled: bool) -> void:
+	if selected_sketch_pads.size() < 2:
+		_on_status("Select 2+ closed profile pads (Ctrl+click) to loft")
+		return
+	var fids := PackedStringArray()
+	for fid in selected_sketch_pads:
+		fids.append(fid)
+	var loft_fid: String = view.doc.graph_add_loft(fids, ruled)
+	if loft_fid == "":
+		_on_status("Loft failed — need closed profiles on separate planes")
+		return
+	selected_sketch_pads.clear()
+	selected_path_fid = ""
+	_refresh_merge_chrome()
+	_on_status("Loft solid created (%s)" % ("ruled" if ruled else "smooth"))
+	view.refresh()
+	_on_document_changed()
+
+
+func _sweep_profile_along_path() -> void:
+	if selected_sketch_pads.size() != 1:
+		_on_status("Ctrl+click exactly one profile pad, then Sweep along path")
+		return
+	var prof_fid: String = selected_sketch_pads[0]
+	if _sketch_pad_role(prof_fid) != "profile":
+		_on_status("Selected pad is not a closed profile (try a circle)")
+		return
+	var path_fid := selected_path_fid if selected_path_fid != "" else _latest_path_fid()
+	if path_fid == "":
+		_on_status("Create a Path first (merge open rails) or select a Path row on the timeline")
+		return
+	var sw_fid: String = view.doc.graph_add_sweep_along_path(prof_fid, path_fid)
+	if sw_fid == "":
+		_on_status("Sweep along path failed")
+		return
+	selected_sketch_pads.clear()
+	_refresh_merge_chrome()
+	_on_status("Sweep solid created along path")
+	view.refresh()
+	_on_document_changed()
 
 
 func _merge_selected_sketches(mode: String) -> void:
@@ -749,8 +907,9 @@ func _merge_selected_sketches(mode: String) -> void:
 		_on_status("Merge sketches failed")
 		return
 	selected_sketch_pads.clear()
+	selected_path_fid = path_fid
 	_refresh_merge_chrome()
-	_on_status("Path feature created (%s) — use Sweep along path" % mode)
+	_on_status("Path created — Ctrl+click profile pad, then Sweep along path")
 	view.refresh()
 	_on_document_changed()
 
@@ -769,6 +928,15 @@ func _on_sketch_action(action: String) -> void:
 		"merge_clear":
 			selected_sketch_pads.clear()
 			_refresh_merge_chrome()
+			return
+		"loft_ruled":
+			_loft_selected_sketches(true)
+			return
+		"loft_smooth":
+			_loft_selected_sketches(false)
+			return
+		"sweep_path":
+			_sweep_profile_along_path()
 			return
 		"fillet":
 			sketch_mode.fillet_selected(sketch_chrome.dim_value() if sketch_chrome else 2.0)
@@ -829,6 +997,7 @@ func _start_sketch_on_ground() -> void:
 
 func _on_sketch_session_started(msg: String) -> void:
 	_update_panel_visibility()
+	_sync_world_background()
 	interaction.refresh_selection_chrome()
 	interaction.refresh_sketch_intersections()
 	if dof_label != null:
@@ -847,6 +1016,7 @@ func _on_sketch_session_started(msg: String) -> void:
 
 func _on_sketch_session_ended() -> void:
 	_update_panel_visibility()
+	_sync_world_background()
 	interaction.refresh_selection_chrome()
 	view.refresh_sketch_pads("")
 	if sketch_chrome != null:
@@ -900,6 +1070,25 @@ func _on_sketch_variant(kind: String, variant: String) -> void:
 func _apply_dimension_from_chrome() -> void:
 	var v: float = sketch_chrome.dim_value() if sketch_chrome else dim_value.value
 	dim_value.value = v
+	_apply_dimension()
+
+
+func _on_sketch_preview_distance(distance: float) -> void:
+	if sketch_chrome == null or distance <= 0.0:
+		return
+	sketch_chrome.set_dim_value(distance)
+	dim_value.value = distance
+
+
+func _on_sketch_dim_submitted(value: float) -> void:
+	dim_value.value = value
+	if sketch_mode != null and sketch_mode.active \
+			and sketch_mode.has_single_dof_preview():
+		if sketch_mode.commit_at_length(value):
+			_on_status("Length %.4g mm" % value)
+			if sketch_chrome != null:
+				sketch_chrome.release_dim_focus()
+			return
 	_apply_dimension()
 
 

@@ -12,7 +12,7 @@ Variants and numeric options appear **on-canvas** (floating chips), not as perma
 
 1. Arm **Rect / Circle / Arc / Pattern** — a variant strip appears (corner/center/3-pt; center/perimeter; center/tangent/3-pt; linear/circular).
 2. Select one or more entities — action chips: Construction, Delete, Fillet, Chamfer, Offset, Pattern, Mirror, Block, Split, and common relations.
-3. Finish strip (top-left while sketching): Dim value, Extrude distance/op, Extrude / Revolve.
+3. Finish strip (top-left while sketching): Dim value (live rubber-band distance while drawing — type to lock length/radius, Enter commits), Extrude distance/op, Extrude / Revolve.
 
 ## Power Trim
 
@@ -25,6 +25,7 @@ Variants and numeric options appear **on-canvas** (floating chips), not as perma
 - **Mirror**: select geometry plus one axis line, then Mirror.
 - **Pattern**: linear (kernel) or circular (rotated copies) via variant chips.
 - **Smart Dim** (D): click a line for length, circle/arc for radius, or two points for distance.
+- **Typed length while drawing**: after the first click of a line / center-circle / polygon / slot / center-arc, the finish-strip mm blank tracks the rubber-band. Type a number (or click the blank) to lock distance; mouse still steers direction; **Enter** places the point. Esc unlocks.
 
 ## Blocks & picture
 

@@ -8,6 +8,7 @@ extends PanelContainer
 ## so the same editor works for every feature type and for AI round-trips).
 
 signal status(text: String)
+signal feature_selected(fid: String, ftype: String)
 
 var view: DocumentView
 
@@ -306,6 +307,7 @@ func _select_feature(fid: String) -> void:
 	for f in view.doc.graph_features():
 		if f["id"] != fid:
 			continue
+		feature_selected.emit(fid, str(f.get("type", "")))
 		_params_edit.text = _pretty_json(f["params"])
 		_editor_box.visible = true
 		# Typed property editor when the feature type has a schema; the JSON

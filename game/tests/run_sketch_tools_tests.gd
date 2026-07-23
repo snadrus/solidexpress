@@ -46,6 +46,9 @@ func _init() -> void:
 	test_trim_interior_split(main)
 	test_trim_empty_space(main)
 	test_trim_prunes_dimension_label(main)
+	test_typed_length_line(main)
+	test_typed_radius_circle(main)
+	test_dim_blank_ignores_mouse_while_editing(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -541,4 +544,74 @@ func test_trim_prunes_dimension_label(main) -> void:
 	check(sm.sketch.entity_info(h).is_empty(), "replaced line gone after interior trim")
 	check(sm.dimensions.is_empty(), "orphan dimension pruned from array")
 	check(_dimension_label_texts(sm).size() == 0, "dimension label no longer shown")
+	sm.cancel()
+
+
+func test_typed_length_line(main) -> void:
+	print("- typed length locks line segment distance")
+	var sm: SketchMode = main.sketch_mode
+	main.view.clear_selection()
+	if sm.active:
+		sm.cancel()
+	main._start_sketch()
+	sm.set_tool(SketchMode.Tool.LINE)
+	sm.click(Vector2(0, 0))
+	sm.hover(Vector2(30, 0))
+	check(sm.has_single_dof_preview(), "line rubber-band is single-DOF")
+	check(absf(sm.preview_distance() - 30.0) < 1e-4, "mouse sets preview distance")
+	check(sm.commit_at_length(12.5), "commit_at_length succeeds")
+	var ids: PackedStringArray = sm.sketch.entity_ids()
+	check(ids.size() == 1, "typed length created one line")
+	var info: Dictionary = sm.sketch.entity_info(ids[0])
+	var a: Vector2 = info["start"]
+	var b: Vector2 = info["end"]
+	check(absf(a.distance_to(b) - 12.5) < 1e-4, "line length is typed 12.5")
+	check(absf(b.y) < 1e-4, "direction followed mouse (horizontal)")
+	sm.cancel()
+
+
+func test_typed_radius_circle(main) -> void:
+	print("- typed radius locks center-circle")
+	var sm: SketchMode = main.sketch_mode
+	main.view.clear_selection()
+	if sm.active:
+		sm.cancel()
+	main._start_sketch()
+	sm.set_tool(SketchMode.Tool.CIRCLE)
+	sm.click(Vector2(0, 0))
+	sm.hover(Vector2(8, 0))
+	check(sm.has_single_dof_preview(), "circle radius step is single-DOF")
+	sm.set_length_override(7.0)
+	check(absf(sm.effective_hover().distance_to(Vector2(0, 0)) - 7.0) < 1e-4,
+		"override locks radius while mouse steers")
+	sm.hover(Vector2(0, 20))
+	check(absf(sm.effective_hover().x) < 1e-4, "direction follows mouse after override")
+	check(absf(sm.effective_hover().y - 7.0) < 1e-4, "radius stays at override")
+	check(sm.commit_at_length(7.0), "commit typed radius")
+	var ids: PackedStringArray = sm.sketch.entity_ids()
+	check(ids.size() == 1, "circle created")
+	var info: Dictionary = sm.sketch.entity_info(ids[0])
+	check(info.get("type", "") == "circle", "entity is circle")
+	check(absf(info["radius"] - 7.0) < 1e-4, "circle radius is typed 7")
+	sm.cancel()
+
+
+func test_dim_blank_ignores_mouse_while_editing(main) -> void:
+	print("- finish-bar dim blank ignores mouse sync while focused")
+	var chrome: SketchContextChrome = main.sketch_chrome
+	var sm: SketchMode = main.sketch_mode
+	main.view.clear_selection()
+	if sm.active:
+		sm.cancel()
+	main._start_sketch()
+	sm.set_tool(SketchMode.Tool.LINE)
+	sm.click(Vector2(0, 0))
+	sm.hover(Vector2(10, 0))
+	chrome.set_dim_value(10.0)
+	check(absf(chrome.dim_value() - 10.0) < 1e-4, "blank tracks mouse when idle")
+	chrome.focus_dim_for_typing("4")
+	check(chrome.dim_is_editing(), "blank is editing after focus")
+	chrome.set_dim_value(99.0)
+	check(absf(chrome.dim_value() - 4.0) < 1e-4, "mouse sync skipped while typing")
+	chrome.release_dim_focus()
 	sm.cancel()

@@ -263,7 +263,6 @@ func workflow_funnel() -> void:
 	var lfid: String = view.doc.graph_add_loft(PackedStringArray([bfid, tfid]), true)
 	view.graph_changed()
 	gesture(1)
-	gap("sketch mode cannot exit without extrude/revolve; loft not reachable from UI")
 	check(lfid != "", "loft feature created")
 	var body := view.body_of_feature(lfid)
 	check(body != "", "loft body exists")

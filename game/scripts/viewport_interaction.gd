@@ -16,6 +16,7 @@ var view: DocumentView
 var camera: OrbitCamera
 var model_space: Node3D  # kernel Z-up frame
 var sketch_mode: SketchMode  # optional; when active, input goes to sketching
+var sketch_chrome: SketchContextChrome  # finish-bar dim blank while sketching
 var world_gizmos: WorldGizmos
 var measure_overlay: MeasureOverlay
 var transform_hud: TransformHud
@@ -128,7 +129,8 @@ var _picking_active_plane := false
 var _picking_sketch_host := false
 
 signal sketch_host_picked(kind: String, face_id: String, body_id: String, pad_fid: String)
-signal sketch_pad_clicked(fid: String)
+## `additive` is true for Ctrl/Cmd+click multi-select (from the pointer event).
+signal sketch_pad_clicked(fid: String, additive: bool)
 
 ## Resize-drag state (AABB corner / face-center handles).
 var _resize_min := Vector3.ZERO
@@ -158,12 +160,12 @@ const AXIS_LEN_FRAC := 0.35
 const GRIP_SCREEN_FRAC := 0.10
 ## Screen-space magnet hold for grid / object snap during body move.
 const SNAP_HOLD_PX := 6.0
-## Tighter than approach: only when the cursor is this close (screen px AND
-## model mm) to a measure snap (corner / edge mid / surface mid) does the X
-## relocate onto the near body. Larger misses keep the X pinned and dim to the
-## perpendicular foot instead — so the perp cue appears earlier.
+## Tighter than approach: only when the cursor is this close (screen px) to a
+## measure snap (corner / edge mid / surface mid) does the X relocate onto the
+## near body. Larger misses keep the X pinned and dim to the perpendicular foot
+## instead — so the perp cue appears earlier. Pixel distance scales with zoom
+## and works for large models (no model-mm gate).
 const MEASURE_RELOCATE_PX := 14.0
-const MEASURE_RELOCATE_MM := 0.85
 const GHOST_NAME := "PlaceGhost"
 ## Kernel primitive sizes used for sit-on-plane ghost offsets (half-heights).
 const PLACE_HALF_Z := {
@@ -1195,11 +1197,9 @@ func _closest_corner_of(corners: Array[Vector3], from: Vector3) -> Variant:
 	return best
 
 
-## True when `hit` is close enough to `snap` (in screen px and model mm) that
-## the measure X should relocate rather than dim a perpendicular foot.
+## True when `hit` is within MEASURE_RELOCATE_PX of `snap` on screen — the
+## measure X relocates; otherwise dim the perpendicular foot.
 func _near_measure_snap(hit: Vector3, snap: Vector3) -> bool:
-	if hit.distance_to(snap) > MEASURE_RELOCATE_MM:
-		return false
 	return _screen_delta_px(hit, snap) <= MEASURE_RELOCATE_PX
 
 
@@ -1670,7 +1670,15 @@ func _sketch_input(event: InputEvent) -> void:
 				status.emit("Pasted %d sketch entities" % made.size() if not made.is_empty() else "Clipboard empty")
 				accept_event()
 	elif event is InputEventKey and event.pressed and not event.ctrl_pressed:
-		match (event as InputEventKey).keycode:
+		var ke := event as InputEventKey
+		# Digits / decimal while rubber-banding → type into the distance blank.
+		if sketch_mode.has_single_dof_preview() and _is_length_type_key(ke):
+			var seed := _length_type_seed(ke)
+			if sketch_chrome != null:
+				sketch_chrome.focus_dim_for_typing(seed)
+			accept_event()
+			return
+		match ke.keycode:
 			KEY_S: sketch_mode.set_tool(SketchMode.Tool.SELECT)
 			KEY_L: sketch_mode.set_tool(SketchMode.Tool.LINE)
 			KEY_R: sketch_mode.set_tool(SketchMode.Tool.RECT)
@@ -1688,9 +1696,41 @@ func _sketch_input(event: InputEvent) -> void:
 				if measure_overlay != null and measure_overlay.has_anchor():
 					measure_overlay.clear_pair()
 					status.emit("Measure cleared")
+				elif sketch_mode.has_length_override():
+					sketch_mode.clear_length_override()
+					status.emit("Length unlock")
 				else:
 					sketch_mode.cancel()
 		accept_event()
+
+
+func _is_length_type_key(ke: InputEventKey) -> bool:
+	match ke.keycode:
+		KEY_0, KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9:
+			return true
+		KEY_KP_0, KEY_KP_1, KEY_KP_2, KEY_KP_3, KEY_KP_4, KEY_KP_5, KEY_KP_6, \
+				KEY_KP_7, KEY_KP_8, KEY_KP_9:
+			return true
+		KEY_PERIOD, KEY_KP_PERIOD:
+			return true
+		_:
+			return false
+
+
+func _length_type_seed(ke: InputEventKey) -> String:
+	match ke.keycode:
+		KEY_0, KEY_KP_0: return "0"
+		KEY_1, KEY_KP_1: return "1"
+		KEY_2, KEY_KP_2: return "2"
+		KEY_3, KEY_KP_3: return "3"
+		KEY_4, KEY_KP_4: return "4"
+		KEY_5, KEY_KP_5: return "5"
+		KEY_6, KEY_KP_6: return "6"
+		KEY_7, KEY_KP_7: return "7"
+		KEY_8, KEY_KP_8: return "8"
+		KEY_9, KEY_KP_9: return "9"
+		KEY_PERIOD, KEY_KP_PERIOD: return "."
+		_: return ""
 
 
 func _update_sketch_measure(pos2: Vector2) -> void:
@@ -2278,30 +2318,36 @@ func _on_release(pos: Vector2) -> void:
 	# No drag gesture was armed (or pending move never started): resolve selection.
 	_pending_body_move = false
 	_drag_mode = DragMode.NONE
-	if _press_empty and not _additive_click:
-		# Yellow sketch pad click → reopen that sketch.
+	# Pads sit on faces — prefer a pad hit even when the body ray is non-empty,
+	# otherwise face-hosted pads are unclickable under the solid.
+	if was_click and view.sketch_pads != null and (sketch_mode == null or not sketch_mode.active):
 		var pad_ray := _model_ray(_press_pos)
-		if view.sketch_pads != null and (sketch_mode == null or not sketch_mode.active):
-			var pad_fid: String = view.sketch_pads.pick_pad(pad_ray[0], pad_ray[1])
-			if pad_fid != "":
-				sketch_pad_clicked.emit(pad_fid)
-				_box_drag = false
-				_additive_click = false
-				_press_empty = false
-				_press_travel = 0.0
-				return
-		view.clear_selection()
-		status.emit("")
-	else:
-		# Prefer the press ray so a tiny slide off the body still selects it.
-		var ray := _model_ray(_press_pos)
-		if view.select_ray(ray[0], ray[1], _additive_click):
-			if view.selection_size() > 1:
-				status.emit("%d selected" % view.selection_size())
-			else:
-				status.emit("Selected " + (view.selected_face if view.selected_face != "" else view.selected_body).left(8))
-		elif not _additive_click:
+		var pad_fid: String = view.sketch_pads.pick_pad(pad_ray[0], pad_ray[1])
+		if pad_fid != "":
+			sketch_pad_clicked.emit(pad_fid, _additive_click)
+			_box_drag = false
+			_additive_click = false
+			_press_empty = false
+			_press_travel = 0.0
+			return
+	if _press_empty:
+		if not _additive_click:
+			view.clear_selection()
 			status.emit("")
+			_box_drag = false
+			_additive_click = false
+			_press_empty = false
+			_press_travel = 0.0
+			return
+	# Prefer the press ray so a tiny slide off the body still selects it.
+	var ray := _model_ray(_press_pos)
+	if view.select_ray(ray[0], ray[1], _additive_click):
+		if view.selection_size() > 1:
+			status.emit("%d selected" % view.selection_size())
+		else:
+			status.emit("Selected " + (view.selected_face if view.selected_face != "" else view.selected_body).left(8))
+	elif not _additive_click:
+		status.emit("")
 	_box_drag = false
 	_additive_click = false
 	_press_empty = false

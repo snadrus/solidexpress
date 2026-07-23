@@ -8,6 +8,12 @@ const RING := 7.0
 
 var _flash := 0.0
 var _flash_tween: Tween
+var _moving := false
+
+
+func set_moving(v: bool) -> void:
+	_moving = v
+	queue_redraw()
 
 
 func _ready() -> void:
@@ -18,6 +24,8 @@ func _ready() -> void:
 
 func _draw() -> void:
 	var center := size * 0.5
+	if _moving:
+		draw_arc(center, DIAM * 0.5 + 10.0, 0, TAU, 64, Color(1.0, 0.88, 0.12, 0.28), 5.0, true)
 	var ring_col := Color(1.0, 0.88, 0.12, 0.95).lerp(Color(1, 1, 1, 1), _flash)
 	draw_arc(center, DIAM * 0.5 - RING * 0.5, 0, TAU, 72, ring_col, RING, true)
 	draw_circle(center, 5.0, Color(1, 1, 1, 0.95))

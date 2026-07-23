@@ -7,6 +7,8 @@ extends Node3D
 
 signal document_changed
 signal selection_changed(body_id: String, face_id: String)
+## Emitted when section clipping is enabled or cleared (world bg, HUD, etc.).
+signal section_changed(enabled: bool)
 
 const BODY_COLOR := Color(0.72, 0.74, 0.78)
 ## Cold brushed-metal defaults so canyon HDRI reflections read on bodies.
@@ -68,6 +70,7 @@ var _edge_highlight: MeshInstance3D
 var _selection_corners: MeshInstance3D
 ## SketchPadOverlay — typed loosely to avoid class_name cycle with DocumentView.
 var sketch_pads: Node3D
+var path_overlay: Node3D
 ## Sketch feature currently being edited (hides that yellow pad); "" = none.
 var _editing_sketch_fid := ""
 var _base_material: ShaderMaterial
@@ -141,6 +144,10 @@ func _ready() -> void:
 	sketch_pads.name = "SketchPads"
 	sketch_pads.view = self
 	add_child(sketch_pads)
+	path_overlay = PathOverlay.new()
+	path_overlay.name = "PathOverlay"
+	path_overlay.view = self
+	add_child(path_overlay)
 	var corner_mat := StandardMaterial3D.new()
 	corner_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	corner_mat.albedo_color = Color(0.15, 0.55, 1.0)
@@ -250,12 +257,14 @@ func set_section_plane(point: Vector3, normal: Vector3) -> void:
 	_section_normal = normal.normalized() if normal.length_squared() > 1e-12 else Vector3.RIGHT
 	section_enabled = true
 	_apply_selection_materials()
+	section_changed.emit(true)
 
 
 ## Disable section-view clipping and restore body ShaderMaterials.
 func clear_section_plane() -> void:
 	section_enabled = false
 	_apply_selection_materials()
+	section_changed.emit(false)
 
 
 func set_display_mode(mode: int) -> void:
@@ -1589,6 +1598,7 @@ func refresh() -> void:
 	_refresh_datums()
 	_refresh_instances()
 	refresh_sketch_pads(_editing_sketch_fid)
+	refresh_path_overlay()
 	# refresh() rebuilds meshes; surface overrides must be reapplied or bodies
 	# keep Godot's default matte white (films call refresh without _after_mutation).
 	_apply_selection_materials()
@@ -1600,6 +1610,11 @@ func refresh_sketch_pads(editing_fid: String = "") -> void:
 	_editing_sketch_fid = editing_fid
 	if sketch_pads != null and sketch_pads.has_method("refresh"):
 		sketch_pads.call("refresh", doc, editing_fid)
+
+
+func refresh_path_overlay() -> void:
+	if path_overlay != null and path_overlay.has_method("refresh"):
+		path_overlay.call("refresh", doc)
 
 
 ## Face normal from tessellation (model space), or ZERO if unknown.

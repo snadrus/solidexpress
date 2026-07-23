@@ -95,12 +95,12 @@ render_one() {
         -map 0:v:0 -map 1:0 \
         -c:v libvpx-vp9 -crf 32 -b:v 0 -row-mt 1 \
         -c:s webvtt \
-        "$webm"
+        "$webm" </dev/null
     else
       ffmpeg -y -loglevel error \
         -i "$avi_abs" \
         -c:v libvpx-vp9 -crf 32 -b:v 0 -row-mt 1 \
-        "$webm"
+        "$webm" </dev/null
     fi
     echo "    webm: $webm"
   else
@@ -130,10 +130,10 @@ PY
     render_one "$id" "$quit_after"
     ;;
   all)
-    while IFS=$'\t' read -r id quit_after; do
+    while IFS=$'\t' read -r id quit_after <&3; do
       [[ -z "$id" ]] && continue
       render_one "$id" "$quit_after"
-    done < <(enabled_rows)
+    done 3< <(enabled_rows)
     echo "sx-movies: done → $OUT"
     ;;
   *)

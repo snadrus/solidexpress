@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/branding/logo.png" alt="SolidExpress" width="256">
+</p>
+
 # SolidExpress
 
 Parametric solid modeler built on **OCCT** geometry, a **Godot 4.7** UI via GDExtension, and **PlaneGCS** for 2D sketch constraints.

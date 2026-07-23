@@ -9,10 +9,11 @@ const GRID_HALF := 50.0
 const GRID_STEP := 0.1
 const GRID_MAJOR := 1.0
 
-const COLOR_GRID := Color(0.32, 0.33, 0.36)
-const COLOR_GRID_MAJOR := Color(0.48, 0.49, 0.54)
-const COLOR_GRID_CENTER_X := Color(0.72, 0.28, 0.26)
-const COLOR_GRID_CENTER_Y := Color(0.28, 0.68, 0.32)
+## Low alpha so bodies and sketches read through the sheet.
+const COLOR_GRID := Color(0.32, 0.33, 0.36, 0.18)
+const COLOR_GRID_MAJOR := Color(0.48, 0.49, 0.54, 0.28)
+const COLOR_GRID_CENTER_X := Color(0.72, 0.28, 0.26, 0.40)
+const COLOR_GRID_CENTER_Y := Color(0.28, 0.68, 0.32, 0.40)
 
 var gizmos_visible := true
 var grid_visible := true
@@ -73,6 +74,7 @@ func _unshaded_vertex_color_material() -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	m.vertex_color_use_as_albedo = true
+	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	return m
 
 

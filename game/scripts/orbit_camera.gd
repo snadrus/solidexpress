@@ -50,6 +50,9 @@ var _view_tween: Tween
 ## When true, orientation changes (orbit / view snaps / ortho toggle) are blocked;
 ## pan and zoom still work. Set by sketch enter/leave.
 var sketch_orientation_locked := false
+## World-space camera-up while sketch-locked so plane +X/+Y map to screen right/up.
+## (Default Vector3.UP is degenerate when looking along world +Y / model +Z.)
+var _sketch_view_up := Vector3.UP
 ## In-memory pose captured before entering sketch view (not persisted).
 var _sketch_pose: Dictionary = {}
 
@@ -451,7 +454,11 @@ func apply_pose(pose: Dictionary) -> void:
 
 
 ## Enter locked sketch view: save pose, force ortho, look along normal, frame.
-func enter_sketch_view(normal: Vector3, frame_center: Vector3, frame_radius: float) -> void:
+## `normal` / `frame_center` / `model_up` are kernel/model (Z-up) space.
+## Pass `model_up` = sketch plane +Y so screen axes match the plane (not world UP).
+func enter_sketch_view(
+		normal: Vector3, frame_center: Vector3, frame_radius: float,
+		model_up: Vector3 = Vector3.ZERO) -> void:
 	_sketch_pose = capture_pose()
 	sketch_orientation_locked = true
 	projection = PROJECTION_ORTHOGONAL
@@ -459,7 +466,21 @@ func enter_sketch_view(normal: Vector3, frame_center: Vector3, frame_radius: flo
 	if n.length_squared() > 1e-8:
 		yaw = atan2(n.x, -n.y)
 		pitch = asin(clampf(n.z, -1.0, 1.0))
-	pivot = frame_center
+	# Pivot is stored in Godot world space (same as orbit / frame_selection).
+	if model_space != null:
+		pivot = model_space.to_global(frame_center)
+	else:
+		pivot = frame_center
+	if model_up.length_squared() > 1e-8:
+		var up_w: Vector3 = (
+			model_space.global_transform.basis * model_up if model_space != null
+			else model_up)
+		if up_w.length_squared() > 1e-8:
+			_sketch_view_up = up_w.normalized()
+		else:
+			_sketch_view_up = Vector3.UP
+	else:
+		_sketch_view_up = Vector3.UP
 	var r := maxf(frame_radius, 5.0)
 	distance = clampf(r / tan(deg_to_rad(fov) / 2.0) * 1.35, MIN_DISTANCE, MAX_DISTANCE)
 	_update_transform()
@@ -468,6 +489,7 @@ func enter_sketch_view(normal: Vector3, frame_center: Vector3, frame_radius: flo
 ## Leave sketch view: unlock orientation and restore the pre-entry pose.
 func leave_sketch_view() -> void:
 	sketch_orientation_locked = false
+	_sketch_view_up = Vector3.UP
 	if not _sketch_pose.is_empty():
 		apply_pose(_sketch_pose)
 		_sketch_pose.clear()
@@ -545,6 +567,12 @@ func _load_named_views() -> void:
 		}
 
 
+func _view_up() -> Vector3:
+	if sketch_orientation_locked and _sketch_view_up.length_squared() > 1e-8:
+		return _sketch_view_up
+	return Vector3.UP
+
+
 func _update_transform() -> void:
 	if projection == PROJECTION_ORTHOGONAL:
 		# Keep apparent size consistent with perspective: frustum height at the
@@ -557,12 +585,13 @@ func _update_transform() -> void:
 	) * distance
 	var pos := pivot + offset
 	var look_target := _look_target_for(pos)
+	var up := _view_up()
 	if is_inside_tree():
 		global_position = pos
-		look_at(look_target, Vector3.UP)
+		look_at(look_target, up)
 	else:
 		# Headless / orphan nodes (e.g. unit tests) cannot use look_at().
-		look_at_from_position(pos, look_target, Vector3.UP)
+		look_at_from_position(pos, look_target, up)
 	view_changed.emit()
 
 
@@ -574,9 +603,12 @@ func _look_target_for(camera_pos: Vector3) -> Vector3:
 	if to_pivot.length_squared() < 1e-12:
 		return pivot
 	var forward := to_pivot.normalized()
-	var right := forward.cross(Vector3.UP)
+	var up_ref := _view_up()
+	var right := forward.cross(up_ref)
 	if right.length_squared() < 1e-10:
 		right = forward.cross(Vector3.RIGHT)
+	if right.length_squared() < 1e-10:
+		right = forward.cross(Vector3.FORWARD)
 	right = right.normalized()
 	var view_up := right.cross(forward).normalized()
 	var half_height := distance * tan(deg_to_rad(fov) * 0.5)

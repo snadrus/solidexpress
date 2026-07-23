@@ -33,6 +33,7 @@ func _init() -> void:
 	test_sketch_on_face_extrude(main)
 	test_sketch_exit_pad_reopen(main)
 	test_sketch_camera_lock(main)
+	await test_sketch_screen_axes(main)
 	test_sketch_left_rail(main)
 
 	print("%d checks, %d failures" % [checks, failures])
@@ -276,6 +277,28 @@ func test_sketch_camera_lock(main) -> void:
 	check(is_equal_approx(cam.pitch, pitch0), "pitch restored")
 	check(is_equal_approx(cam.distance, dist0), "distance restored")
 	check(cam.projection == proj0, "projection restored")
+
+
+func test_sketch_screen_axes(main) -> void:
+	print("- sketch UV maps to screen right/up (model→world)")
+	var cam: OrbitCamera = main.camera
+	var sm: SketchMode = main.sketch_mode
+	var ms: Node3D = main.model_space
+	main.view.new_document()
+	main.view.clear_selection()
+	main._start_sketch()
+	await process_frame
+	var o: Vector2 = cam.unproject_position(ms.to_global(sm.to_model(Vector2.ZERO)))
+	var sx: Vector2 = cam.unproject_position(ms.to_global(sm.to_model(Vector2(10, 0))))
+	var sy: Vector2 = cam.unproject_position(ms.to_global(sm.to_model(Vector2(0, 10))))
+	var dx := sx - o
+	var dy := sy - o
+	# Plane +X → screen right; plane +Y → screen up (Godot Y grows downward).
+	check(dx.x > 2.0 and absf(dx.x) > absf(dx.y),
+		"sketch +X projects mostly screen-right (dx=%s)" % dx)
+	check(dy.y < -2.0 and absf(dy.y) > absf(dy.x),
+		"sketch +Y projects mostly screen-up (dy=%s)" % dy)
+	sm.cancel()
 
 
 func test_sketch_left_rail(main) -> void:
