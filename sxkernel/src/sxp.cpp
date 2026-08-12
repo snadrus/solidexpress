@@ -2,6 +2,7 @@
 
 #include <miniz.h>
 
+#include <BRepBuilderAPI_Copy.hxx>
 #include <type_traits>
 
 #include <nlohmann/json.hpp>
@@ -12,6 +13,7 @@
 #include "sx/features.hpp"
 #include "sx/instances.hpp"
 #include "sx/log.hpp"
+#include "sx/mates.hpp"
 #include "sx/shape_utils.hpp"
 
 using nlohmann::json;
@@ -314,6 +316,64 @@ bool load_sxp(Document& doc, const std::string& path, std::string* err) {
         if (!card) continue;
         if (!card->aliases.empty()) doc.cards().set_alias(card->id, card->aliases);
         if (!card->notes.empty()) doc.cards().set_notes(card->id, card->notes);
+    }
+    return true;
+}
+
+bool insert_sxp(Document& dest, const std::string& path,
+                const std::array<double, 3>& base_translation, InsertSxpResult* out,
+                std::string* err) {
+    Document tmp;
+    if (!load_sxp(tmp, path, err)) return false;
+    const auto src_ids = tmp.body_ids();
+    if (src_ids.empty()) {
+        if (err) *err = "no bodies in " + path;
+        return false;
+    }
+
+    InsertSxpResult local;
+    InsertSxpResult& result = out ? *out : local;
+    result.body_ids.clear();
+    result.instance_ids.clear();
+
+    // First component into an empty assembly is Fixed (SolidWorks default).
+    const bool fix_first = dest.instances().empty();
+
+    for (size_t i = 0; i < src_ids.size(); ++i) {
+        const Body* src = tmp.body(src_ids[i]);
+        if (!src || src->shape.IsNull()) {
+            if (err) *err = "null body in " + path;
+            return false;
+        }
+        BRepBuilderAPI_Copy copier(src->shape, /*copyGeom=*/true, /*copyMesh=*/true);
+        if (!copier.IsDone()) {
+            if (err) *err = "BREP copy failed for body in " + path;
+            return false;
+        }
+        const std::string name = src->name.empty() ? "Component" : src->name;
+        const EntityId new_body = dest.add_body(copier.Shape(), name);
+        if (new_body.is_null()) {
+            if (err) *err = "add_body failed during insert";
+            return false;
+        }
+        if (Body* b = dest.body_mut(new_body)) {
+            b->color = src->color;
+            b->material = src->material;
+        }
+
+        // Stagger subsequent bodies so multi-body parts don't stack.
+        const std::array<double, 3> t{base_translation[0] + static_cast<double>(i) * 40.0,
+                                      base_translation[1], base_translation[2]};
+        const EntityId iid = dest.add_instance(new_body, t, {0, 0, 0, 1}, name);
+        if (iid.is_null()) {
+            if (err) *err = "add_instance failed during insert";
+            return false;
+        }
+        dest.set_instance_source_path(iid, path);
+        if (fix_first && i == 0) dest.set_instance_fixed(iid, true);
+
+        result.body_ids.push_back(new_body);
+        result.instance_ids.push_back(iid);
     }
     return true;
 }

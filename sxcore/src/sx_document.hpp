@@ -228,6 +228,10 @@ public:
     // --- persistence ---
     bool save(const godot::String& path);
     bool load(const godot::String& path);
+    // Multi-doc Insert Components: deep-copy bodies from an external .sxp and
+    // place an instance of each. Returns {ok, error, body_ids, instance_ids}.
+    // First instance into an empty assembly is Fixed (SolidWorks default).
+    godot::Dictionary insert_sxp(const godot::String& path, const godot::Vector3& translation);
 
     // --- datums (reference geometry) ---
     godot::String add_datum_plane(const godot::Vector3& point, const godot::Vector3& normal);
@@ -242,15 +246,18 @@ public:
     godot::String add_instance(const godot::String& source_body, const godot::Vector3& translation,
                                const godot::Vector3& rotation_axis, double rotation_angle_deg,
                                const godot::String& name);
-    // Array of {id, source_body, name, translation, rotation_axis, rotation_angle_deg}.
+    // Array of {id, source_body, name, translation, rotation_axis, rotation_angle_deg,
+    //           fixed, source_path}.
     godot::Array instance_list() const;
     bool remove_instance(const godot::String& id);
     bool set_instance_transform(const godot::String& id, const godot::Vector3& translation,
                                 const godot::Vector3& rotation_axis, double rotation_angle_deg);
+    // Fix/Float restraint (SolidWorks Video 6). Fixed instances refuse drag.
+    bool set_instance_fixed(const godot::String& id, bool fixed);
 
     // --- assembly mates (closed-form placement; solve moves instance_b) ---
-    // type: "fixed" | "plane_coincident" | "concentric". instance_a may be ""
-    // for a grounded body reference. Returns the mate id or "".
+    // type: "fixed" | "plane_coincident" | "plane_parallel" | "concentric".
+    // instance_a may be "" for a grounded body reference. Returns the mate id or "".
     godot::String add_mate(const godot::String& type, const godot::String& instance_a,
                            const godot::String& face_a, const godot::String& instance_b,
                            const godot::String& face_b, double offset, bool flip,

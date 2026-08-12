@@ -1796,11 +1796,18 @@ func _on_press(pos: Vector2) -> void:
 		var iid: String = ihit["id"]
 		if view.selected_instance != iid:
 			view.select_instance(iid)
-		_pending_instance_move = true
-		_drag_instance_id = iid
-		_instance_grab_point = ihit["point"]
-		var inode := view.instance_node(iid)
-		_instance_start_xform = inode.transform if inode != null else Transform3D.IDENTITY
+		# Fixed restraint (SolidWorks Fix): select but do not arm a drag.
+		var inst_fixed := false
+		for inst in view.doc.instance_list():
+			if str(inst.get("id", "")) == iid:
+				inst_fixed = bool(inst.get("fixed", false))
+				break
+		if not inst_fixed:
+			_pending_instance_move = true
+			_drag_instance_id = iid
+			_instance_grab_point = ihit["point"]
+			var inode := view.instance_node(iid)
+			_instance_start_xform = inode.transform if inode != null else Transform3D.IDENTITY
 		_press_empty = false
 		return
 

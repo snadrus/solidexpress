@@ -18,6 +18,7 @@ const char* to_string(MateType t) {
     switch (t) {
         case MateType::Fixed: return "fixed";
         case MateType::PlaneCoincident: return "plane_coincident";
+        case MateType::PlaneParallel: return "plane_parallel";
         case MateType::Concentric: return "concentric";
     }
     return "unknown";
@@ -26,6 +27,7 @@ const char* to_string(MateType t) {
 MateType mate_type_from_string(const std::string& s) {
     if (s == "fixed") return MateType::Fixed;
     if (s == "plane_coincident") return MateType::PlaneCoincident;
+    if (s == "plane_parallel") return MateType::PlaneParallel;
     if (s == "concentric") return MateType::Concentric;
     throw std::invalid_argument("unknown mate type: " + s);
 }
@@ -131,6 +133,8 @@ bool apply_mate(Document& doc, const Mate& m) {
         log::error("mate " + m.name + ": instance_b must be a component instance");
         return false;
     }
+    // Fix restraint: skip transforms (instance stays where it was placed).
+    if (doc.instance(m.instance_b)->fixed) return true;
     switch (m.type) {
         case MateType::PlaneCoincident: {
             auto a = mate_plane(doc, m.instance_a, m.face_a);
@@ -147,6 +151,21 @@ bool apply_mate(Document& doc, const Mate& m) {
             gp_Trsf shift;
             shift.SetTranslation(gp_Vec(a->normal) * (m.offset - gap));
             return move_instance(doc, m.instance_b, shift * corr);
+        }
+        case MateType::PlaneParallel: {
+            // Align normals (orientation only); leave translation free — the
+            // SolidWorks Parallel standard mate for planar faces.
+            auto a = mate_plane(doc, m.instance_a, m.face_a);
+            auto b = mate_plane(doc, m.instance_b, m.face_b);
+            if (!a || !b) {
+                log::error("mate " + m.name + ": planar faces required");
+                return false;
+            }
+            gp_Dir target = a->normal;
+            if (gp_Vec(b->normal).Dot(gp_Vec(target)) < 0.0) target.Reverse();
+            if (m.flip) target.Reverse();
+            gp_Trsf corr = rotation_about(b->point, b->normal, target);
+            return move_instance(doc, m.instance_b, corr);
         }
         case MateType::Concentric: {
             auto a = mate_axis(doc, m.instance_a, m.face_a);

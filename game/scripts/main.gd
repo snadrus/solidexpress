@@ -38,7 +38,7 @@ var notes_edit: TextEdit
 var file_dialog: FileDialog
 var confirm_dialog: ConfirmationDialog
 var current_path := ""
-enum FileAction { NONE, OPEN, SAVE_AS, IMPORT_STEP, IMPORT_STL, EXPORT_STEP, EXPORT_STL, EXPORT_CONTEXT, EXPORT_DRAWING }
+enum FileAction { NONE, OPEN, SAVE_AS, IMPORT_STEP, IMPORT_STL, EXPORT_STEP, EXPORT_STL, EXPORT_CONTEXT, EXPORT_DRAWING, INSERT_SXP }
 var _file_action: FileAction = FileAction.NONE
 var _pending_discard: Callable = Callable()
 var _file_popup: PopupMenu
@@ -269,12 +269,15 @@ func _build_ui() -> void:
 	_edit_popup.about_to_popup.connect(_refresh_edit_menu)
 	_build_paste_special_dialog(ui)
 
-	# Insert menu: reference geometry.
+	# Insert menu: components (multi-doc .sxp) + reference geometry.
 	var insert_btn := MenuButton.new()
+	insert_btn.name = "InsertMenu"
 	insert_btn.text = "Insert"
 	insert_btn.flat = false
 	menu_row.add_child(insert_btn)
 	var insert_popup := insert_btn.get_popup()
+	insert_popup.add_item("Components…", 10)
+	insert_popup.add_separator()
 	insert_popup.add_item("Datum Plane XY", 0)
 	insert_popup.add_item("Datum Plane XZ", 1)
 	insert_popup.add_item("Datum Plane YZ", 2)
@@ -1552,6 +1555,10 @@ func _open_document(path: String) -> void:
 
 
 func _on_insert_menu(id: int) -> void:
+	if id == 10:
+		_show_file_dialog(FileAction.INSERT_SXP, FileDialog.FILE_MODE_OPEN_FILE,
+			"*.sxp ; SolidExpress")
+		return
 	var did := ""
 	match id:
 		0: did = view.doc.add_datum_plane(Vector3.ZERO, Vector3(0, 0, 1))
@@ -1566,6 +1573,23 @@ func _on_insert_menu(id: int) -> void:
 		_on_status("Datum added")
 	else:
 		_on_status("Datum creation failed")
+
+
+## Insert Components (multi-doc .sxp): copy bodies + place instances; hide the
+## embedded source bodies so only the placed components show (SolidWorks-like).
+func insert_components_from(path: String, translation := Vector3.ZERO) -> bool:
+	var result: Dictionary = view.doc.insert_sxp(path, translation)
+	if not bool(result.get("ok", false)):
+		_on_status("Insert failed: " + str(result.get("error", path)))
+		return false
+	var bodies: PackedStringArray = result.get("body_ids", PackedStringArray())
+	for bid in bodies:
+		view.set_body_hidden(str(bid), true)
+	view.refresh()
+	view.graph_changed()
+	var n: int = result.get("instance_ids", PackedStringArray()).size()
+	_on_status("Inserted %d component(s) from %s" % [n, path.get_file()])
+	return true
 
 
 func _show_file_dialog(action: FileAction, mode: FileDialog.FileMode, filter: String) -> void:
@@ -1623,6 +1647,8 @@ func _on_file_selected(path: String) -> void:
 				_on_status("Exported drawing: " + path)
 			else:
 				_on_status("Drawing export failed (empty document?)")
+		FileAction.INSERT_SXP:
+			insert_components_from(path)
 
 
 ## OS drag-and-drop onto the window (STL / SVG / STEP / .sxp).

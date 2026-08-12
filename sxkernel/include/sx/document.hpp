@@ -128,7 +128,12 @@ public:
     bool set_instance_transform(const EntityId& id,
                                 const std::array<double, 3>& translation,
                                 const std::array<double, 4>& rotation_quat);
+    // Fix/Float restraint (SolidWorks Video 6). When fixing, also upserts a
+    // Fixed mate so solve_mates keeps the instance put; floating removes it.
+    bool set_instance_fixed(const EntityId& id, bool fixed);
+    bool set_instance_source_path(const EntityId& id, const std::string& path);
     const Instance* instance(const EntityId& id) const;
+    Instance* instance_mut(const EntityId& id);
     const std::vector<Instance>& instances() const { return instances_; }
     // Used by the .sxp loader to restore persisted instances exactly.
     void restore_instance(Instance&& inst);

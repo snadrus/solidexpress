@@ -194,3 +194,35 @@ TEST_CASE("mates persist through .sxp round trip", "[mates]") {
     world_bbox(loaded, *loaded.instance(inst_id), bb);
     CHECK(bb[2] == Approx(12.5).margin(1e-6));
 }
+
+TEST_CASE("plane parallel mate aligns normals without closing the gap", "[mates]") {
+    Document doc;
+    auto base = doc.add_body(shape::make_box(50, 50, 10), "Base");
+    auto block = doc.add_body(shape::make_box(20, 20, 20, {{100, 0, 0}}), "Blk");
+    // Tip the block 45° about Y so its +Z face is tilted; parallel should flatten it.
+    auto inst = doc.add_instance(block, {0, 0, 40}, {0, 0.3826834, 0, 0.9238795}, "Blk-1");
+    auto base_top = planar_face_with_normal(doc, base, gp_Dir(0, 0, 1));
+    auto block_top = planar_face_with_normal(doc, block, gp_Dir(0, 0, 1));
+    REQUIRE(!base_top.is_null());
+    REQUIRE(!block_top.is_null());
+
+    Mate m;
+    m.type = MateType::PlaneParallel;
+    m.face_a = base_top;
+    m.instance_b = inst;
+    m.face_b = block_top;
+    REQUIRE(!doc.add_mate(m).is_null());
+    REQUIRE(solve_mates(doc));
+
+    auto pl = mate_plane(doc, inst, block_top);
+    REQUIRE(pl);
+    CHECK(std::abs(pl->normal.Dot(gp_Dir(0, 0, 1))) == Approx(1.0).margin(1e-6));
+    // Translation remains free after Parallel: we can still drag Z without
+    // the mate snapping us back (unlike PlaneCoincident).
+    REQUIRE(doc.set_instance_transform(inst, {0, 0, 80}, {0, 0, 0, 1}));
+    REQUIRE(solve_mates(doc));
+    CHECK(doc.instance(inst)->translation[2] == Approx(80.0).margin(1e-6));
+    auto pl2 = mate_plane(doc, inst, block_top);
+    REQUIRE(pl2);
+    CHECK(std::abs(pl2->normal.Dot(gp_Dir(0, 0, 1))) == Approx(1.0).margin(1e-6));
+}

@@ -183,6 +183,12 @@ Round 19 test state: kernel 210 cases / 7043 assertions; Godot voice 29 + help 1
 - [x] Kernel `[featimport]` STL case; UI `test_graph_import_stl` (269 UI checks)
 - [x] Edit menu: Undo/Redo/Cut/Copy/Paste/Paste Special/Select All/Delete; Ctrl+X cut (materialized clipboard); Ctrl+Shift+V paste special; sketch entity clipboard; context-menu clipboard
 
+## Assembly ladder (SolidWorks Insert Components series)
+- [x] Video 5 — multi-doc `.sxp` Insert Components: `sx::insert_sxp` deep-copies bodies from an external `.sxp`, places instances (first Fixed), records `source_path`; Insert → Components… menu + AssemblyPanel button; source bodies auto-hidden. Kernel `[insert_sxp]` + `run_insert_component_tests.gd`.
+- [x] Video 6 — Fix/Float restraints: `Instance.fixed` + `set_instance_fixed` (upserts/removes Fixed mate); drag refused while Fixed; AssemblyPanel lock/unlock toggle.
+- [x] Video 7 — Standard mate gap: `plane_parallel` (orientation-only; translation free) alongside existing coincident/concentric/fixed.
+- [x] Video 8 — Reference geometry after insert: existing Insert → Datum Plane/Axis/Point flow verified alongside inserted components (UI test).
+
 ## Later phases
 See friendliness plan (phases 21-27) + AI-first solver upgrade for unmatched voice.
 
