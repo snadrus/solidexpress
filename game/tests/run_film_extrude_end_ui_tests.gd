@@ -58,6 +58,8 @@ func _run_to_face() -> void:
 	check(boss_vol > 1.0, "to_face: boss volume > 0 (%.2f)" % boss_vol)
 	# Box height ~5 mm; r=8 → V ≈ π·64·5 ≈ 1005 (not blind 999 mm tall).
 	check(boss_vol < 5000.0, "to_face: boss height bounded (%.2f)" % boss_vol)
+	main.queue_free()
+	await process_frame
 
 
 func _param_end(p: Variant) -> String:
@@ -68,8 +70,6 @@ func _param_end(p: Variant) -> String:
 		if typeof(parsed) == TYPE_DICTIONARY:
 			return str(parsed.get("end", ""))
 	return ""
-	main.queue_free()
-	await process_frame
 
 
 func _boot():
