@@ -71,6 +71,8 @@ func _ready() -> void:
 		"Re-apply all mates in order, moving instances into position")
 	_op_button(vbox, "Check Interference", _check_interference, "measure",
 		"Report overlapping bodies/instances (static clash volume)")
+	_op_button(vbox, "Snap to connector", _snap_connector, "mate",
+		"Magnetic snap: mate the selected instance to the nearest connector (Onshape/Fusion)")
 
 	view.selection_changed.connect(_on_selection_changed)
 	view.document_changed.connect(refresh_lists)
@@ -388,3 +390,25 @@ func _check_interference() -> void:
 	_mate_error = "Interference: %d clash(es), ΣV=%.2f mm³" % [hits.size(), vol]
 	refresh_lists()
 	status.emit(_mate_error)
+
+
+func _snap_connector() -> void:
+	var iid := view.selected_instance
+	if iid == "":
+		# Fall back to the sole instance if exactly one exists.
+		var insts: Array = view.doc.instance_list()
+		if insts.size() == 1:
+			iid = str(insts[0].get("id", ""))
+	if iid == "":
+		status.emit("Snap: select an instance first")
+		return
+	var mid: String = view.doc.try_connector_snap(iid, 80.0)
+	if mid == "":
+		_mate_error = "Snap: no connector within range"
+		refresh_lists()
+		status.emit(_mate_error)
+		return
+	_mate_error = ""
+	view.refresh()
+	refresh_lists()
+	status.emit("Snapped — mate %s" % mid.substr(0, 8))

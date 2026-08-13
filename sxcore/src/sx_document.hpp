@@ -281,6 +281,13 @@ public:
     // Static interference: Array of {a_kind, a, b_kind, b, volume}.
     godot::Array check_interferences() const;
 
+    // Implicit mate connectors (Onshape/Fusion): Array of
+    // {face, instance, body, kind, origin:Vector3, z_axis:Vector3, radius}.
+    godot::Array list_connectors() const;
+    // Magnetic snap: if the instance is near a compatible connector, add a
+    // mate + solve. Returns mate id or "" if nothing snapped. max_dist in mm.
+    godot::String try_connector_snap(const godot::String& instance_id, double max_dist = 8.0);
+
     // Three-view (front/top/right) HLR drawing sheet as SVG. False when the
     // document has no bodies or the file cannot be written.
     bool export_drawing_svg(const godot::String& path, double scale);

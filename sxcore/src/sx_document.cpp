@@ -20,6 +20,7 @@
 #include <variant>
 #include "sx/drawings.hpp"
 #include "sx/materials.hpp"
+#include "sx/mate_connectors.hpp"
 #include "sx/mates.hpp"
 #include "sx/measure.hpp"
 #include "sx/features.hpp"
@@ -1318,6 +1319,32 @@ Array SxDocument::check_interferences() const {
     return out;
 }
 
+Array SxDocument::list_connectors() const {
+    Array out;
+    for (const auto& c : sx::implicit_connectors(*doc_)) {
+        Dictionary d;
+        d["face"] = to_gd(c.face.str());
+        d["instance"] = c.instance.is_null() ? String() : to_gd(c.instance.str());
+        d["body"] = to_gd(c.body.str());
+        d["kind"] = c.kind == sx::ConnectorKind::Cylindrical ? String("cylindrical")
+                                                            : String("planar");
+        d["origin"] = Vector3(c.origin.X(), c.origin.Y(), c.origin.Z());
+        d["z_axis"] = Vector3(c.z_axis.X(), c.z_axis.Y(), c.z_axis.Z());
+        d["radius"] = c.radius;
+        out.push_back(d);
+    }
+    return out;
+}
+
+String SxDocument::try_connector_snap(const String& instance_id, double max_dist) {
+    auto iid = parse_id(instance_id);
+    if (iid.is_null()) return {};
+    auto snap = sx::find_connector_snap(*doc_, iid, max_dist);
+    if (!snap) return {};
+    auto mid = sx::apply_connector_snap(*doc_, *snap);
+    return mid.is_null() ? String() : to_gd(mid.str());
+}
+
 bool SxDocument::export_drawing_svg(const String& path, double scale) {
     return sx::drawings::export_three_view_svg(*doc_, to_std(path), scale);
 }
@@ -1460,6 +1487,9 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("remove_mate", "id"), &SxDocument::remove_mate);
     ClassDB::bind_method(D_METHOD("solve_mates"), &SxDocument::solve_mates);
     ClassDB::bind_method(D_METHOD("check_interferences"), &SxDocument::check_interferences);
+    ClassDB::bind_method(D_METHOD("list_connectors"), &SxDocument::list_connectors);
+    ClassDB::bind_method(D_METHOD("try_connector_snap", "instance_id", "max_dist"),
+                         &SxDocument::try_connector_snap, DEFVAL(8.0));
     ClassDB::bind_method(D_METHOD("export_drawing_svg", "path", "scale"),
                          &SxDocument::export_drawing_svg);
 }

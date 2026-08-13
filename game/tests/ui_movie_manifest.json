@@ -110,5 +110,12 @@
     "script": "res://tests/films/film_interference_check.gd",
     "enabled": true,
     "quit_after": 1400
+  },
+  {
+    "id": "mate_connector_snap",
+    "title": "Mate connector snap — instance → ground",
+    "script": "res://tests/films/film_mate_connector_snap.gd",
+    "enabled": true,
+    "quit_after": 1500
   }
 ]

@@ -2296,11 +2296,19 @@ func _on_release(pos: Vector2) -> void:
 				var rot := _instance_rotation(_drag_instance_id)
 				if view.doc.set_instance_transform(_drag_instance_id,
 						inode.transform.origin, rot[0], rot[1]):
-					# Peer feel: drop the instance, then mates pull it home.
+					# Onshape/Fusion magnetic snap: if a connector is nearby,
+					# create a mate; otherwise re-solve existing mates.
+					var snapped: String = ""
+					if view.doc.has_method("try_connector_snap"):
+						snapped = view.doc.try_connector_snap(_drag_instance_id, 12.0)
 					var had_mates: bool = view.doc.mate_list().size() > 0
-					var solved: bool = view.doc.solve_mates() if had_mates else true
+					var solved: bool = true
+					if snapped == "" and had_mates:
+						solved = view.doc.solve_mates()
 					view.refresh()
-					if had_mates:
+					if snapped != "":
+						status.emit("Instance snapped to mate connector")
+					elif had_mates:
 						status.emit("Instance moved — mates re-solved" if solved
 								else "Instance moved — mate solve FAILED")
 					else:
