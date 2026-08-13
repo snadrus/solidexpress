@@ -106,6 +106,11 @@ public:
     bool can_undo() const;
     bool can_redo() const;
 
+    // SolidWorks Convert Entities: project a face's outer-wire edges onto the
+    // sketch plane, adding lines/circles/arcs. Returns new sketch entity ids.
+    godot::PackedStringArray convert_face_edges(const godot::Ref<class SxSketch>& sketch,
+                                                const godot::String& face_id);
+
     // --- queries ---
     godot::PackedStringArray body_ids() const;
     godot::String body_name(const godot::String& body_id) const;

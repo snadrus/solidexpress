@@ -25,6 +25,7 @@
 #include "sx/features.hpp"
 #include "sx/interop.hpp"
 #include "sx/sketch_json.hpp"
+#include "sx/sketch_project.hpp"
 #include "sx_sketch.hpp"
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
@@ -429,6 +430,15 @@ bool SxDocument::undo() { return stack_.undo(*doc_); }
 bool SxDocument::redo() { return stack_.redo(*doc_); }
 bool SxDocument::can_undo() const { return stack_.can_undo(); }
 bool SxDocument::can_redo() const { return stack_.can_redo(); }
+
+PackedStringArray SxDocument::convert_face_edges(const Ref<SxSketch>& sketch,
+                                                 const String& face_id) {
+    PackedStringArray out;
+    if (sketch.is_null() || sketch->sketch() == nullptr || face_id.is_empty()) return out;
+    auto ids = sx::convert_face_edges(*sketch->sketch(), *doc_, parse_id(face_id));
+    for (const auto& id : ids) out.push_back(to_gd(id));
+    return out;
+}
 
 PackedStringArray SxDocument::body_ids() const {
     PackedStringArray out;
@@ -1339,6 +1349,8 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("redo"), &SxDocument::redo);
     ClassDB::bind_method(D_METHOD("can_undo"), &SxDocument::can_undo);
     ClassDB::bind_method(D_METHOD("can_redo"), &SxDocument::can_redo);
+    ClassDB::bind_method(D_METHOD("convert_face_edges", "sketch", "face_id"),
+                         &SxDocument::convert_face_edges);
     ClassDB::bind_method(D_METHOD("body_ids"), &SxDocument::body_ids);
     ClassDB::bind_method(D_METHOD("body_name", "body_id"), &SxDocument::body_name);
     ClassDB::bind_method(D_METHOD("rename_body", "body_id", "name"), &SxDocument::rename_body);

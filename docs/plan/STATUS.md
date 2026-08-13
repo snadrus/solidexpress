@@ -198,7 +198,7 @@ Round 19 test state: kernel 210 cases / 7043 assertions; Godot voice 29 + help 1
 - [ ] E Interference detection
 - [ ] F Exploded views
 - [x] G Extrude through-all / to-face (kernel end conditions + sketch chrome ExtrudeEnd + film DI)
-- [ ] H Convert Entities (edge projection)
+- [x] H Convert Entities (project host face edges; CONVERT tool + film DI)
 - [ ] I Rib feature
 
 ## Later phases

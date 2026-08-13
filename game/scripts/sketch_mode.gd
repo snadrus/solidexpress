@@ -57,6 +57,9 @@ var _spline_pts: Array[Vector2] = []
 ## Feature id of the body being sketched on ("" when on the ground plane);
 ## used as the boolean target for cut/fuse finishes.
 var target_fid := ""
+## Host face/body when the sketch was started on a planar face (Convert Entities).
+var host_face_id := ""
+var host_body_id := ""
 ## Feature id of the sketch being edited ("" when creating a new sketch).
 var editing_fid := ""
 ## Optional OrbitCamera for enter/leave sketch view locking.
@@ -301,6 +304,7 @@ func to_model(p: Vector2) -> Vector3:
 ## or world-X when the normal is parallel to Z). Extrude follows this normal.
 func begin(origin: Vector3, normal: Vector3, x_hint: Vector3 = Vector3.ZERO) -> void:
 	editing_fid = ""
+	# Host face cleared unless _start_sketch_on_face set it just before begin().
 	_setup_plane(origin, normal, x_hint)
 	sketch = SxSketch.new()
 	sketch.set_plane(origin, plane_x, plane_y)
@@ -1361,6 +1365,23 @@ func convert_pierce_points() -> int:
 	return n
 
 
+## SolidWorks Convert Entities: project the host face's outer edges into the sketch.
+func convert_host_face_edges() -> int:
+	if sketch == null or view == null or view.doc == null:
+		return 0
+	if host_face_id == "":
+		status.emit("Convert Entities: sketch on a face first")
+		return 0
+	var ids: PackedStringArray = view.doc.convert_face_edges(sketch, host_face_id)
+	if ids.is_empty():
+		status.emit("Convert Entities: no edges projected")
+		return 0
+	run_solve()
+	_redraw()
+	status.emit("Converted %d edges" % ids.size())
+	return ids.size()
+
+
 ## Sketch chamfer: trim two lines and add a connecting segment.
 func chamfer_selected(distance: float) -> String:
 	if selected.size() != 2:
@@ -1654,7 +1675,9 @@ func click(pos2: Vector2) -> void:
 		Tool.SMART_DIM:
 			_click_smart_dim(pos2)
 		Tool.CONVERT:
-			convert_pierce_points()
+			# Prefer SW Convert Entities (host face edges); fall back to pierce points.
+			if convert_host_face_edges() == 0:
+				convert_pierce_points()
 		Tool.MIRROR:
 			# Selection must already include axis + geometry; click confirms.
 			mirror_selected()

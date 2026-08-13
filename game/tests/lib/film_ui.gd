@@ -182,6 +182,8 @@ static func select_sketch_tool(ctx: FilmContext, sm: SketchMode, tool: int) -> v
 			label = "Smart Dimension"
 		SketchMode.Tool.EXTEND:
 			label = "Extend"
+		SketchMode.Tool.CONVERT:
+			label = "Convert entities"
 		SketchMode.Tool.SELECT:
 			label = "Select"
 		SketchMode.Tool.RECT:

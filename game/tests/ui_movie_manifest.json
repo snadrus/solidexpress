@@ -96,5 +96,12 @@
     "script": "res://tests/films/film_extrude_through_all.gd",
     "enabled": true,
     "quit_after": 1600
+  },
+  {
+    "id": "convert_entities",
+    "title": "Convert Entities — face edges → sketch",
+    "script": "res://tests/films/film_convert_entities.gd",
+    "enabled": true,
+    "quit_after": 1600
   }
 ]

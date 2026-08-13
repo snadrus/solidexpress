@@ -979,8 +979,12 @@ func _start_sketch_on_face(face_id: String, body_id: String) -> void:
 	var normal := Vector3(0, 0, 1)
 	var plane_msg := "Sketch on ground (XY)"
 	sketch_mode.target_fid = ""
+	sketch_mode.host_face_id = ""
+	sketch_mode.host_body_id = ""
 	if face_id != "" and body_id != "":
 		sketch_mode.target_fid = view.feature_of_body(body_id)
+		sketch_mode.host_face_id = face_id
+		sketch_mode.host_body_id = body_id
 		var fn := view.face_normal(body_id, face_id)
 		var plane: Dictionary = SketchMode.derive_face_plane(
 			view.doc, face_id, body_id, fn)
@@ -994,6 +998,8 @@ func _start_sketch_on_face(face_id: String, body_id: String) -> void:
 
 func _start_sketch_on_ground() -> void:
 	sketch_mode.target_fid = ""
+	sketch_mode.host_face_id = ""
+	sketch_mode.host_body_id = ""
 	sketch_mode.begin(Vector3.ZERO, Vector3(0, 0, 1))
 	_on_sketch_session_started("Sketch on ground (XY)")
 
