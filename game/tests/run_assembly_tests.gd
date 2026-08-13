@@ -232,7 +232,12 @@ func test_place_and_remove(main) -> void:
 	panel._remove_instance(iid)
 	await process_frame
 	check(view.doc.instance_list().is_empty(), "instance removed")
-	check(not panel.visible, "panel hides after last instance removed")
+	# Panel stays visible while a body is selected (so Place instance remains
+	# reachable); clear selection to verify the empty-assembly hide.
+	view.clear_selection()
+	panel.refresh_lists()
+	await process_frame
+	check(not panel.visible, "panel hides when assembly empty and nothing selected")
 	panel.queue_free()
 
 

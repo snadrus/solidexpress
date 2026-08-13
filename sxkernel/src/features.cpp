@@ -4,6 +4,8 @@
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepBuilderAPI_TransitionMode.hxx>
@@ -14,9 +16,12 @@
 #include <BRepOffsetAPI_MakePipeShell.hxx>
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
+#include <BRepAdaptor_Surface.hxx>
+#include <BRepBndLib.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepPrimAPI_MakeRevol.hxx>
 #include <BRepTools.hxx>
+#include <Bnd_Box.hxx>
 #include <Standard_Failure.hxx>
 #include <TopExp.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
@@ -28,6 +33,7 @@
 #include <gp_Ax2.hxx>
 #include <gp_Circ.hxx>
 #include <gp_Dir.hxx>
+#include <gp_Pln.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
@@ -68,6 +74,7 @@ const char* to_string(FeatureType t) {
         case FeatureType::Thread: return "thread";
         case FeatureType::ImportStep: return "import_step";
         case FeatureType::ImportStl: return "import_stl";
+        case FeatureType::Rib: return "rib";
     }
     return "unknown";
 }
@@ -93,6 +100,7 @@ FeatureType feature_type_from_string(const std::string& s) {
     if (s == "thread") return FeatureType::Thread;
     if (s == "import_step") return FeatureType::ImportStep;
     if (s == "import_stl") return FeatureType::ImportStl;
+    if (s == "rib") return FeatureType::Rib;
     throw std::invalid_argument("unknown feature type: " + s);
 }
 
@@ -759,9 +767,89 @@ bool FeatureGraph::apply(Document& doc, Feature& f,
                     auto n = skf->sketch->plane().normal();
                     gp_Vec dir(n[0], n[1], n[2]);
                     dir.Normalize();
+                    // Cut ops historically negate distance in the UI; keep the
+                    // extrusion sense along the (possibly flipped) dir.
                     double dist = num_param(params, "distance", 10.0, env);
+                    if (dist < 0.0) {
+                        dir.Reverse();
+                        dist = -dist;
+                    }
+                    std::string end = params.value("end", "blind");
                     TopoDS_Shape profile = face;
-                    if (params.value("symmetric", false)) {
+                    const auto& pl = skf->sketch->plane();
+                    gp_Pnt origin(pl.origin[0], pl.origin[1], pl.origin[2]);
+
+                    if (end == "through_all") {
+                        // Span the target (or whole-doc) AABB along ±dir so a
+                        // cut punches completely through (Fusion/SW Through All).
+                        Bnd_Box box;
+                        std::string op_tmp = params.value("op", "new");
+                        if (op_tmp != "new") {
+                            EntityId target = find_feature_body("target");
+                            const Body* tb = doc.body(target);
+                            if (!tb) return fail("through_all: missing target body");
+                            BRepBndLib::Add(tb->shape, box);
+                        } else {
+                            for (const auto& bid : doc.body_ids()) {
+                                const Body* b = doc.body(bid);
+                                if (b) BRepBndLib::Add(b->shape, box);
+                            }
+                        }
+                        if (box.IsVoid()) {
+                            dist = std::max(dist, 1000.0);
+                        } else {
+                            double xmin, ymin, zmin, xmax, ymax, zmax;
+                            box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+                            const gp_Pnt corners[8] = {
+                                {xmin, ymin, zmin}, {xmax, ymin, zmin},
+                                {xmin, ymax, zmin}, {xmax, ymax, zmin},
+                                {xmin, ymin, zmax}, {xmax, ymin, zmax},
+                                {xmin, ymax, zmax}, {xmax, ymax, zmax},
+                            };
+                            double t_min = 0.0, t_max = 0.0;
+                            bool first_t = true;
+                            for (const auto& c : corners) {
+                                double t = gp_Vec(origin, c).Dot(dir);
+                                if (first_t) {
+                                    t_min = t_max = t;
+                                    first_t = false;
+                                } else {
+                                    t_min = std::min(t_min, t);
+                                    t_max = std::max(t_max, t);
+                                }
+                            }
+                            const double margin = 1.0;
+                            double start = t_min - margin;
+                            dist = (t_max - t_min) + 2.0 * margin;
+                            if (dist < 1e-6) dist = 1.0;
+                            gp_Trsf t;
+                            t.SetTranslation(dir * start);
+                            profile = BRepBuilderAPI_Transform(face, t, true).Shape();
+                        }
+                    } else if (end == "to_face") {
+                        std::string ufid = params.value("upto_face", "");
+                        if (ufid.empty()) return fail("to_face: missing upto_face");
+                        TopoDS_Shape uf = doc.resolve(EntityId::from_string(ufid));
+                        if (uf.IsNull() || uf.ShapeType() != TopAbs_FACE)
+                            return fail("to_face: upto_face is not a face");
+                        BRepAdaptor_Surface surf(TopoDS::Face(uf));
+                        if (surf.GetType() != GeomAbs_Plane)
+                            return fail("to_face: upto_face must be planar");
+                        gp_Pln pln = surf.Plane();
+                        gp_Dir fn = pln.Axis().Direction();
+                        if (uf.Orientation() == TopAbs_REVERSED) fn.Reverse();
+                        double denom = dir.Dot(gp_Vec(fn));
+                        if (std::abs(denom) < 1e-9)
+                            return fail("to_face: extrusion parallel to face");
+                        // Signed distance along dir from sketch origin to plane.
+                        double t = gp_Vec(origin, pln.Location()).Dot(gp_Vec(fn)) / denom;
+                        if (t < 1e-9) {
+                            dir.Reverse();
+                            t = -t;
+                        }
+                        if (t < 1e-6) return fail("to_face: non-positive distance");
+                        dist = t;
+                    } else if (params.value("symmetric", false)) {
                         gp_Trsf t;
                         t.SetTranslation(dir * (-dist / 2.0));
                         profile = BRepBuilderAPI_Transform(face, t, true).Shape();
@@ -1159,6 +1247,75 @@ bool FeatureGraph::apply(Document& doc, Feature& f,
                 if (shape::count(result).solids < 1 || shape::volume(result) <= 0.0)
                     return fail("thread destroyed the solid");
                 doc.replace_body_shape(target, result);
+                return true;
+            }
+
+            case FeatureType::Rib: {
+                EntityId sketch_fid =
+                    EntityId::from_string(params.at("sketch").get<std::string>());
+                const Feature* skf = feature(sketch_fid);
+                if (!skf || !skf->sketch) return fail("rib: missing sketch");
+                EntityId target = find_feature_body("target");
+                const Body* tb = doc.body(target);
+                if (!tb) return fail("rib: missing target body");
+                double thickness = num_param(params, "thickness", 2.0, env);
+                double height = num_param(params, "height", 10.0, env);
+                if (thickness < 1e-6 || height < 1e-6)
+                    return fail("rib: thickness and height must be positive");
+
+                const SketchEntity* line = nullptr;
+                for (const auto& e : skf->sketch->entities()) {
+                    if (!e.construction && e.type == SketchEntityType::Line) {
+                        line = &e;
+                        break;
+                    }
+                }
+                if (!line || line->params.size() < 4)
+                    return fail("rib: sketch needs a non-construction line");
+
+                const auto& pl = skf->sketch->plane();
+                auto at = [&](double u, double v) {
+                    return gp_Pnt(pl.origin[0] + pl.x_dir[0] * u + pl.y_dir[0] * v,
+                                  pl.origin[1] + pl.x_dir[1] * u + pl.y_dir[1] * v,
+                                  pl.origin[2] + pl.x_dir[2] * u + pl.y_dir[2] * v);
+                };
+                double x1 = skf->sketch->param(line->params[0]);
+                double y1 = skf->sketch->param(line->params[1]);
+                double x2 = skf->sketch->param(line->params[2]);
+                double y2 = skf->sketch->param(line->params[3]);
+                gp_Pnt p1 = at(x1, y1);
+                gp_Pnt p2 = at(x2, y2);
+                gp_Vec along(p1, p2);
+                if (along.Magnitude() < 1e-6) return fail("rib: line too short");
+                along.Normalize();
+                auto narr = pl.normal();
+                gp_Dir n(narr[0], narr[1], narr[2]);
+                gp_Vec sideways = gp_Vec(n).Crossed(along);
+                if (sideways.Magnitude() < 1e-9) return fail("rib: degenerate sideways");
+                sideways.Normalize();
+                sideways *= (thickness * 0.5);
+
+                BRepBuilderAPI_MakePolygon poly;
+                poly.Add(p1.Translated(-sideways));
+                poly.Add(p1.Translated(sideways));
+                poly.Add(p2.Translated(sideways));
+                poly.Add(p2.Translated(-sideways));
+                poly.Close();
+                if (!poly.IsDone()) return fail("rib: profile wire failed");
+                BRepBuilderAPI_MakeFace mkf(poly.Wire(), /*onlyPlane=*/true);
+                if (!mkf.IsDone()) return fail("rib: profile face failed");
+                // Extrude along the sketch normal (outward fin / stiffener on
+                // the host face). Into-part ribs need a shelled host; v1 adds
+                // measurable volume on solid faces like SW "rib" demos on plates.
+                TopoDS_Shape rib =
+                    BRepPrimAPI_MakePrism(mkf.Face(), gp_Vec(n) * height).Shape();
+                if (rib.IsNull() || shape::volume(rib) <= 0.0)
+                    return fail("rib: prism failed");
+                TopoDS_Shape fused = BRepAlgoAPI_Fuse(tb->shape, rib).Shape();
+                if (fused.IsNull()) return fail("rib: fuse failed");
+                if (shape::volume(fused) <= shape::volume(tb->shape) + 1e-3)
+                    return fail("rib: fuse did not add volume");
+                doc.replace_body_shape(target, fused);
                 return true;
             }
 

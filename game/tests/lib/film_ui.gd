@@ -182,6 +182,8 @@ static func select_sketch_tool(ctx: FilmContext, sm: SketchMode, tool: int) -> v
 			label = "Smart Dimension"
 		SketchMode.Tool.EXTEND:
 			label = "Extend"
+		SketchMode.Tool.CONVERT:
+			label = "Convert entities"
 		SketchMode.Tool.SELECT:
 			label = "Select"
 		SketchMode.Tool.RECT:
@@ -223,6 +225,12 @@ static func enter_sketch(ctx: FilmContext) -> void:
 	if sm != null and sm.active:
 		await wait_frames(ctx.tree, 2)
 		return
+	# Selected body hides the primitives palette (Modify rail) — deselect first.
+	var palette := ctx.main.find_child("Palette", true, false) as CanvasItem
+	if palette == null or not palette.is_visible_in_tree():
+		await viewport_click(ctx, viewport_empty_click_pos(ctx),
+				FilmUICues.alert("Click", "Deselect so Sketch is on the palette"))
+		await wait_frames(ctx.tree, 2)
 	var b := find_palette_sketch_button(ctx.main)
 	if not await click_control(ctx, b, FilmUICues.toolbar_sketch()):
 		return
@@ -419,15 +427,62 @@ static func draw_circle(ctx: FilmContext, sm: SketchMode, center: Vector2, rim: 
 	await click_sketch(ctx, sm, rim, "Circle — radius")
 
 
-static func apply_extrude(ctx: FilmContext, depth: float) -> void:
+static func apply_extrude(ctx: FilmContext, depth: float, op: String = "new",
+		end: String = "blind", upto_body: String = "", upto_face: String = "") -> void:
 	var chrome: SketchContextChrome = ctx.main.sketch_chrome
 	if chrome == null or not chrome.visible:
 		_fail("sketch chrome not visible for Extrude")
 		return
-	if chrome.has_method("set_extrude_distance"):
+	if chrome.has_method("set_extrude_end"):
+		chrome.set_extrude_end(end)
+	if end == "blind" and chrome.has_method("set_extrude_distance"):
 		chrome.set_extrude_distance(depth)
+	# Result op: New / Cut / Fuse
+	if chrome._finish_op != null:
+		var op_idx := 0
+		if op == "cut":
+			op_idx = 1
+		elif op == "fuse":
+			op_idx = 2
+		chrome._finish_op.select(op_idx)
+	if end == "to_face":
+		if upto_body == "" or upto_face == "":
+			_fail("to_face extrude needs upto_body/upto_face for the pick")
+			return
+		var upto_btn := find_button(chrome, "Upto face")
+		if upto_btn == null:
+			upto_btn = find_button(chrome, "Upto ✓")
+		if upto_btn == null:
+			upto_btn = find_button(chrome, "Click face…")
+		if not await click_control(ctx, upto_btn, FilmUICues.alert("Upto", "Arm upto-face pick")):
+			return
+		# Single 3D click while awaiting_upto_pick (sketch input absorbs it).
+		var pt := face_pick_point(ctx.view, upto_body, upto_face)
+		if pt == Vector3.INF:
+			_fail("upto face pick point missing")
+			return
+		var n := ctx.view.face_normal(upto_body, upto_face)
+		var cam = ctx.main.camera
+		if cam != null and n.length_squared() > 1e-12:
+			var nn := n.normalized()
+			cam.pivot = pt + nn * 0.5
+			cam.yaw = atan2(nn.x, -nn.y)
+			cam.pitch = asin(clampf(nn.z, -0.999, 0.999))
+			cam.distance = maxf(cam.distance, 100.0)
+			if cam.has_method("_update_transform"):
+				cam._update_transform()
+			await wait_frames(ctx.tree, 2)
+		await viewport_click(ctx, model_to_screen(ctx, pt),
+				FilmUICues.alert("Click", "Pick upto face"))
+		await wait_frames(ctx.tree, 3)
+		if chrome.upto_face_id == "":
+			_fail("upto face was not set after pick")
+			return
 	var ex := chrome.extrude_button() if chrome.has_method("extrude_button") else null
-	if not await click_control(ctx, ex, FilmUICues.extrude(depth)):
+	var cue := FilmUICues.extrude(depth)
+	if end != "blind":
+		cue = FilmUICues.alert("Extrude", "Extrude %s (%s)" % [end, op])
+	if not await click_control(ctx, ex, cue):
 		return
 	await ctx.after_regen()
 	if ctx.chrome != null:
@@ -476,6 +531,13 @@ static func sweep_along_path_ui(ctx: FilmContext) -> void:
 
 
 static func place_primitive(ctx: FilmContext, kind: String) -> void:
+	# Selected body swaps the left rail to Modify (ops) and hides the
+	# primitives palette — click empty space first, same as a user would.
+	var palette := ctx.main.find_child("Palette", true, false) as CanvasItem
+	if palette == null or not palette.is_visible_in_tree():
+		await viewport_click(ctx, viewport_empty_click_pos(ctx),
+				FilmUICues.alert("Click", "Deselect so the primitives palette shows"))
+		await wait_frames(ctx.tree, 2)
 	var b := find_palette_button(ctx.main, kind)
 	if not await click_control(ctx, b, FilmUICues.place_primitive(kind)):
 		return
@@ -489,7 +551,15 @@ static func place_primitive(ctx: FilmContext, kind: String) -> void:
 		center = ix._screen_center()
 	else:
 		center = ctx.tree.root.get_viewport().get_visible_rect().size * 0.5
-	await viewport_click(ctx, center, FilmUICues.place_click(kind))
+	# First place at view center; later places offset onto empty ground so a
+	# center click does not stack on-face onto the previous solid.
+	var n_bodies := 0
+	if ctx.view != null and ctx.view.doc != null:
+		n_bodies = ctx.view.doc.body_ids().size()
+	var drop := center
+	if n_bodies > 0:
+		drop = center + Vector2(160.0 * float(n_bodies), -40.0 * float(n_bodies))
+	await viewport_click(ctx, drop, FilmUICues.place_click(kind))
 	if ctx.chrome != null:
 		ctx.chrome.clear_keys()
 
@@ -597,3 +667,165 @@ static func sketch_uv_to_screen(ctx: FilmContext, uv: Vector2) -> Vector2:
 
 static func _sketch_uv_to_screen(ctx: FilmContext, uv: Vector2) -> Vector2:
 	return sketch_uv_to_screen(ctx, uv)
+
+
+## --- Assembly / mate helpers (click AssemblyPanel chrome only) ---
+
+static func assembly_panel(ctx: FilmContext) -> AssemblyPanel:
+	if ctx == null or ctx.main == null:
+		return null
+	return ctx.main.assembly_panel as AssemblyPanel
+
+
+static func select_mate_type(ctx: FilmContext, mate_type: String) -> bool:
+	var panel := assembly_panel(ctx)
+	if panel == null or panel._type_option == null:
+		_fail("AssemblyPanel MateType missing")
+		return false
+	if not panel.visible:
+		# Panel auto-shows once instances exist; force refresh.
+		panel.refresh_lists()
+		await wait_frames(ctx.tree, 1)
+	var opt: OptionButton = panel._type_option
+	var found := -1
+	for i in opt.item_count:
+		if opt.get_item_text(i) == mate_type:
+			found = i
+			break
+	if found < 0:
+		_fail("mate type '%s' not in MateType list" % mate_type)
+		return false
+	await _cue_click(ctx, opt.get_global_rect().get_center(),
+			FilmUICues.alert("MateType", "Select %s mate" % mate_type))
+	opt.select(found)
+	opt.item_selected.emit(found)
+	await wait_frames(ctx.tree, 2)
+	return true
+
+
+static func set_mate_offset(ctx: FilmContext, value: float) -> bool:
+	var panel := assembly_panel(ctx)
+	if panel == null or panel._offset_spin == null:
+		_fail("AssemblyPanel MateOffset missing")
+		return false
+	var spin: SpinBox = panel._offset_spin
+	if not spin.visible or not spin.get_parent().visible:
+		_fail("MateOffset spin not visible for this mate type")
+		return false
+	await _cue_click(ctx, spin.get_global_rect().get_center(),
+			FilmUICues.alert("Offset", "Set mate value %s" % str(value)))
+	spin.value = value
+	await wait_frames(ctx.tree, 1)
+	return true
+
+
+static func place_instance_of_selection(ctx: FilmContext) -> bool:
+	var panel := assembly_panel(ctx)
+	if panel == null:
+		_fail("AssemblyPanel missing")
+		return false
+	panel.refresh_lists()
+	await wait_frames(ctx.tree, 1)
+	var b := find_button(panel, "Place instance of selection")
+	return await click_control(ctx, b, FilmUICues.alert("Place", "Place instance of selection"))
+
+
+static func arm_add_mate(ctx: FilmContext) -> bool:
+	var panel := assembly_panel(ctx)
+	if panel == null:
+		_fail("AssemblyPanel missing")
+		return false
+	var b := find_button(panel, "Add mate")
+	return await click_control(ctx, b, FilmUICues.alert("Add mate", "Arm two-click mate"))
+
+
+## Orient the camera so the face is front-facing (same math as Look at), then
+## click once for body and again to refine to the face (DocumentView.select_ray).
+static func pick_body_face(ctx: FilmContext, body_id: String, face_id: String, desc: String) -> bool:
+	var pt := face_pick_point(ctx.view, body_id, face_id)
+	if pt == Vector3.INF:
+		_fail("face pick point missing for %s/%s" % [body_id, face_id])
+		return false
+	var n := ctx.view.face_normal(body_id, face_id)
+	var cam = ctx.main.camera
+	if cam != null and n.length_squared() > 1e-12:
+		# Snap Look-at orientation (no tween) so the pick ray hits this face first.
+		var nn := n.normalized()
+		cam.pivot = pt
+		cam.yaw = atan2(nn.x, -nn.y)
+		cam.pitch = asin(clampf(nn.z, -0.999, 0.999))
+		cam.distance = maxf(cam.distance, 80.0)
+		if cam.has_method("_update_transform"):
+			cam._update_transform()
+		await wait_frames(ctx.tree, 2)
+	var screen := model_to_screen(ctx, pt)
+	if screen == Vector2.ZERO:
+		_fail("face %s not projectable after orient" % face_id)
+		return false
+	# Body → (optional edge) → face. Small solids often hit an edge on the
+	# second click; keep clicking the face center until the face sticks.
+	for attempt in 4:
+		if ctx.view.selected_body == body_id and ctx.view.selected_face == face_id:
+			return true
+		screen = model_to_screen(ctx, pt)
+		var label := "body" if attempt == 0 else ("face" if attempt > 1 else "refine")
+		await viewport_click(ctx, screen, FilmUICues.alert("Click", "%s (%s)" % [desc, label]))
+		await wait_frames(ctx.tree, 2)
+	if ctx.view.selected_face != face_id:
+		_fail("could not refine selection to face %s (got '%s' edge='%s')" % [
+			face_id, ctx.view.selected_face, ctx.view.selected_edge])
+		return false
+	return true
+
+
+## Two-click mate via AssemblyPanel: type + optional offset, then ground face → instance face.
+## While mate-armed, DocumentView.mate_pick_mode selects the hit face in one click.
+static func add_mate_ui(ctx: FilmContext, mate_type: String, ground_body: String,
+		ground_face: String, move_body: String, move_face: String,
+		offset: float = NAN) -> bool:
+	if not await select_mate_type(ctx, mate_type):
+		return false
+	if not is_nan(offset):
+		if not await set_mate_offset(ctx, offset):
+			return false
+	if not await arm_add_mate(ctx):
+		return false
+	if not await pick_mate_face(ctx, ground_body, ground_face, "Mate face A (ground)"):
+		return false
+	if not await pick_mate_face(ctx, move_body, move_face, "Mate face B (instance)"):
+		return false
+	await wait_frames(ctx.tree, 3)
+	var mates: Array = ctx.view.doc.mate_list()
+	for m in mates:
+		if str(m.get("type", "")) == mate_type:
+			return true
+	_fail("mate type '%s' not created after UI picks" % mate_type)
+	return false
+
+
+## Single click while mate_pick_mode is on (armed Add mate).
+static func pick_mate_face(ctx: FilmContext, body_id: String, face_id: String, desc: String) -> bool:
+	var pt := face_pick_point(ctx.view, body_id, face_id)
+	if pt == Vector3.INF:
+		_fail("mate face pick point missing for %s/%s" % [body_id, face_id])
+		return false
+	var n := ctx.view.face_normal(body_id, face_id)
+	var cam = ctx.main.camera
+	if cam != null and n.length_squared() > 1e-12:
+		var nn := n.normalized()
+		# Nudge the pivot slightly along the normal so the ray hits this face
+		# before any solid behind it.
+		cam.pivot = pt + nn * 0.5
+		cam.yaw = atan2(nn.x, -nn.y)
+		cam.pitch = asin(clampf(nn.z, -0.999, 0.999))
+		cam.distance = maxf(cam.distance, 120.0)
+		if cam.has_method("_update_transform"):
+			cam._update_transform()
+		await wait_frames(ctx.tree, 2)
+	# Pick a point slightly above the face center along the normal (model space).
+	var aim := pt + (n.normalized() * 0.2 if n.length_squared() > 1e-12 else Vector3.ZERO)
+	var screen := model_to_screen(ctx, aim)
+	var before_mates := ctx.view.doc.mate_list().size()
+	await viewport_click(ctx, screen, FilmUICues.alert("Click", desc))
+	await wait_frames(ctx.tree, 3)
+	return true

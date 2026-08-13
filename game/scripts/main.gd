@@ -967,6 +967,8 @@ func _on_sketch_action(action: String) -> void:
 			_apply_dimension_from_chrome()
 		"revolve":
 			sketch_mode.finish_revolve(TAU, _finish_op_name())
+		"rib":
+			sketch_mode.finish_rib(2.0, 10.0)
 		"horizontal", "vertical", "parallel", "perpendicular", "equal", "coincident", \
 		"tangent", "midpoint", "symmetric", "concentric", "collinear":
 			_apply_constraint(action, 0.0)
@@ -979,8 +981,12 @@ func _start_sketch_on_face(face_id: String, body_id: String) -> void:
 	var normal := Vector3(0, 0, 1)
 	var plane_msg := "Sketch on ground (XY)"
 	sketch_mode.target_fid = ""
+	sketch_mode.host_face_id = ""
+	sketch_mode.host_body_id = ""
 	if face_id != "" and body_id != "":
 		sketch_mode.target_fid = view.feature_of_body(body_id)
+		sketch_mode.host_face_id = face_id
+		sketch_mode.host_body_id = body_id
 		var fn := view.face_normal(body_id, face_id)
 		var plane: Dictionary = SketchMode.derive_face_plane(
 			view.doc, face_id, body_id, fn)
@@ -994,6 +1000,8 @@ func _start_sketch_on_face(face_id: String, body_id: String) -> void:
 
 func _start_sketch_on_ground() -> void:
 	sketch_mode.target_fid = ""
+	sketch_mode.host_face_id = ""
+	sketch_mode.host_body_id = ""
 	sketch_mode.begin(Vector3.ZERO, Vector3(0, 0, 1))
 	_on_sketch_session_started("Sketch on ground (XY)")
 
@@ -1101,7 +1109,16 @@ func _on_sketch_finish(op: String, distance: float) -> void:
 		"cut": finish_op.selected = 1
 		"fuse": finish_op.selected = 2
 		_: finish_op.selected = 0
-	sketch_mode.finish_extrude(distance, op)
+	var end := "blind"
+	if sketch_chrome != null and sketch_chrome.has_method("extrude_end"):
+		end = sketch_chrome.extrude_end()
+	var upto := ""
+	if end == "to_face":
+		if sketch_chrome != null and str(sketch_chrome.upto_face_id) != "":
+			upto = sketch_chrome.upto_face_id
+		else:
+			upto = view.selected_face
+	sketch_mode.finish_extrude(distance, op, end, upto)
 
 
 func _selected_entity() -> String:

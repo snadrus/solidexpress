@@ -20,11 +20,13 @@
 #include <variant>
 #include "sx/drawings.hpp"
 #include "sx/materials.hpp"
+#include "sx/mate_connectors.hpp"
 #include "sx/mates.hpp"
 #include "sx/measure.hpp"
 #include "sx/features.hpp"
 #include "sx/interop.hpp"
 #include "sx/sketch_json.hpp"
+#include "sx/sketch_project.hpp"
 #include "sx_sketch.hpp"
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
@@ -430,6 +432,15 @@ bool SxDocument::redo() { return stack_.redo(*doc_); }
 bool SxDocument::can_undo() const { return stack_.can_undo(); }
 bool SxDocument::can_redo() const { return stack_.can_redo(); }
 
+PackedStringArray SxDocument::convert_face_edges(const Ref<SxSketch>& sketch,
+                                                 const String& face_id) {
+    PackedStringArray out;
+    if (sketch.is_null() || sketch->sketch() == nullptr || face_id.is_empty()) return out;
+    auto ids = sx::convert_face_edges(*sketch->sketch(), *doc_, parse_id(face_id));
+    for (const auto& id : ids) out.push_back(to_gd(id));
+    return out;
+}
+
 PackedStringArray SxDocument::body_ids() const {
     PackedStringArray out;
     for (const auto& id : doc_->body_ids()) out.push_back(to_gd(id.str()));
@@ -737,14 +748,35 @@ bool SxDocument::graph_update_sketch(const String& fid, const Ref<SxSketch>& ske
 
 String SxDocument::graph_add_extrude(const String& sketch_fid, double distance,
                                      bool symmetric, const String& op,
-                                     const String& target_fid) {
+                                     const String& target_fid, const String& end,
+                                     const String& upto_face) {
     sx::EntityId fid;
     bool ok = apply_graph_edit("extrude", [&] {
         sx::Feature f;
         f.type = sx::FeatureType::Extrude;
+        std::string end_s = to_std(end);
+        if (end_s.empty()) end_s = "blind";
         f.params = {{"sketch", to_std(sketch_fid)}, {"distance", distance},
-                    {"symmetric", symmetric}, {"op", to_std(op)}};
+                    {"symmetric", symmetric}, {"op", to_std(op)},
+                    {"end", end_s}};
         if (!target_fid.is_empty()) f.params["target"] = to_std(target_fid);
+        if (!upto_face.is_empty()) f.params["upto_face"] = to_std(upto_face);
+        fid = doc_->graph().add(std::move(f));
+        return true;
+    });
+    return ok ? to_gd(fid.str()) : String();
+}
+
+String SxDocument::graph_add_rib(const String& sketch_fid, const String& target_fid,
+                                 double thickness, double height) {
+    sx::EntityId fid;
+    bool ok = apply_graph_edit("rib", [&] {
+        sx::Feature f;
+        f.type = sx::FeatureType::Rib;
+        f.params = {{"sketch", to_std(sketch_fid)},
+                    {"target", to_std(target_fid)},
+                    {"thickness", thickness},
+                    {"height", height}};
         fid = doc_->graph().add(std::move(f));
         return true;
     });
@@ -1201,6 +1233,7 @@ String SxDocument::add_instance(const String& source_body, const Vector3& transl
 
 Array SxDocument::instance_list() const {
     Array out;
+    const auto& expl = doc_->explode();
     for (const auto& inst : doc_->instances()) {
         Dictionary d;
         d["id"] = to_gd(inst.id.str());
@@ -1217,6 +1250,16 @@ Array SxDocument::instance_list() const {
         d["rotation_angle_deg"] = angle_deg;
         d["fixed"] = inst.fixed;
         d["source_path"] = to_gd(inst.source_path);
+        Vector3 eoff(0, 0, 0);
+        if (expl.active) {
+            auto it = expl.offsets.find(inst.id);
+            if (it != expl.offsets.end()) {
+                eoff = Vector3(static_cast<float>(it->second[0]),
+                               static_cast<float>(it->second[1]),
+                               static_cast<float>(it->second[2]));
+            }
+        }
+        d["explode_offset"] = eoff;
         out.push_back(d);
     }
     return out;
@@ -1289,6 +1332,52 @@ bool SxDocument::remove_mate(const String& id) {
 
 bool SxDocument::solve_mates() { return sx::solve_mates(*doc_); }
 
+Array SxDocument::check_interferences() const {
+    Array out;
+    for (const auto& h : sx::measure::check_interferences(*doc_)) {
+        Dictionary d;
+        d["a_kind"] = to_gd(h.a_kind);
+        d["a"] = to_gd(h.a.str());
+        d["b_kind"] = to_gd(h.b_kind);
+        d["b"] = to_gd(h.b.str());
+        d["volume"] = h.volume;
+        out.push_back(d);
+    }
+    return out;
+}
+
+Array SxDocument::list_connectors() const {
+    Array out;
+    for (const auto& c : sx::implicit_connectors(*doc_)) {
+        Dictionary d;
+        d["face"] = to_gd(c.face.str());
+        d["instance"] = c.instance.is_null() ? String() : to_gd(c.instance.str());
+        d["body"] = to_gd(c.body.str());
+        d["kind"] = c.kind == sx::ConnectorKind::Cylindrical ? String("cylindrical")
+                                                            : String("planar");
+        d["origin"] = Vector3(c.origin.X(), c.origin.Y(), c.origin.Z());
+        d["z_axis"] = Vector3(c.z_axis.X(), c.z_axis.Y(), c.z_axis.Z());
+        d["radius"] = c.radius;
+        out.push_back(d);
+    }
+    return out;
+}
+
+String SxDocument::try_connector_snap(const String& instance_id, double max_dist) {
+    auto iid = parse_id(instance_id);
+    if (iid.is_null()) return {};
+    auto snap = sx::find_connector_snap(*doc_, iid, max_dist);
+    if (!snap) return {};
+    auto mid = sx::apply_connector_snap(*doc_, *snap);
+    return mid.is_null() ? String() : to_gd(mid.str());
+}
+
+bool SxDocument::auto_explode(double spacing) { return doc_->auto_explode(spacing); }
+
+bool SxDocument::set_explode_active(bool active) { return doc_->set_explode_active(active); }
+
+bool SxDocument::explode_active() const { return doc_->explode().active; }
+
 bool SxDocument::export_drawing_svg(const String& path, double scale) {
     return sx::drawings::export_three_view_svg(*doc_, to_std(path), scale);
 }
@@ -1334,6 +1423,8 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("redo"), &SxDocument::redo);
     ClassDB::bind_method(D_METHOD("can_undo"), &SxDocument::can_undo);
     ClassDB::bind_method(D_METHOD("can_redo"), &SxDocument::can_redo);
+    ClassDB::bind_method(D_METHOD("convert_face_edges", "sketch", "face_id"),
+                         &SxDocument::convert_face_edges);
     ClassDB::bind_method(D_METHOD("body_ids"), &SxDocument::body_ids);
     ClassDB::bind_method(D_METHOD("body_name", "body_id"), &SxDocument::body_name);
     ClassDB::bind_method(D_METHOD("rename_body", "body_id", "name"), &SxDocument::rename_body);
@@ -1368,7 +1459,12 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("graph_get_sketch", "fid"), &SxDocument::graph_get_sketch);
     ClassDB::bind_method(D_METHOD("graph_update_sketch", "fid", "sketch"),
                          &SxDocument::graph_update_sketch);
-    ClassDB::bind_method(D_METHOD("graph_add_extrude", "sketch_fid", "distance", "symmetric", "op", "target_fid"), &SxDocument::graph_add_extrude);
+    ClassDB::bind_method(D_METHOD("graph_add_extrude", "sketch_fid", "distance", "symmetric", "op",
+                                  "target_fid", "end", "upto_face"),
+                         &SxDocument::graph_add_extrude, DEFVAL(String("blind")), DEFVAL(String()));
+    ClassDB::bind_method(D_METHOD("graph_add_rib", "sketch_fid", "target_fid", "thickness",
+                                  "height"),
+                         &SxDocument::graph_add_rib);
     ClassDB::bind_method(D_METHOD("graph_add_revolve", "sketch_fid", "axis_point", "axis_dir", "angle", "op", "target_fid"), &SxDocument::graph_add_revolve);
     ClassDB::bind_method(D_METHOD("graph_add_sweep", "sketch_fid", "path"), &SxDocument::graph_add_sweep);
     ClassDB::bind_method(D_METHOD("graph_add_sweep_along_path", "sketch_fid", "path_fid"),
@@ -1426,6 +1522,15 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("mate_list"), &SxDocument::mate_list);
     ClassDB::bind_method(D_METHOD("remove_mate", "id"), &SxDocument::remove_mate);
     ClassDB::bind_method(D_METHOD("solve_mates"), &SxDocument::solve_mates);
+    ClassDB::bind_method(D_METHOD("check_interferences"), &SxDocument::check_interferences);
+    ClassDB::bind_method(D_METHOD("list_connectors"), &SxDocument::list_connectors);
+    ClassDB::bind_method(D_METHOD("try_connector_snap", "instance_id", "max_dist"),
+                         &SxDocument::try_connector_snap, DEFVAL(8.0));
+    ClassDB::bind_method(D_METHOD("auto_explode", "spacing"), &SxDocument::auto_explode,
+                         DEFVAL(30.0));
+    ClassDB::bind_method(D_METHOD("set_explode_active", "active"),
+                         &SxDocument::set_explode_active);
+    ClassDB::bind_method(D_METHOD("explode_active"), &SxDocument::explode_active);
     ClassDB::bind_method(D_METHOD("export_drawing_svg", "path", "scale"),
                          &SxDocument::export_drawing_svg);
 }

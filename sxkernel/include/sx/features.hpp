@@ -29,7 +29,9 @@ enum class FeatureType {
                 //          origin: [x,y,z], optional z_dir/x_dir: [x,y,z]}
     Sketch,     // embedded sketch; no geometry output
     Extrude,    // params: {sketch: <feature uuid>, distance, symmetric,
-                //          op: "new|fuse|cut", target: <feature uuid, for fuse/cut>}
+                //          op: "new|fuse|cut", target: <feature uuid, for fuse/cut>,
+                //          end: "blind|through_all|to_face" (default blind),
+                //          upto_face: <face uuid> (required when end=to_face)}
     Revolve,    // params: {sketch, axis_point: [u,v], axis_dir: [u,v], angle, op, target}
     Boolean,    // params: {op: "fuse|cut|common", target: <fid>, tool: <fid>}
     Fillet,     // params: {target: <fid>, radius, edges: [1-based map indices]}
@@ -61,6 +63,8 @@ enum class FeatureType {
                 // BASE feature: file is re-read on regenerate (document dep).
     ImportStl,  // params: {path: string, scale: double (default 1.0)}
                 // BASE feature: mesh import as a single body; re-read on regen.
+    Rib,        // params: {sketch: <fid>, target: <fid>, thickness, height}
+                // Open-profile (first line) → thin prism fused into target.
 };
 
 const char* to_string(FeatureType t);

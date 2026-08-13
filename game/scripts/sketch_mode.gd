@@ -57,6 +57,9 @@ var _spline_pts: Array[Vector2] = []
 ## Feature id of the body being sketched on ("" when on the ground plane);
 ## used as the boolean target for cut/fuse finishes.
 var target_fid := ""
+## Host face/body when the sketch was started on a planar face (Convert Entities).
+var host_face_id := ""
+var host_body_id := ""
 ## Feature id of the sketch being edited ("" when creating a new sketch).
 var editing_fid := ""
 ## Optional OrbitCamera for enter/leave sketch view locking.
@@ -301,6 +304,7 @@ func to_model(p: Vector2) -> Vector3:
 ## or world-X when the normal is parallel to Z). Extrude follows this normal.
 func begin(origin: Vector3, normal: Vector3, x_hint: Vector3 = Vector3.ZERO) -> void:
 	editing_fid = ""
+	# Host face cleared unless _start_sketch_on_face set it just before begin().
 	_setup_plane(origin, normal, x_hint)
 	sketch = SxSketch.new()
 	sketch.set_plane(origin, plane_x, plane_y)
@@ -452,21 +456,40 @@ func exit_sketch() -> String:
 ## the feature graph: adds a sketch feature plus an extrude feature so both
 ## appear on the timeline and stay editable. op: "new" | "cut" | "fuse";
 ## cut/fuse require a target body (the one sketched on) and cut extrudes
-## into the body (negated distance).
-func finish_extrude(distance: float, op: String = "new") -> void:
+## into the body (negated distance). end: "blind" | "through_all" | "to_face".
+func finish_extrude(distance: float, op: String = "new", end: String = "blind",
+		upto_face: String = "") -> void:
 	if not active:
 		return
 	if op != "new" and target_fid == "":
 		status.emit("No target body — sketch on a face to cut/fuse")
 		return
-	if op == "cut":
+	if end == "to_face" and upto_face == "":
+		status.emit("To Face: select the stopping face first")
+		return
+	# Blind cut flips into the solid; Through All / To Face compute their own span.
+	if op == "cut" and end == "blind":
 		distance = -absf(distance)
 	var sk_fid := _ensure_sketch_feature()
 	if sk_fid == "":
 		return
 	var ex_fid: String = view.doc.graph_add_extrude(
-		sk_fid, distance, false, op, target_fid if op != "new" else "")
+		sk_fid, distance, false, op, target_fid if op != "new" else "", end, upto_face)
 	_finish_feature(sk_fid, ex_fid, op, "Extrude failed — is the profile closed?")
+
+
+## Finish the sketch as a Rib (open line → thin prism fused into host body).
+func finish_rib(thickness: float = 2.0, height: float = 10.0) -> void:
+	if not active:
+		return
+	if target_fid == "":
+		status.emit("Rib needs a host body — sketch on a face")
+		return
+	var sk_fid := _ensure_sketch_feature()
+	if sk_fid == "":
+		return
+	var rib_fid: String = view.doc.graph_add_rib(sk_fid, target_fid, thickness, height)
+	_finish_feature(sk_fid, rib_fid, "fuse", "Rib failed — need an open line on a face")
 
 
 ## Finish the sketch and revolve. The axis is the selected line when one is
@@ -1356,6 +1379,23 @@ func convert_pierce_points() -> int:
 	return n
 
 
+## SolidWorks Convert Entities: project the host face's outer edges into the sketch.
+func convert_host_face_edges() -> int:
+	if sketch == null or view == null or view.doc == null:
+		return 0
+	if host_face_id == "":
+		status.emit("Convert Entities: sketch on a face first")
+		return 0
+	var ids: PackedStringArray = view.doc.convert_face_edges(sketch, host_face_id)
+	if ids.is_empty():
+		status.emit("Convert Entities: no edges projected")
+		return 0
+	run_solve()
+	_redraw()
+	status.emit("Converted %d edges" % ids.size())
+	return ids.size()
+
+
 ## Sketch chamfer: trim two lines and add a connecting segment.
 func chamfer_selected(distance: float) -> String:
 	if selected.size() != 2:
@@ -1649,7 +1689,9 @@ func click(pos2: Vector2) -> void:
 		Tool.SMART_DIM:
 			_click_smart_dim(pos2)
 		Tool.CONVERT:
-			convert_pierce_points()
+			# Prefer SW Convert Entities (host face edges); fall back to pierce points.
+			if convert_host_face_edges() == 0:
+				convert_pierce_points()
 		Tool.MIRROR:
 			# Selection must already include axis + geometry; click confirms.
 			mirror_selected()

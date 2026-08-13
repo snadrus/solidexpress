@@ -1603,6 +1603,18 @@ func _sketch_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
+			# To Face: absorb the next click as a 3D face pick for the upto face.
+			if sketch_chrome != null and sketch_chrome.awaiting_upto_pick:
+				var ray_u := _model_ray(mb.position)
+				var hit_u: Dictionary = view.pick_info(ray_u[0], ray_u[1])
+				if not hit_u.is_empty() and str(hit_u.get("face", "")) != "":
+					view.select_entity(str(hit_u["body"]), str(hit_u["face"]))
+					sketch_chrome.set_upto_face(str(hit_u["face"]))
+					status.emit("Upto face set")
+				else:
+					status.emit("Upto face: click a planar face")
+				accept_event()
+				return
 			var ray := _model_ray(mb.position)
 			var p2 = sketch_mode.ray_to_sketch(ray[0], ray[1])
 			if p2 != null:
@@ -1790,8 +1802,10 @@ func _on_press(pos: Vector2) -> void:
 
 	# Component instances aren't in the kernel pick — prefer whichever is
 	# closer along the ray so an instance in front of a body is grabbable.
+	# While a mate is armed, skip instance grab so face picks hit source bodies
+	# (mate refs are source-body faces under the instance transform).
 	var ihit: Dictionary = view.pick_instance(ray[0], ray[1])
-	if not ihit.is_empty() \
+	if not view.mate_pick_mode and not ihit.is_empty() \
 			and (hit.is_empty() or float(ihit["distance"]) < float(hit["distance"])):
 		var iid: String = ihit["id"]
 		if view.selected_instance != iid:
@@ -2294,11 +2308,19 @@ func _on_release(pos: Vector2) -> void:
 				var rot := _instance_rotation(_drag_instance_id)
 				if view.doc.set_instance_transform(_drag_instance_id,
 						inode.transform.origin, rot[0], rot[1]):
-					# Peer feel: drop the instance, then mates pull it home.
+					# Onshape/Fusion magnetic snap: if a connector is nearby,
+					# create a mate; otherwise re-solve existing mates.
+					var snapped: String = ""
+					if view.doc.has_method("try_connector_snap"):
+						snapped = view.doc.try_connector_snap(_drag_instance_id, 12.0)
 					var had_mates: bool = view.doc.mate_list().size() > 0
-					var solved: bool = view.doc.solve_mates() if had_mates else true
+					var solved: bool = true
+					if snapped == "" and had_mates:
+						solved = view.doc.solve_mates()
 					view.refresh()
-					if had_mates:
+					if snapped != "":
+						status.emit("Instance snapped to mate connector")
+					elif had_mates:
 						status.emit("Instance moved — mates re-solved" if solved
 								else "Instance moved — mate solve FAILED")
 					else:

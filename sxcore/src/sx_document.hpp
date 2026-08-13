@@ -106,6 +106,11 @@ public:
     bool can_undo() const;
     bool can_redo() const;
 
+    // SolidWorks Convert Entities: project a face's outer-wire edges onto the
+    // sketch plane, adding lines/circles/arcs. Returns new sketch entity ids.
+    godot::PackedStringArray convert_face_edges(const godot::Ref<class SxSketch>& sketch,
+                                                const godot::String& face_id);
+
     // --- queries ---
     godot::PackedStringArray body_ids() const;
     godot::String body_name(const godot::String& body_id) const;
@@ -159,9 +164,16 @@ public:
     // Replace a Sketch feature's geometry and regenerate dependents (undoable).
     bool graph_update_sketch(const godot::String& fid, const godot::Ref<class SxSketch>& sketch);
     // op: "new" | "fuse" | "cut"; target_fid required for fuse/cut.
+    // end: "blind" | "through_all" | "to_face"; upto_face required for to_face.
     godot::String graph_add_extrude(const godot::String& sketch_fid, double distance,
                                     bool symmetric, const godot::String& op,
-                                    const godot::String& target_fid);
+                                    const godot::String& target_fid,
+                                    const godot::String& end = "blind",
+                                    const godot::String& upto_face = "");
+    // Open-profile rib (first sketch line) fused into target body.
+    godot::String graph_add_rib(const godot::String& sketch_fid,
+                                const godot::String& target_fid, double thickness,
+                                double height);
     // Axis in sketch 2D coordinates (point + direction on the sketch plane).
     godot::String graph_add_revolve(const godot::String& sketch_fid,
                                     const godot::Vector2& axis_point,
@@ -256,7 +268,9 @@ public:
     bool set_instance_fixed(const godot::String& id, bool fixed);
 
     // --- assembly mates (closed-form placement; solve moves instance_b) ---
-    // type: "fixed" | "plane_coincident" | "plane_parallel" | "concentric".
+    // type: "fixed" | "plane_coincident" | "plane_parallel" | "distance" |
+    //       "angle" | "perpendicular" | "tangent" | "concentric".
+    // For distance, offset is mm gap; for angle, offset is degrees.
     // instance_a may be "" for a grounded body reference. Returns the mate id or "".
     godot::String add_mate(const godot::String& type, const godot::String& instance_a,
                            const godot::String& face_a, const godot::String& instance_b,
@@ -267,6 +281,21 @@ public:
     bool remove_mate(const godot::String& id);
     // Applies all mates in order; true when every mate solved.
     bool solve_mates();
+
+    // Static interference: Array of {a_kind, a, b_kind, b, volume}.
+    godot::Array check_interferences() const;
+
+    // Implicit mate connectors (Onshape/Fusion): Array of
+    // {face, instance, body, kind, origin:Vector3, z_axis:Vector3, radius}.
+    godot::Array list_connectors() const;
+    // Magnetic snap: if the instance is near a compatible connector, add a
+    // mate + solve. Returns mate id or "" if nothing snapped. max_dist in mm.
+    godot::String try_connector_snap(const godot::String& instance_id, double max_dist = 8.0);
+
+    // Exploded view: auto offsets along +Z; toggle active for display.
+    bool auto_explode(double spacing = 30.0);
+    bool set_explode_active(bool active);
+    bool explode_active() const;
 
     // Three-view (front/top/right) HLR drawing sheet as SVG. False when the
     // document has no bodies or the file cannot be written.

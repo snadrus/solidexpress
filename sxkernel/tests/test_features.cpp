@@ -3,6 +3,11 @@
 
 #include <cstdio>
 
+#include <BRepAdaptor_Surface.hxx>
+#include <TopoDS.hxx>
+#include <TopoDS_Face.hxx>
+#include <gp_Dir.hxx>
+
 #include "sx/command.hpp"
 #include "sx/commands_graph.hpp"
 #include "sx/document.hpp"
@@ -301,4 +306,82 @@ TEST_CASE("graph snapshot command: undo/redo restores timeline and bodies", "[fe
     REQUIRE(stack.redo(doc));
     REQUIRE(doc.body(body_id) != nullptr);
     REQUIRE(shape::volume(doc.body(body_id)->shape) == Approx(2000.0));
+}
+
+TEST_CASE("feature graph: through_all cut punches a plate", "[features]") {
+    Document doc;
+    FeatureGraph graph;
+
+    Feature base;
+    base.type = FeatureType::Primitive;
+    base.params = {{"kind", "box"}, {"a", 40.0}, {"b", 40.0}, {"c", 20.0}};
+    auto base_fid = graph.add(std::move(base));
+
+    Feature skf;
+    skf.type = FeatureType::Sketch;
+    skf.sketch = std::make_shared<Sketch>("Hole");
+    skf.sketch->add_circle(20, 20, 5);
+    auto sketch_fid = graph.add(std::move(skf));
+
+    Feature cut;
+    cut.type = FeatureType::Extrude;
+    cut.params = {{"sketch", sketch_fid.str()}, {"distance", 1.0},
+                  {"op", "cut"}, {"target", base_fid.str()},
+                  {"end", "through_all"}};
+    graph.add(std::move(cut));
+
+    std::string err;
+    REQUIRE(graph.regenerate(doc, &err));
+    EntityId body_id = graph.feature(base_fid)->output_body;
+    double expected = 40.0 * 40.0 * 20.0 - M_PI * 25.0 * 20.0;
+    REQUIRE(shape::volume(doc.body(body_id)->shape) == Approx(expected).margin(1.0));
+}
+
+TEST_CASE("feature graph: to_face extrude stops at planar face", "[features]") {
+    Document doc;
+    FeatureGraph graph;
+
+    Feature base;
+    base.type = FeatureType::Primitive;
+    base.params = {{"kind", "box"}, {"a", 40.0}, {"b", 40.0}, {"c", 30.0}};
+    auto base_fid = graph.add(std::move(base));
+    std::string err;
+    REQUIRE(graph.regenerate(doc, &err));
+    EntityId base_body = graph.feature(base_fid)->output_body;
+    REQUIRE(doc.body(base_body) != nullptr);
+
+    // Top face of the box (z = 30).
+    EntityId top_face;
+    for (const auto& fid : doc.body(base_body)->subshape_ids.at(EntityKind::Face)) {
+        TopoDS_Shape sh = doc.resolve(fid);
+        if (sh.IsNull() || sh.ShapeType() != TopAbs_FACE) continue;
+        BRepAdaptor_Surface surf(TopoDS::Face(sh));
+        if (surf.GetType() != GeomAbs_Plane) continue;
+        gp_Dir n = surf.Plane().Axis().Direction();
+        if (sh.Orientation() == TopAbs_REVERSED) n.Reverse();
+        if (n.IsEqual(gp_Dir(0, 0, 1), 1e-6)) {
+            top_face = fid;
+            break;
+        }
+    }
+    REQUIRE(!top_face.is_null());
+
+    Feature skf;
+    skf.type = FeatureType::Sketch;
+    skf.sketch = std::make_shared<Sketch>("Boss");
+    skf.sketch->add_circle(10, 10, 4);
+    auto sketch_fid = graph.add(std::move(skf));
+
+    Feature boss;
+    boss.type = FeatureType::Extrude;
+    boss.params = {{"sketch", sketch_fid.str()}, {"distance", 999.0},
+                   {"op", "new"}, {"end", "to_face"},
+                   {"upto_face", top_face.str()}};
+    auto boss_fid = graph.add(std::move(boss));
+
+    REQUIRE(graph.regenerate(doc, &err));
+    EntityId out = graph.feature(boss_fid)->output_body;
+    REQUIRE(doc.body(out) != nullptr);
+    // Cylinder r=4 height ≈ 30.
+    REQUIRE(shape::volume(doc.body(out)->shape) == Approx(M_PI * 16.0 * 30.0).margin(2.0));
 }

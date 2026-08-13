@@ -32,6 +32,10 @@ enum class MateType {
     Fixed,            // locks instance_b where it is (no-op on apply)
     PlaneCoincident,  // face planes opposed, signed gap = offset
     PlaneParallel,    // face normals parallel; translation left free
+    Distance,         // SW Distance: planes parallel + signed gap = offset (mm)
+    Angle,            // SW Angle: rotate so face normals form `offset` degrees
+    Perpendicular,    // SW Perpendicular: plane normals orthogonal (Angle=90)
+    Tangent,          // SW Tangent: plane–cylinder or cylinder–cylinder contact
     Concentric,       // cylindrical face axes colinear (axial slide free)
 };
 
@@ -45,8 +49,11 @@ struct Mate {
     EntityId face_a;
     EntityId instance_b;  // the moved side; must be an instance
     EntityId face_b;
-    double offset = 0.0;  // PlaneCoincident: signed gap along A's normal
-    bool flip = false;    // PlaneCoincident: align normals instead of opposing
+    // PlaneCoincident / Distance: signed gap (mm) along A's normal.
+    // Angle: target angle between face normals (degrees). Unused by Perpendicular.
+    double offset = 0.0;
+    bool flip = false;    // Coincident/Distance: align normals; Angle: supplement;
+                          // Tangent: opposite contact side / internal
     std::string name;
 };
 
@@ -61,14 +68,21 @@ struct MateAxis {
     gp_Pnt point;
     gp_Dir dir;
 };
+struct MateCylinder {
+    gp_Pnt point;
+    gp_Dir dir;
+    double radius = 0.0;
+};
 
-// World-space plane / cylinder axis of a mate reference (face under the
+// World-space plane / cylinder of a mate reference (face under the
 // instance placement, or as-is when instance id is null). nullopt when the
 // face is missing or not the right surface type.
 std::optional<MatePlane> mate_plane(const Document& doc, const EntityId& instance,
                                     const EntityId& face);
 std::optional<MateAxis> mate_axis(const Document& doc, const EntityId& instance,
                                   const EntityId& face);
+std::optional<MateCylinder> mate_cylinder(const Document& doc, const EntityId& instance,
+                                          const EntityId& face);
 
 // Moves instance_b so the mate is satisfied (A stays put). Returns false when
 // references are invalid or geometry is of the wrong type.

@@ -61,5 +61,82 @@
     "script": "res://tests/films/film_sketch_edit_in_out.gd",
     "enabled": true,
     "quit_after": 1300
+  },
+  {
+    "id": "mate_distance",
+    "title": "Distance mate — 10 mm gap (SW standard mate)",
+    "script": "res://tests/films/film_mate_distance.gd",
+    "enabled": true,
+    "quit_after": 1400
+  },
+  {
+    "id": "mate_angle",
+    "title": "Angle mate — 45° between faces",
+    "script": "res://tests/films/film_mate_angle.gd",
+    "enabled": true,
+    "quit_after": 1400
+  },
+  {
+    "id": "mate_perpendicular",
+    "title": "Perpendicular mate — faces at 90°",
+    "script": "res://tests/films/film_mate_perpendicular.gd",
+    "enabled": true,
+    "quit_after": 1400
+  },
+  {
+    "id": "mate_tangent",
+    "title": "Tangent mate — cylinder on a face",
+    "script": "res://tests/films/film_mate_tangent.gd",
+    "enabled": true,
+    "quit_after": 1500
+  },
+  {
+    "id": "extrude_through_all",
+    "title": "Extrude Cut — Through All",
+    "script": "res://tests/films/film_extrude_through_all.gd",
+    "enabled": true,
+    "quit_after": 1600
+  },
+  {
+    "id": "extrude_to_face",
+    "title": "Extrude To Face — boss stops at a face",
+    "script": "res://tests/films/film_extrude_to_face.gd",
+    "enabled": true,
+    "quit_after": 1600
+  },
+  {
+    "id": "convert_entities",
+    "title": "Convert Entities — face edges → sketch",
+    "script": "res://tests/films/film_convert_entities.gd",
+    "enabled": true,
+    "quit_after": 1600
+  },
+  {
+    "id": "interference_check",
+    "title": "Check Interference — overlapping instances",
+    "script": "res://tests/films/film_interference_check.gd",
+    "enabled": true,
+    "quit_after": 1400
+  },
+  {
+    "id": "mate_connector_snap",
+    "title": "Mate connector snap — instance → ground",
+    "script": "res://tests/films/film_mate_connector_snap.gd",
+    "enabled": true,
+    "quit_after": 1500
+  },
+  {
+    "id": "explode_assembly",
+    "title": "Exploded view — offset instances along +Z",
+    "script": "res://tests/films/film_explode_assembly.gd",
+    "enabled": true,
+    "quit_after": 1400
+  },
+  {
+    "id": "rib_stiffener",
+    "title": "Rib stiffener — open line into the solid",
+    "script": "res://tests/films/film_rib_stiffener.gd",
+    "enabled": true,
+    "quit_after": 1600
   }
 ]

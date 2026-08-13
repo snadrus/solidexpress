@@ -146,6 +146,20 @@ public:
     // Used by the .sxp loader to restore persisted mates exactly.
     void restore_mate(Mate&& m);
 
+    // --- exploded view (per-instance display offsets; mates keep solved pose) ---
+    struct ExplodeView {
+        bool active = false;
+        double spacing = 30.0;
+        // instance uuid → world-space offset applied only while active
+        std::unordered_map<EntityId, std::array<double, 3>> offsets;
+    };
+    // Builds +Z offsets by instance order (spacing mm) and activates.
+    bool auto_explode(double spacing = 30.0);
+    bool set_explode_active(bool active);
+    const ExplodeView& explode() const { return explode_; }
+    // Used by the .sxp loader.
+    void restore_explode(ExplodeView&& e);
+
     // --- configurations (named snapshots of the variable table) ---
     // Saving captures the graph's current variable expressions under `name`
     // (overwriting an existing snapshot of that name). Activating replaces
@@ -180,6 +194,7 @@ private:
     std::vector<Instance> instances_;
     std::unordered_map<EntityId, size_t> instance_index_;
     std::vector<Mate> mates_;
+    ExplodeView explode_;
     std::vector<Configuration> configurations_;
     std::string active_configuration_;
     std::unique_ptr<CardRegistry> cards_;
