@@ -1603,6 +1603,18 @@ func _sketch_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton:
 		var mb := event as InputEventMouseButton
 		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
+			# To Face: absorb the next click as a 3D face pick for the upto face.
+			if sketch_chrome != null and sketch_chrome.awaiting_upto_pick:
+				var ray_u := _model_ray(mb.position)
+				var hit_u: Dictionary = view.pick_info(ray_u[0], ray_u[1])
+				if not hit_u.is_empty() and str(hit_u.get("face", "")) != "":
+					view.select_entity(str(hit_u["body"]), str(hit_u["face"]))
+					sketch_chrome.set_upto_face(str(hit_u["face"]))
+					status.emit("Upto face set")
+				else:
+					status.emit("Upto face: click a planar face")
+				accept_event()
+				return
 			var ray := _model_ray(mb.position)
 			var p2 = sketch_mode.ray_to_sketch(ray[0], ray[1])
 			if p2 != null:

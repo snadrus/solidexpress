@@ -1114,7 +1114,10 @@ func _on_sketch_finish(op: String, distance: float) -> void:
 		end = sketch_chrome.extrude_end()
 	var upto := ""
 	if end == "to_face":
-		upto = view.selected_face
+		if sketch_chrome != null and str(sketch_chrome.upto_face_id) != "":
+			upto = sketch_chrome.upto_face_id
+		else:
+			upto = view.selected_face
 	sketch_mode.finish_extrude(distance, op, end, upto)
 
 

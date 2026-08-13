@@ -225,6 +225,12 @@ static func enter_sketch(ctx: FilmContext) -> void:
 	if sm != null and sm.active:
 		await wait_frames(ctx.tree, 2)
 		return
+	# Selected body hides the primitives palette (Modify rail) — deselect first.
+	var palette := ctx.main.find_child("Palette", true, false) as CanvasItem
+	if palette == null or not palette.is_visible_in_tree():
+		await viewport_click(ctx, viewport_empty_click_pos(ctx),
+				FilmUICues.alert("Click", "Deselect so Sketch is on the palette"))
+		await wait_frames(ctx.tree, 2)
 	var b := find_palette_sketch_button(ctx.main)
 	if not await click_control(ctx, b, FilmUICues.toolbar_sketch()):
 		return
@@ -422,7 +428,7 @@ static func draw_circle(ctx: FilmContext, sm: SketchMode, center: Vector2, rim: 
 
 
 static func apply_extrude(ctx: FilmContext, depth: float, op: String = "new",
-		end: String = "blind") -> void:
+		end: String = "blind", upto_body: String = "", upto_face: String = "") -> void:
 	var chrome: SketchContextChrome = ctx.main.sketch_chrome
 	if chrome == null or not chrome.visible:
 		_fail("sketch chrome not visible for Extrude")
@@ -439,6 +445,39 @@ static func apply_extrude(ctx: FilmContext, depth: float, op: String = "new",
 		elif op == "fuse":
 			op_idx = 2
 		chrome._finish_op.select(op_idx)
+	if end == "to_face":
+		if upto_body == "" or upto_face == "":
+			_fail("to_face extrude needs upto_body/upto_face for the pick")
+			return
+		var upto_btn := find_button(chrome, "Upto face")
+		if upto_btn == null:
+			upto_btn = find_button(chrome, "Upto ✓")
+		if upto_btn == null:
+			upto_btn = find_button(chrome, "Click face…")
+		if not await click_control(ctx, upto_btn, FilmUICues.alert("Upto", "Arm upto-face pick")):
+			return
+		# Single 3D click while awaiting_upto_pick (sketch input absorbs it).
+		var pt := face_pick_point(ctx.view, upto_body, upto_face)
+		if pt == Vector3.INF:
+			_fail("upto face pick point missing")
+			return
+		var n := ctx.view.face_normal(upto_body, upto_face)
+		var cam = ctx.main.camera
+		if cam != null and n.length_squared() > 1e-12:
+			var nn := n.normalized()
+			cam.pivot = pt + nn * 0.5
+			cam.yaw = atan2(nn.x, -nn.y)
+			cam.pitch = asin(clampf(nn.z, -0.999, 0.999))
+			cam.distance = maxf(cam.distance, 100.0)
+			if cam.has_method("_update_transform"):
+				cam._update_transform()
+			await wait_frames(ctx.tree, 2)
+		await viewport_click(ctx, model_to_screen(ctx, pt),
+				FilmUICues.alert("Click", "Pick upto face"))
+		await wait_frames(ctx.tree, 3)
+		if chrome.upto_face_id == "":
+			_fail("upto face was not set after pick")
+			return
 	var ex := chrome.extrude_button() if chrome.has_method("extrude_button") else null
 	var cue := FilmUICues.extrude(depth)
 	if end != "blind":
@@ -512,12 +551,14 @@ static func place_primitive(ctx: FilmContext, kind: String) -> void:
 		center = ix._screen_center()
 	else:
 		center = ctx.tree.root.get_viewport().get_visible_rect().size * 0.5
-	# Offset subsequent places onto empty ground — a center click hits the
-	# first body and stacks (place-on-face). Keep drops well separated.
+	# First place at view center; later places offset onto empty ground so a
+	# center click does not stack on-face onto the previous solid.
 	var n_bodies := 0
 	if ctx.view != null and ctx.view.doc != null:
 		n_bodies = ctx.view.doc.body_ids().size()
-	var drop := center + Vector2(160.0 * float(n_bodies + 1), -40.0 * float(n_bodies))
+	var drop := center
+	if n_bodies > 0:
+		drop = center + Vector2(160.0 * float(n_bodies), -40.0 * float(n_bodies))
 	await viewport_click(ctx, drop, FilmUICues.place_click(kind))
 	if ctx.chrome != null:
 		ctx.chrome.clear_keys()

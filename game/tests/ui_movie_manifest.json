@@ -98,6 +98,13 @@
     "quit_after": 1600
   },
   {
+    "id": "extrude_to_face",
+    "title": "Extrude To Face — boss stops at a face",
+    "script": "res://tests/films/film_extrude_to_face.gd",
+    "enabled": true,
+    "quit_after": 1600
+  },
+  {
     "id": "convert_entities",
     "title": "Convert Entities — face edges → sketch",
     "script": "res://tests/films/film_convert_entities.gd",

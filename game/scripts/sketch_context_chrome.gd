@@ -19,11 +19,15 @@ var _finish_bar: HBoxContainer
 var _extrude_spin: SpinBox
 var _end_op: OptionButton
 var _finish_op: OptionButton
+var _upto_btn: Button
 var _dim_spin: SpinBox
 var _active_kind := ""
 ## True while the dim LineEdit has focus — mouse must not overwrite typed digits.
 var _dim_editing := false
 var _dim_syncing := false
+## To Face: face UUID chosen via "Upto face" pick while sketching.
+var upto_face_id := ""
+var awaiting_upto_pick := false
 
 
 func _ready() -> void:
@@ -88,6 +92,14 @@ func _build_finish_bar() -> void:
 	_end_op.custom_minimum_size = Vector2(100, CHIP_H)
 	_end_op.item_selected.connect(_on_end_changed)
 	_finish_bar.add_child(_end_op)
+	_upto_btn = Button.new()
+	_upto_btn.text = "Upto face"
+	_upto_btn.name = "UptoFace"
+	_upto_btn.tooltip_text = "Pick the planar face that stops a To Face extrude"
+	_upto_btn.custom_minimum_size = Vector2(80, CHIP_H)
+	_upto_btn.visible = false
+	_upto_btn.pressed.connect(_arm_upto_pick)
+	_finish_bar.add_child(_upto_btn)
 	_finish_op = OptionButton.new()
 	for n in ["New", "Cut", "Fuse"]:
 		_finish_op.add_item(n)
@@ -211,6 +223,24 @@ func _on_end_changed(idx: int) -> void:
 	# Through All / To Face ignore the blind distance spin visually.
 	if _extrude_spin:
 		_extrude_spin.visible = idx == 0
+	if _upto_btn:
+		_upto_btn.visible = idx == 2
+	if idx != 2:
+		upto_face_id = ""
+		awaiting_upto_pick = false
+
+
+func _arm_upto_pick() -> void:
+	awaiting_upto_pick = true
+	upto_face_id = ""
+	_upto_btn.text = "Click face…"
+
+
+func set_upto_face(face_id: String) -> void:
+	upto_face_id = face_id
+	awaiting_upto_pick = false
+	if _upto_btn:
+		_upto_btn.text = "Upto ✓" if face_id != "" else "Upto face"
 
 
 func extrude_button() -> Button:
