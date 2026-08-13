@@ -256,7 +256,9 @@ public:
     bool set_instance_fixed(const godot::String& id, bool fixed);
 
     // --- assembly mates (closed-form placement; solve moves instance_b) ---
-    // type: "fixed" | "plane_coincident" | "plane_parallel" | "concentric".
+    // type: "fixed" | "plane_coincident" | "plane_parallel" | "distance" |
+    //       "angle" | "perpendicular" | "tangent" | "concentric".
+    // For distance, offset is mm gap; for angle, offset is degrees.
     // instance_a may be "" for a grounded body reference. Returns the mate id or "".
     godot::String add_mate(const godot::String& type, const godot::String& instance_a,
                            const godot::String& face_a, const godot::String& instance_b,

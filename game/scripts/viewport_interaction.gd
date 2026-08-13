@@ -1790,8 +1790,10 @@ func _on_press(pos: Vector2) -> void:
 
 	# Component instances aren't in the kernel pick — prefer whichever is
 	# closer along the ray so an instance in front of a body is grabbable.
+	# While a mate is armed, skip instance grab so face picks hit source bodies
+	# (mate refs are source-body faces under the instance transform).
 	var ihit: Dictionary = view.pick_instance(ray[0], ray[1])
-	if not ihit.is_empty() \
+	if not view.mate_pick_mode and not ihit.is_empty() \
 			and (hit.is_empty() or float(ihit["distance"]) < float(hit["distance"])):
 		var iid: String = ihit["id"]
 		if view.selected_instance != iid:

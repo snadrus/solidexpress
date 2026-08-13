@@ -171,7 +171,7 @@ func test_fix_float_restraint(main) -> void:
 
 
 func test_plane_parallel_mate_ui(main) -> void:
-	print("- plane_parallel available in mate type list (Video 7)")
+	print("- standard mates in type list (Videos 7/9–11)")
 	var view: DocumentView = main.view
 	var doc: SxDocument = view.doc
 	view.new_document()
@@ -184,10 +184,12 @@ func test_plane_parallel_mate_ui(main) -> void:
 	main.assembly_panel.refresh_lists()
 	var opt: OptionButton = main.assembly_panel._type_option
 	check(opt != null, "mate type OptionButton")
-	var parallel_idx := -1
+	var listed: Dictionary = {}
 	for i in opt.item_count:
-		if opt.get_item_text(i) == "plane_parallel":
-			parallel_idx = i
+		listed[opt.get_item_text(i)] = i
+	for need in ["plane_parallel", "distance", "angle", "perpendicular", "tangent"]:
+		check(listed.has(need), "%s in mate type list" % need)
+	var parallel_idx: int = listed.get("plane_parallel", -1)
 	check(parallel_idx >= 0, "plane_parallel in mate type list")
 	opt.select(parallel_idx)
 

@@ -54,13 +54,17 @@ func _ready() -> void:
 
 	_type_option = OptionButton.new()
 	_type_option.name = "MateType"
-	_type_option.tooltip_text = "Mate type: coincident, parallel, concentric, or fixed"
+	_type_option.tooltip_text = "Mate type (SolidWorks standard mates + fixed)"
 	_type_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	for t in ["plane_coincident", "plane_parallel", "concentric", "fixed"]:
+	for t in ["plane_coincident", "plane_parallel", "distance", "angle",
+			"perpendicular", "tangent", "concentric", "fixed"]:
 		_type_option.add_item(t)
+	_type_option.item_selected.connect(_on_mate_type_changed)
 	vbox.add_child(_type_option)
 
 	_offset_spin = _labeled_spin(vbox, "Offset", -1000.0, 1000.0, 0.5, 0.0)
+	_offset_spin.name = "MateOffset"
+	_on_mate_type_changed(_type_option.selected)
 	_op_button(vbox, "Add mate", _arm_mate, "mate",
 		"Add a mate: click a ground face, then a face on an instance")
 	_op_button(vbox, "Solve mates", _solve_mates, "solve",
@@ -135,7 +139,11 @@ func refresh_lists() -> void:
 	for mate in mates:
 		_mates_list.add_child(_make_mate_row(mate))
 
-	visible = not instances.is_empty() or not mates.is_empty() or _mate_armed
+	# Show when there is assembly content, an armed mate, OR a body selection
+	# so "Place instance of selection" is reachable for the first instance
+	# (SolidWorks-style: insert/instance chrome available before the tree has rows).
+	visible = not instances.is_empty() or not mates.is_empty() or _mate_armed \
+			or view.selected_body != ""
 	_refreshing = false
 
 
@@ -233,10 +241,38 @@ func _remove_instance(id: String) -> void:
 		status.emit("Remove instance failed")
 
 
+func _on_mate_type_changed(idx: int) -> void:
+	var t := _type_option.get_item_text(idx)
+	# Angle uses degrees in the same spin; Distance/Coincident use mm.
+	if t == "angle":
+		_offset_spin.min_value = 0.0
+		_offset_spin.max_value = 180.0
+		_offset_spin.step = 1.0
+		if _offset_spin.value <= 0.0 or _offset_spin.value > 180.0:
+			_offset_spin.value = 45.0
+		_offset_spin.get_parent().get_child(0).text = "Angle°"
+		_offset_spin.visible = true
+		_offset_spin.get_parent().visible = true
+	elif t == "distance" or t == "plane_coincident":
+		_offset_spin.min_value = -1000.0
+		_offset_spin.max_value = 1000.0
+		_offset_spin.step = 0.5
+		_offset_spin.get_parent().get_child(0).text = "Offset"
+		_offset_spin.visible = true
+		_offset_spin.get_parent().visible = true
+	elif t == "perpendicular" or t == "tangent" or t == "plane_parallel" \
+			or t == "concentric" or t == "fixed":
+		_offset_spin.get_parent().visible = false
+	else:
+		_offset_spin.get_parent().visible = true
+		_offset_spin.get_parent().get_child(0).text = "Offset"
+
+
 func _arm_mate() -> void:
 	_mate_armed = true
 	_mate_face_a = ""
 	view.mate_anchor_face = ""
+	view.mate_pick_mode = true
 	refresh_lists()
 	status.emit("Mate: click ground face, then instance face")
 
@@ -257,6 +293,17 @@ func _on_selection_changed(_body: String, face: String) -> void:
 
 func _resolve_mate_b(body: String, face_b: String) -> void:
 	var inst_b := _instance_for_source(body)
+	# Clicking the instance mesh selects selected_instance with empty body/face —
+	# resolve via the instance's source body when needed.
+	if inst_b == "" and view.selected_instance != "":
+		for inst in view.doc.instance_list():
+			if inst["id"] == view.selected_instance:
+				inst_b = inst["id"]
+				if face_b == "":
+					# Use a planar/cylindrical face from the source for the mate.
+					face_b = _default_mate_face(str(inst.get("source_body", "")),
+						_type_option.get_item_text(_type_option.selected))
+				break
 	if inst_b == "":
 		status.emit("Pick a face on an instanced body")
 		return
@@ -266,6 +313,7 @@ func _resolve_mate_b(body: String, face_b: String) -> void:
 	_mate_armed = false
 	_mate_face_a = ""
 	view.mate_anchor_face = ""
+	view.mate_pick_mode = false
 	if mid == "":
 		_mate_error = "Mate rejected — %s needs matching face types" % mtype
 		refresh_lists()
@@ -288,6 +336,24 @@ func _instance_for_source(body: String) -> String:
 	if matches.size() == 1:
 		return matches[0]
 	return ""
+
+
+func _default_mate_face(source_body: String, mtype: String) -> String:
+	if source_body == "" or view == null:
+		return ""
+	var faces: PackedStringArray = view.doc.get_face_ids(source_body)
+	if faces.is_empty():
+		return ""
+	# Prefer cylindrical faces for concentric/tangent; otherwise first face.
+	if mtype == "concentric" or mtype == "tangent":
+		for fid in faces:
+			var n: Vector3 = view.face_normal(source_body, fid)
+			# Heuristic: non-axis-aligned normals often come from cylinders in our tessellation.
+			if n.length_squared() > 1e-12 and absf(absf(n.normalized().x) - 1.0) > 0.05 \
+					and absf(absf(n.normalized().y) - 1.0) > 0.05 \
+					and absf(absf(n.normalized().z) - 1.0) > 0.05:
+				return fid
+	return faces[0]
 
 
 func _remove_mate(id: String) -> void:

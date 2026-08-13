@@ -79,6 +79,9 @@ var _selected_face_material: ShaderMaterial
 var _hover_body_material: ShaderMaterial
 var _hover_face_material: ShaderMaterial
 var _mate_anchor_material: ShaderMaterial
+## When true, select_ray selects the hit face on the first click (SolidWorks
+## mate picks — no body→face refine). AssemblyPanel sets this while armed.
+var mate_pick_mode := false
 ## First face of an armed mate pick — stays tinted green until the second
 ## pick so users can see the anchor (AssemblyPanel sets/clears this).
 var mate_anchor_face := "":
@@ -605,6 +608,10 @@ func select_ray(origin: Vector3, direction: Vector3, additive := false) -> bool:
 		return false
 	if additive:
 		_toggle_hit(hit)
+		return true
+	# Mate picks (and similar one-shot face tools): take the hit face immediately.
+	if mate_pick_mode:
+		select_entity(hit["body"], hit["face"])
 		return true
 	# First click on a body selects the body; clicking again refines to an
 	# edge (when the hit point is within tolerance of one) or the hit face.

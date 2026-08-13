@@ -226,3 +226,105 @@ TEST_CASE("plane parallel mate aligns normals without closing the gap", "[mates]
     REQUIRE(pl2);
     CHECK(std::abs(pl2->normal.Dot(gp_Dir(0, 0, 1))) == Approx(1.0).margin(1e-6));
 }
+
+TEST_CASE("distance mate stacks with a visible gap (SW Video 9)", "[mates]") {
+    Document doc;
+    auto base = doc.add_body(shape::make_box(100, 100, 20), "Base");
+    auto block = doc.add_body(shape::make_box(30, 30, 30, {{200, 0, 0}}), "Block");
+    auto inst = doc.add_instance(block, {50, 50, 90}, {0, 0, 0, 1}, "Block-1");
+    auto base_top = planar_face_with_normal(doc, base, gp_Dir(0, 0, 1));
+    auto block_bottom = planar_face_with_normal(doc, block, gp_Dir(0, 0, -1));
+    REQUIRE(!base_top.is_null());
+    REQUIRE(!block_bottom.is_null());
+
+    Mate m;
+    m.type = MateType::Distance;
+    m.face_a = base_top;
+    m.instance_b = inst;
+    m.face_b = block_bottom;
+    m.offset = 10.0;
+    REQUIRE(!doc.add_mate(m).is_null());
+    REQUIRE(solve_mates(doc));
+
+    double bb[6];
+    world_bbox(doc, *doc.instance(inst), bb);
+    // Base top at z=20; distance 10 → block bottom at z=30.
+    CHECK(bb[2] == Approx(30.0).margin(1e-6));
+    CHECK(to_string(MateType::Distance) == std::string("distance"));
+}
+
+TEST_CASE("angle mate sets normal angle (SW Video 10)", "[mates]") {
+    Document doc;
+    auto base = doc.add_body(shape::make_box(50, 50, 10), "Base");
+    auto block = doc.add_body(shape::make_box(20, 20, 20, {{100, 0, 0}}), "Blk");
+    auto inst = doc.add_instance(block, {0, 0, 40}, {0, 0, 0, 1}, "Blk-1");
+    auto base_top = planar_face_with_normal(doc, base, gp_Dir(0, 0, 1));
+    auto block_top = planar_face_with_normal(doc, block, gp_Dir(0, 0, 1));
+    REQUIRE(!base_top.is_null());
+    REQUIRE(!block_top.is_null());
+
+    Mate m;
+    m.type = MateType::Angle;
+    m.face_a = base_top;
+    m.instance_b = inst;
+    m.face_b = block_top;
+    m.offset = 45.0;
+    REQUIRE(!doc.add_mate(m).is_null());
+    REQUIRE(solve_mates(doc));
+
+    auto pl = mate_plane(doc, inst, block_top);
+    REQUIRE(pl);
+    double ang = gp_Vec(gp_Dir(0, 0, 1)).Angle(gp_Vec(pl->normal)) * 180.0 / M_PI;
+    CHECK(ang == Approx(45.0).margin(1e-3));
+}
+
+TEST_CASE("perpendicular mate forces 90° normals (SW Video 11)", "[mates]") {
+    Document doc;
+    auto base = doc.add_body(shape::make_box(50, 50, 10), "Base");
+    auto block = doc.add_body(shape::make_box(20, 20, 20, {{100, 0, 0}}), "Blk");
+    auto inst = doc.add_instance(block, {0, 0, 40}, {0, 0, 0, 1}, "Blk-1");
+    auto base_top = planar_face_with_normal(doc, base, gp_Dir(0, 0, 1));
+    // Use the block's +X face so we aren't already parallel to base top.
+    auto block_side = planar_face_with_normal(doc, block, gp_Dir(1, 0, 0));
+    REQUIRE(!base_top.is_null());
+    REQUIRE(!block_side.is_null());
+
+    Mate m;
+    m.type = MateType::Perpendicular;
+    m.face_a = base_top;
+    m.instance_b = inst;
+    m.face_b = block_side;
+    REQUIRE(!doc.add_mate(m).is_null());
+    REQUIRE(solve_mates(doc));
+
+    auto pl = mate_plane(doc, inst, block_side);
+    REQUIRE(pl);
+    CHECK(std::abs(pl->normal.Dot(gp_Dir(0, 0, 1))) == Approx(0.0).margin(1e-6));
+}
+
+TEST_CASE("tangent mate seats a cylinder on a plane (SW Video 11)", "[mates]") {
+    Document doc;
+    auto base = doc.add_body(shape::make_box(80, 80, 10), "Base");
+    auto pin = doc.add_body(shape::make_cylinder(5, 30), "Pin");
+    // Tip the pin so its axis is not parallel to the base; tangent should flatten
+    // and sit the shell on z = 10 + 5.
+    auto inst = doc.add_instance(pin, {0, 0, 50}, {0, 0.3826834, 0, 0.9238795}, "Pin-1");
+    auto base_top = planar_face_with_normal(doc, base, gp_Dir(0, 0, 1));
+    auto pin_face = cylindrical_face(doc, pin);
+    REQUIRE(!base_top.is_null());
+    REQUIRE(!pin_face.is_null());
+
+    Mate m;
+    m.type = MateType::Tangent;
+    m.face_a = base_top;
+    m.instance_b = inst;
+    m.face_b = pin_face;
+    REQUIRE(!doc.add_mate(m).is_null());
+    REQUIRE(solve_mates(doc));
+
+    auto cyl = mate_cylinder(doc, inst, pin_face);
+    REQUIRE(cyl);
+    CHECK(std::abs(cyl->dir.Dot(gp_Dir(0, 0, 1))) == Approx(0.0).margin(1e-5));
+    double gap = gp_Vec(gp_Pnt(0, 0, 10), cyl->point).Dot(gp_Vec(0, 0, 1));
+    CHECK(std::abs(gap) == Approx(5.0).margin(1e-4));
+}

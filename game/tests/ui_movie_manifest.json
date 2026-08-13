@@ -61,5 +61,33 @@
     "script": "res://tests/films/film_sketch_edit_in_out.gd",
     "enabled": true,
     "quit_after": 1300
+  },
+  {
+    "id": "mate_distance",
+    "title": "Distance mate — 10 mm gap (SW standard mate)",
+    "script": "res://tests/films/film_mate_distance.gd",
+    "enabled": true,
+    "quit_after": 1400
+  },
+  {
+    "id": "mate_angle",
+    "title": "Angle mate — 45° between faces",
+    "script": "res://tests/films/film_mate_angle.gd",
+    "enabled": true,
+    "quit_after": 1400
+  },
+  {
+    "id": "mate_perpendicular",
+    "title": "Perpendicular mate — faces at 90°",
+    "script": "res://tests/films/film_mate_perpendicular.gd",
+    "enabled": true,
+    "quit_after": 1400
+  },
+  {
+    "id": "mate_tangent",
+    "title": "Tangent mate — cylinder on a face",
+    "script": "res://tests/films/film_mate_tangent.gd",
+    "enabled": true,
+    "quit_after": 1500
   }
 ]
