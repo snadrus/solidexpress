@@ -1084,6 +1084,24 @@ bool SxDocument::load(const String& path) {
     return ok;
 }
 
+Dictionary SxDocument::insert_sxp(const String& path, const Vector3& translation) {
+    Dictionary out;
+    sx::InsertSxpResult result;
+    std::string err;
+    bool ok = sx::insert_sxp(*doc_, to_std(path),
+                             {translation.x, translation.y, translation.z}, &result, &err);
+    out["ok"] = ok;
+    out["error"] = to_gd(err);
+    PackedStringArray bodies;
+    PackedStringArray instances;
+    for (const auto& id : result.body_ids) bodies.push_back(to_gd(id.str()));
+    for (const auto& id : result.instance_ids) instances.push_back(to_gd(id.str()));
+    out["body_ids"] = bodies;
+    out["instance_ids"] = instances;
+    if (!ok) sx::log::error("insert_sxp failed: " + err);
+    return out;
+}
+
 String SxDocument::add_datum_plane(const Vector3& point, const Vector3& normal) {
     auto id = doc_->add_datum_plane({point.x, point.y, point.z},
                                     {normal.x, normal.y, normal.z});
@@ -1197,6 +1215,8 @@ Array SxDocument::instance_list() const {
         quat_to_axis_angle(inst.rotation_quat, axis, angle_deg);
         d["rotation_axis"] = axis;
         d["rotation_angle_deg"] = angle_deg;
+        d["fixed"] = inst.fixed;
+        d["source_path"] = to_gd(inst.source_path);
         out.push_back(d);
     }
     return out;
@@ -1216,6 +1236,12 @@ bool SxDocument::set_instance_transform(const String& id, const Vector3& transla
     auto quat = axis_angle_to_quat(rotation_axis, rotation_angle_deg);
     return doc_->set_instance_transform(eid, {translation.x, translation.y, translation.z},
                                         quat);
+}
+
+bool SxDocument::set_instance_fixed(const String& id, bool fixed) {
+    auto eid = parse_id(id);
+    if (eid.is_null()) return false;
+    return doc_->set_instance_fixed(eid, fixed);
 }
 
 String SxDocument::add_mate(const String& type, const String& instance_a, const String& face_a,
@@ -1376,6 +1402,7 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("list_variables"), &SxDocument::list_variables);
     ClassDB::bind_method(D_METHOD("save", "path"), &SxDocument::save);
     ClassDB::bind_method(D_METHOD("load", "path"), &SxDocument::load);
+    ClassDB::bind_method(D_METHOD("insert_sxp", "path", "translation"), &SxDocument::insert_sxp);
     ClassDB::bind_method(D_METHOD("add_datum_plane", "point", "normal"),
                          &SxDocument::add_datum_plane);
     ClassDB::bind_method(D_METHOD("add_datum_axis", "point", "dir"),
@@ -1391,6 +1418,8 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("set_instance_transform", "id", "translation", "rotation_axis",
                                   "rotation_angle_deg"),
                          &SxDocument::set_instance_transform);
+    ClassDB::bind_method(D_METHOD("set_instance_fixed", "id", "fixed"),
+                         &SxDocument::set_instance_fixed);
     ClassDB::bind_method(D_METHOD("add_mate", "type", "instance_a", "face_a", "instance_b",
                                   "face_b", "offset", "flip", "name"),
                          &SxDocument::add_mate);

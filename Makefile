@@ -42,6 +42,7 @@ test-godot: build import
 	$(GODOT) --headless --path game --script tests/run_visibility_tests.gd
 	$(GODOT) --headless --path game --script tests/run_viewcube_tests.gd
 	$(GODOT) --headless --path game --script tests/run_assembly_tests.gd
+	$(GODOT) --headless --path game --script tests/run_insert_component_tests.gd
 	$(GODOT) --headless --path game --script tests/run_drag_tests.gd
 	$(GODOT) --headless --path game --script tests/run_voice_tests.gd
 	$(GODOT) --headless --path game --script tests/run_howto_tests.gd

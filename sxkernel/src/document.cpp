@@ -396,13 +396,59 @@ bool Document::set_instance_transform(const EntityId& id,
     auto it = instance_index_.find(id);
     if (it == instance_index_.end()) return false;
     Instance& inst = instances_[it->second];
+    if (inst.fixed) return false;  // Fix restraint: refuse drag / transform edits
     inst.translation = translation;
     inst.rotation_quat = rotation_quat;
     bump_revision();
     return true;
 }
 
+bool Document::set_instance_fixed(const EntityId& id, bool fixed) {
+    Instance* inst = instance_mut(id);
+    if (!inst) return false;
+    if (inst->fixed == fixed) return true;
+    inst->fixed = fixed;
+    if (fixed) {
+        // Upsert a Fixed mate so solve_mates keeps this instance put.
+        bool has_fixed = false;
+        for (const auto& m : mates_) {
+            if (m.type == MateType::Fixed && m.instance_b == id) {
+                has_fixed = true;
+                break;
+            }
+        }
+        if (!has_fixed) {
+            Mate m;
+            m.type = MateType::Fixed;
+            m.instance_b = id;
+            m.name = "Fixed";
+            add_mate(std::move(m));
+        }
+    } else {
+        std::vector<EntityId> drop;
+        for (const auto& m : mates_) {
+            if (m.type == MateType::Fixed && m.instance_b == id) drop.push_back(m.id);
+        }
+        for (const auto& mid : drop) remove_mate(mid);
+    }
+    bump_revision();
+    return true;
+}
+
+bool Document::set_instance_source_path(const EntityId& id, const std::string& path) {
+    Instance* inst = instance_mut(id);
+    if (!inst) return false;
+    inst->source_path = path;
+    bump_revision();
+    return true;
+}
+
 const Instance* Document::instance(const EntityId& id) const {
+    auto it = instance_index_.find(id);
+    return it == instance_index_.end() ? nullptr : &instances_[it->second];
+}
+
+Instance* Document::instance_mut(const EntityId& id) {
     auto it = instance_index_.find(id);
     return it == instance_index_.end() ? nullptr : &instances_[it->second];
 }

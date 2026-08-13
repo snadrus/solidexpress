@@ -31,6 +31,7 @@ class Document;
 enum class MateType {
     Fixed,            // locks instance_b where it is (no-op on apply)
     PlaneCoincident,  // face planes opposed, signed gap = offset
+    PlaneParallel,    // face normals parallel; translation left free
     Concentric,       // cylindrical face axes colinear (axial slide free)
 };
 

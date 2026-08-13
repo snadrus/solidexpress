@@ -37,7 +37,9 @@ void to_json(nlohmann::json& j, const Instance& inst) {
                        {"source_body", inst.source_body.str()},
                        {"translation", arr3_to_json(inst.translation)},
                        {"rotation_quat", arr4_to_json(inst.rotation_quat)},
-                       {"name", inst.name}};
+                       {"name", inst.name},
+                       {"fixed", inst.fixed},
+                       {"source_path", inst.source_path}};
 }
 
 void from_json(const nlohmann::json& j, Instance& inst) {
@@ -46,6 +48,9 @@ void from_json(const nlohmann::json& j, Instance& inst) {
     inst.translation = arr3_from_json(j.at("translation"));
     inst.rotation_quat = arr4_from_json(j.at("rotation_quat"));
     inst.name = j.at("name").get<std::string>();
+    // Optional for older .sxp archives.
+    inst.fixed = j.value("fixed", false);
+    inst.source_path = j.value("source_path", "");
 }
 
 gp_Trsf transform_of(const Instance& inst) {

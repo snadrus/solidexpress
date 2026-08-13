@@ -23,6 +23,12 @@ struct Instance {
     // Unit quaternion as (x, y, z, w). Identity is (0, 0, 0, 1).
     std::array<double, 4> rotation_quat{0, 0, 0, 1};
     std::string name;
+    // SolidWorks-style Fix/Float restraint: fixed instances refuse drag and
+    // stay put under solve (paired with a Fixed mate when first inserted).
+    bool fixed = false;
+    // Optional provenance from multi-doc Insert Components (empty for
+    // same-doc Place instance). Non-authoritative — geometry is copied in.
+    std::string source_path;
 };
 
 void to_json(nlohmann::json& j, const Instance& inst);

@@ -40,6 +40,8 @@ func _ready() -> void:
 	vbox.add_child(_instances_list)
 	_op_button(vbox, "Place instance of selection", _place_instance, "instance",
 		"Place a linked copy of the selected body offset to the side")
+	_op_button(vbox, "Insert Components…", _insert_components, "instance",
+		"Insert bodies from another .sxp as component instances (multi-doc)")
 
 	vbox.add_child(HSeparator.new())
 
@@ -51,9 +53,10 @@ func _ready() -> void:
 	vbox.add_child(_mates_list)
 
 	_type_option = OptionButton.new()
-	_type_option.tooltip_text = "Mate type: plane-to-plane, axis-to-axis, or fixed"
+	_type_option.name = "MateType"
+	_type_option.tooltip_text = "Mate type: coincident, parallel, concentric, or fixed"
 	_type_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	for t in ["plane_coincident", "concentric", "fixed"]:
+	for t in ["plane_coincident", "plane_parallel", "concentric", "fixed"]:
 		_type_option.add_item(t)
 	vbox.add_child(_type_option)
 
@@ -138,15 +141,25 @@ func refresh_lists() -> void:
 
 func _make_instance_row(inst: Dictionary) -> Control:
 	var id: String = inst["id"]
+	var is_fixed: bool = bool(inst.get("fixed", false))
 	var row := HBoxContainer.new()
+	row.set_meta("instance_id", id)
 	var name_lbl := Label.new()
-	name_lbl.text = _truncate(str(inst.get("name", id)))
+	var prefix := "(f) " if is_fixed else ""
+	name_lbl.text = prefix + _truncate(str(inst.get("name", id)))
+	name_lbl.tooltip_text = str(inst.get("source_path", ""))
 	name_lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	name_lbl.add_theme_font_size_override("font_size", 11)
 	row.add_child(name_lbl)
 	var sel := UIIcons.button("select", "", "Highlight this instance in the viewport")
 	sel.pressed.connect(func() -> void: instance_selected.emit(id))
 	row.add_child(sel)
+	var fix_icon := "unlock" if is_fixed else "lock"
+	var fix_tip := "Float this component (allow drag)" if is_fixed else "Fix this component (lock in place)"
+	var fix_btn := UIIcons.button(fix_icon, "", fix_tip)
+	fix_btn.name = "FixFloat"
+	fix_btn.pressed.connect(_toggle_fixed.bind(id, not is_fixed))
+	row.add_child(fix_btn)
 	var rm := UIIcons.button("delete", "", "Remove this instance (and its mates)")
 	rm.pressed.connect(_remove_instance.bind(id))
 	row.add_child(rm)
@@ -182,6 +195,33 @@ func _place_instance() -> void:
 		status.emit("Placed instance at (%.0f, %.0f, %.0f)" % [offset.x, offset.y, offset.z])
 	else:
 		status.emit("Instance failed")
+
+
+func _insert_components() -> void:
+	# Prefer the main composition root's file dialog (Insert > Components…).
+	var main := _find_main()
+	if main != null and main.has_method("_on_insert_menu"):
+		main._on_insert_menu(10)
+		return
+	status.emit("Insert Components unavailable")
+
+
+func _find_main() -> Node:
+	var n: Node = self
+	while n != null:
+		if n.has_method("insert_components_from"):
+			return n
+		n = n.get_parent()
+	return null
+
+
+func _toggle_fixed(id: String, make_fixed: bool) -> void:
+	if view.doc.set_instance_fixed(id, make_fixed):
+		view.refresh()
+		refresh_lists()
+		status.emit(("Fixed " if make_fixed else "Floated ") + id.substr(0, 8))
+	else:
+		status.emit("Fix/Float failed")
 
 
 func _remove_instance(id: String) -> void:
