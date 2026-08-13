@@ -89,5 +89,12 @@
     "script": "res://tests/films/film_mate_tangent.gd",
     "enabled": true,
     "quit_after": 1500
+  },
+  {
+    "id": "extrude_through_all",
+    "title": "Extrude Cut — Through All",
+    "script": "res://tests/films/film_extrude_through_all.gd",
+    "enabled": true,
+    "quit_after": 1600
   }
 ]

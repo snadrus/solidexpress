@@ -1101,7 +1101,13 @@ func _on_sketch_finish(op: String, distance: float) -> void:
 		"cut": finish_op.selected = 1
 		"fuse": finish_op.selected = 2
 		_: finish_op.selected = 0
-	sketch_mode.finish_extrude(distance, op)
+	var end := "blind"
+	if sketch_chrome != null and sketch_chrome.has_method("extrude_end"):
+		end = sketch_chrome.extrude_end()
+	var upto := ""
+	if end == "to_face":
+		upto = view.selected_face
+	sketch_mode.finish_extrude(distance, op, end, upto)
 
 
 func _selected_entity() -> String:

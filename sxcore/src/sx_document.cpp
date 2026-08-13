@@ -737,14 +737,19 @@ bool SxDocument::graph_update_sketch(const String& fid, const Ref<SxSketch>& ske
 
 String SxDocument::graph_add_extrude(const String& sketch_fid, double distance,
                                      bool symmetric, const String& op,
-                                     const String& target_fid) {
+                                     const String& target_fid, const String& end,
+                                     const String& upto_face) {
     sx::EntityId fid;
     bool ok = apply_graph_edit("extrude", [&] {
         sx::Feature f;
         f.type = sx::FeatureType::Extrude;
+        std::string end_s = to_std(end);
+        if (end_s.empty()) end_s = "blind";
         f.params = {{"sketch", to_std(sketch_fid)}, {"distance", distance},
-                    {"symmetric", symmetric}, {"op", to_std(op)}};
+                    {"symmetric", symmetric}, {"op", to_std(op)},
+                    {"end", end_s}};
         if (!target_fid.is_empty()) f.params["target"] = to_std(target_fid);
+        if (!upto_face.is_empty()) f.params["upto_face"] = to_std(upto_face);
         fid = doc_->graph().add(std::move(f));
         return true;
     });
@@ -1368,7 +1373,9 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("graph_get_sketch", "fid"), &SxDocument::graph_get_sketch);
     ClassDB::bind_method(D_METHOD("graph_update_sketch", "fid", "sketch"),
                          &SxDocument::graph_update_sketch);
-    ClassDB::bind_method(D_METHOD("graph_add_extrude", "sketch_fid", "distance", "symmetric", "op", "target_fid"), &SxDocument::graph_add_extrude);
+    ClassDB::bind_method(D_METHOD("graph_add_extrude", "sketch_fid", "distance", "symmetric", "op",
+                                  "target_fid", "end", "upto_face"),
+                         &SxDocument::graph_add_extrude, DEFVAL(String("blind")), DEFVAL(String()));
     ClassDB::bind_method(D_METHOD("graph_add_revolve", "sketch_fid", "axis_point", "axis_dir", "angle", "op", "target_fid"), &SxDocument::graph_add_revolve);
     ClassDB::bind_method(D_METHOD("graph_add_sweep", "sketch_fid", "path"), &SxDocument::graph_add_sweep);
     ClassDB::bind_method(D_METHOD("graph_add_sweep_along_path", "sketch_fid", "path_fid"),

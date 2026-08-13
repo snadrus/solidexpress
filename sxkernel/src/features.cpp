@@ -14,9 +14,12 @@
 #include <BRepOffsetAPI_MakePipeShell.hxx>
 #include <BRepOffsetAPI_MakeThickSolid.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
+#include <BRepAdaptor_Surface.hxx>
+#include <BRepBndLib.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepPrimAPI_MakeRevol.hxx>
 #include <BRepTools.hxx>
+#include <Bnd_Box.hxx>
 #include <Standard_Failure.hxx>
 #include <TopExp.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
@@ -28,6 +31,7 @@
 #include <gp_Ax2.hxx>
 #include <gp_Circ.hxx>
 #include <gp_Dir.hxx>
+#include <gp_Pln.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
@@ -759,9 +763,89 @@ bool FeatureGraph::apply(Document& doc, Feature& f,
                     auto n = skf->sketch->plane().normal();
                     gp_Vec dir(n[0], n[1], n[2]);
                     dir.Normalize();
+                    // Cut ops historically negate distance in the UI; keep the
+                    // extrusion sense along the (possibly flipped) dir.
                     double dist = num_param(params, "distance", 10.0, env);
+                    if (dist < 0.0) {
+                        dir.Reverse();
+                        dist = -dist;
+                    }
+                    std::string end = params.value("end", "blind");
                     TopoDS_Shape profile = face;
-                    if (params.value("symmetric", false)) {
+                    const auto& pl = skf->sketch->plane();
+                    gp_Pnt origin(pl.origin[0], pl.origin[1], pl.origin[2]);
+
+                    if (end == "through_all") {
+                        // Span the target (or whole-doc) AABB along ±dir so a
+                        // cut punches completely through (Fusion/SW Through All).
+                        Bnd_Box box;
+                        std::string op_tmp = params.value("op", "new");
+                        if (op_tmp != "new") {
+                            EntityId target = find_feature_body("target");
+                            const Body* tb = doc.body(target);
+                            if (!tb) return fail("through_all: missing target body");
+                            BRepBndLib::Add(tb->shape, box);
+                        } else {
+                            for (const auto& bid : doc.body_ids()) {
+                                const Body* b = doc.body(bid);
+                                if (b) BRepBndLib::Add(b->shape, box);
+                            }
+                        }
+                        if (box.IsVoid()) {
+                            dist = std::max(dist, 1000.0);
+                        } else {
+                            double xmin, ymin, zmin, xmax, ymax, zmax;
+                            box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+                            const gp_Pnt corners[8] = {
+                                {xmin, ymin, zmin}, {xmax, ymin, zmin},
+                                {xmin, ymax, zmin}, {xmax, ymax, zmin},
+                                {xmin, ymin, zmax}, {xmax, ymin, zmax},
+                                {xmin, ymax, zmax}, {xmax, ymax, zmax},
+                            };
+                            double t_min = 0.0, t_max = 0.0;
+                            bool first_t = true;
+                            for (const auto& c : corners) {
+                                double t = gp_Vec(origin, c).Dot(dir);
+                                if (first_t) {
+                                    t_min = t_max = t;
+                                    first_t = false;
+                                } else {
+                                    t_min = std::min(t_min, t);
+                                    t_max = std::max(t_max, t);
+                                }
+                            }
+                            const double margin = 1.0;
+                            double start = t_min - margin;
+                            dist = (t_max - t_min) + 2.0 * margin;
+                            if (dist < 1e-6) dist = 1.0;
+                            gp_Trsf t;
+                            t.SetTranslation(dir * start);
+                            profile = BRepBuilderAPI_Transform(face, t, true).Shape();
+                        }
+                    } else if (end == "to_face") {
+                        std::string ufid = params.value("upto_face", "");
+                        if (ufid.empty()) return fail("to_face: missing upto_face");
+                        TopoDS_Shape uf = doc.resolve(EntityId::from_string(ufid));
+                        if (uf.IsNull() || uf.ShapeType() != TopAbs_FACE)
+                            return fail("to_face: upto_face is not a face");
+                        BRepAdaptor_Surface surf(TopoDS::Face(uf));
+                        if (surf.GetType() != GeomAbs_Plane)
+                            return fail("to_face: upto_face must be planar");
+                        gp_Pln pln = surf.Plane();
+                        gp_Dir fn = pln.Axis().Direction();
+                        if (uf.Orientation() == TopAbs_REVERSED) fn.Reverse();
+                        double denom = dir.Dot(gp_Vec(fn));
+                        if (std::abs(denom) < 1e-9)
+                            return fail("to_face: extrusion parallel to face");
+                        // Signed distance along dir from sketch origin to plane.
+                        double t = gp_Vec(origin, pln.Location()).Dot(gp_Vec(fn)) / denom;
+                        if (t < 1e-9) {
+                            dir.Reverse();
+                            t = -t;
+                        }
+                        if (t < 1e-6) return fail("to_face: non-positive distance");
+                        dist = t;
+                    } else if (params.value("symmetric", false)) {
                         gp_Trsf t;
                         t.SetTranslation(dir * (-dist / 2.0));
                         profile = BRepBuilderAPI_Transform(face, t, true).Shape();

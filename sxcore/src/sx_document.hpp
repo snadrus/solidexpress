@@ -159,9 +159,12 @@ public:
     // Replace a Sketch feature's geometry and regenerate dependents (undoable).
     bool graph_update_sketch(const godot::String& fid, const godot::Ref<class SxSketch>& sketch);
     // op: "new" | "fuse" | "cut"; target_fid required for fuse/cut.
+    // end: "blind" | "through_all" | "to_face"; upto_face required for to_face.
     godot::String graph_add_extrude(const godot::String& sketch_fid, double distance,
                                     bool symmetric, const godot::String& op,
-                                    const godot::String& target_fid);
+                                    const godot::String& target_fid,
+                                    const godot::String& end = "blind",
+                                    const godot::String& upto_face = "");
     // Axis in sketch 2D coordinates (point + direction on the sketch plane).
     godot::String graph_add_revolve(const godot::String& sketch_fid,
                                     const godot::Vector2& axis_point,

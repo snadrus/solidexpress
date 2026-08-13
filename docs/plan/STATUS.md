@@ -197,7 +197,7 @@ Round 19 test state: kernel 210 cases / 7043 assertions; Godot voice 29 + help 1
 - [ ] D Mate connectors + magnetic snap (Onshape/Fusion optimal)
 - [ ] E Interference detection
 - [ ] F Exploded views
-- [ ] G Extrude through-all / to-face
+- [x] G Extrude through-all / to-face (kernel end conditions + sketch chrome ExtrudeEnd + film DI)
 - [ ] H Convert Entities (edge projection)
 - [ ] I Rib feature
 

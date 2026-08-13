@@ -419,15 +419,29 @@ static func draw_circle(ctx: FilmContext, sm: SketchMode, center: Vector2, rim: 
 	await click_sketch(ctx, sm, rim, "Circle — radius")
 
 
-static func apply_extrude(ctx: FilmContext, depth: float) -> void:
+static func apply_extrude(ctx: FilmContext, depth: float, op: String = "new",
+		end: String = "blind") -> void:
 	var chrome: SketchContextChrome = ctx.main.sketch_chrome
 	if chrome == null or not chrome.visible:
 		_fail("sketch chrome not visible for Extrude")
 		return
-	if chrome.has_method("set_extrude_distance"):
+	if chrome.has_method("set_extrude_end"):
+		chrome.set_extrude_end(end)
+	if end == "blind" and chrome.has_method("set_extrude_distance"):
 		chrome.set_extrude_distance(depth)
+	# Result op: New / Cut / Fuse
+	if chrome._finish_op != null:
+		var op_idx := 0
+		if op == "cut":
+			op_idx = 1
+		elif op == "fuse":
+			op_idx = 2
+		chrome._finish_op.select(op_idx)
 	var ex := chrome.extrude_button() if chrome.has_method("extrude_button") else null
-	if not await click_control(ctx, ex, FilmUICues.extrude(depth)):
+	var cue := FilmUICues.extrude(depth)
+	if end != "blind":
+		cue = FilmUICues.alert("Extrude", "Extrude %s (%s)" % [end, op])
+	if not await click_control(ctx, ex, cue):
 		return
 	await ctx.after_regen()
 	if ctx.chrome != null:

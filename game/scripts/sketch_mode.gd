@@ -452,20 +452,25 @@ func exit_sketch() -> String:
 ## the feature graph: adds a sketch feature plus an extrude feature so both
 ## appear on the timeline and stay editable. op: "new" | "cut" | "fuse";
 ## cut/fuse require a target body (the one sketched on) and cut extrudes
-## into the body (negated distance).
-func finish_extrude(distance: float, op: String = "new") -> void:
+## into the body (negated distance). end: "blind" | "through_all" | "to_face".
+func finish_extrude(distance: float, op: String = "new", end: String = "blind",
+		upto_face: String = "") -> void:
 	if not active:
 		return
 	if op != "new" and target_fid == "":
 		status.emit("No target body — sketch on a face to cut/fuse")
 		return
-	if op == "cut":
+	if end == "to_face" and upto_face == "":
+		status.emit("To Face: select the stopping face first")
+		return
+	# Blind cut flips into the solid; Through All / To Face compute their own span.
+	if op == "cut" and end == "blind":
 		distance = -absf(distance)
 	var sk_fid := _ensure_sketch_feature()
 	if sk_fid == "":
 		return
 	var ex_fid: String = view.doc.graph_add_extrude(
-		sk_fid, distance, false, op, target_fid if op != "new" else "")
+		sk_fid, distance, false, op, target_fid if op != "new" else "", end, upto_face)
 	_finish_feature(sk_fid, ex_fid, op, "Extrude failed — is the profile closed?")
 
 
