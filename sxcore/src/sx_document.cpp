@@ -1304,6 +1304,20 @@ bool SxDocument::remove_mate(const String& id) {
 
 bool SxDocument::solve_mates() { return sx::solve_mates(*doc_); }
 
+Array SxDocument::check_interferences() const {
+    Array out;
+    for (const auto& h : sx::measure::check_interferences(*doc_)) {
+        Dictionary d;
+        d["a_kind"] = to_gd(h.a_kind);
+        d["a"] = to_gd(h.a.str());
+        d["b_kind"] = to_gd(h.b_kind);
+        d["b"] = to_gd(h.b.str());
+        d["volume"] = h.volume;
+        out.push_back(d);
+    }
+    return out;
+}
+
 bool SxDocument::export_drawing_svg(const String& path, double scale) {
     return sx::drawings::export_three_view_svg(*doc_, to_std(path), scale);
 }
@@ -1445,6 +1459,7 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("mate_list"), &SxDocument::mate_list);
     ClassDB::bind_method(D_METHOD("remove_mate", "id"), &SxDocument::remove_mate);
     ClassDB::bind_method(D_METHOD("solve_mates"), &SxDocument::solve_mates);
+    ClassDB::bind_method(D_METHOD("check_interferences"), &SxDocument::check_interferences);
     ClassDB::bind_method(D_METHOD("export_drawing_svg", "path", "scale"),
                          &SxDocument::export_drawing_svg);
 }

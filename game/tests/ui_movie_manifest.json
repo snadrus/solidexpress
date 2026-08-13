@@ -103,5 +103,12 @@
     "script": "res://tests/films/film_convert_entities.gd",
     "enabled": true,
     "quit_after": 1600
+  },
+  {
+    "id": "interference_check",
+    "title": "Check Interference — overlapping instances",
+    "script": "res://tests/films/film_interference_check.gd",
+    "enabled": true,
+    "quit_after": 1400
   }
 ]

@@ -1,6 +1,7 @@
 #include "sx/measure.hpp"
 
 #include <BRepAdaptor_Surface.hxx>
+#include <BRepAlgoAPI_Common.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
@@ -14,6 +15,8 @@
 #include <gp_Dir.hxx>
 #include <gp_Mat.hxx>
 #include <gp_Pnt.hxx>
+
+#include "sx/instances.hpp"
 
 namespace sx::measure {
 
@@ -136,6 +139,66 @@ std::optional<double> angle_between_faces(const Document& doc, const EntityId& f
     auto n2 = planar_outward_normal(doc.resolve(f2));
     if (!n1 || !n2) return std::nullopt;
     return n1->Angle(*n2);
+}
+
+namespace {
+
+double common_volume(const TopoDS_Shape& a, const TopoDS_Shape& b) {
+    if (a.IsNull() || b.IsNull()) return 0.0;
+    try {
+        BRepAlgoAPI_Common common(a, b);
+        if (!common.IsDone()) return 0.0;
+        TopoDS_Shape c = common.Shape();
+        if (c.IsNull()) return 0.0;
+        GProp_GProps props;
+        BRepGProp::VolumeProperties(c, props);
+        double v = props.Mass();
+        return v > 0.0 ? v : 0.0;
+    } catch (...) {
+        return 0.0;
+    }
+}
+
+struct Entry {
+    std::string kind;
+    EntityId id;
+    TopoDS_Shape shape;
+};
+
+}  // namespace
+
+std::vector<InterferenceHit> check_interferences(const Document& doc, double volume_tol) {
+    std::vector<Entry> entries;
+    for (const auto& bid : doc.body_ids()) {
+        const Body* b = doc.body(bid);
+        if (!b || b->shape.IsNull()) continue;
+        entries.push_back({"body", bid, b->shape});
+    }
+    for (const auto& inst : doc.instances()) {
+        TopoDS_Shape s = resolved_shape(doc, inst);
+        if (s.IsNull()) continue;
+        entries.push_back({"instance", inst.id, s});
+    }
+    std::vector<InterferenceHit> hits;
+    for (size_t i = 0; i < entries.size(); ++i) {
+        for (size_t j = i + 1; j < entries.size(); ++j) {
+            // Skip body vs its own instance (same solid counted twice).
+            if (entries[i].kind == "body" && entries[j].kind == "instance") {
+                const Instance* inst = doc.instance(entries[j].id);
+                if (inst && inst->source_body == entries[i].id) continue;
+            }
+            if (entries[j].kind == "body" && entries[i].kind == "instance") {
+                const Instance* inst = doc.instance(entries[i].id);
+                if (inst && inst->source_body == entries[j].id) continue;
+            }
+            double v = common_volume(entries[i].shape, entries[j].shape);
+            if (v > volume_tol) {
+                hits.push_back({entries[i].kind, entries[i].id, entries[j].kind,
+                                entries[j].id, v});
+            }
+        }
+    }
+    return hits;
 }
 
 }  // namespace sx::measure

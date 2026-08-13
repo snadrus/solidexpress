@@ -4,6 +4,8 @@
 
 #include <array>
 #include <optional>
+#include <string>
+#include <vector>
 
 #include "sx/document.hpp"
 #include "sx/ids.hpp"
@@ -54,5 +56,18 @@ double face_area(const Document& doc, const EntityId& face);
 // Angle between outward normals of two planar faces, in radians [0, pi].
 std::optional<double> angle_between_faces(const Document& doc, const EntityId& f1,
                                           const EntityId& f2);
+
+struct InterferenceHit {
+    std::string a_kind;   // "body" | "instance"
+    EntityId a;
+    std::string b_kind;
+    EntityId b;
+    double volume = 0.0;
+};
+
+// Pairwise interference among grounded bodies and component instances
+// (instance shapes use their placement). Skips empty commons under tol.
+std::vector<InterferenceHit> check_interferences(const Document& doc,
+                                                 double volume_tol = 1e-6);
 
 }  // namespace sx::measure

@@ -69,6 +69,8 @@ func _ready() -> void:
 		"Add a mate: click a ground face, then a face on an instance")
 	_op_button(vbox, "Solve mates", _solve_mates, "solve",
 		"Re-apply all mates in order, moving instances into position")
+	_op_button(vbox, "Check Interference", _check_interference, "measure",
+		"Report overlapping bodies/instances (static clash volume)")
 
 	view.selection_changed.connect(_on_selection_changed)
 	view.document_changed.connect(refresh_lists)
@@ -371,3 +373,18 @@ func _solve_mates() -> void:
 	view.refresh()
 	refresh_lists()
 	status.emit("Mates solved" if ok else "Solve mates failed")
+
+
+func _check_interference() -> void:
+	var hits: Array = view.doc.check_interferences()
+	if hits.is_empty():
+		_mate_error = ""
+		refresh_lists()
+		status.emit("Interference: none")
+		return
+	var vol := 0.0
+	for h in hits:
+		vol += float(h.get("volume", 0.0))
+	_mate_error = "Interference: %d clash(es), ΣV=%.2f mm³" % [hits.size(), vol]
+	refresh_lists()
+	status.emit(_mate_error)

@@ -195,7 +195,7 @@ Round 19 test state: kernel 210 cases / 7043 assertions; Godot voice 29 + help 1
 ## Roadmap grind (competitive best-of; films DI into visual tests; no promote)
 - [x] A–C Standard mates Distance / Angle / Perpendicular / Tangent (kernel + AssemblyPanel + films + DI UI suite)
 - [ ] D Mate connectors + magnetic snap (Onshape/Fusion optimal)
-- [ ] E Interference detection
+- [x] E Interference detection (`check_interferences` + AssemblyPanel + film DI)
 - [ ] F Exploded views
 - [x] G Extrude through-all / to-face (kernel end conditions + sketch chrome ExtrudeEnd + film DI)
 - [x] H Convert Entities (project host face edges; CONVERT tool + film DI)
