@@ -1217,6 +1217,7 @@ String SxDocument::add_instance(const String& source_body, const Vector3& transl
 
 Array SxDocument::instance_list() const {
     Array out;
+    const auto& expl = doc_->explode();
     for (const auto& inst : doc_->instances()) {
         Dictionary d;
         d["id"] = to_gd(inst.id.str());
@@ -1233,6 +1234,16 @@ Array SxDocument::instance_list() const {
         d["rotation_angle_deg"] = angle_deg;
         d["fixed"] = inst.fixed;
         d["source_path"] = to_gd(inst.source_path);
+        Vector3 eoff(0, 0, 0);
+        if (expl.active) {
+            auto it = expl.offsets.find(inst.id);
+            if (it != expl.offsets.end()) {
+                eoff = Vector3(static_cast<float>(it->second[0]),
+                               static_cast<float>(it->second[1]),
+                               static_cast<float>(it->second[2]));
+            }
+        }
+        d["explode_offset"] = eoff;
         out.push_back(d);
     }
     return out;
@@ -1344,6 +1355,12 @@ String SxDocument::try_connector_snap(const String& instance_id, double max_dist
     auto mid = sx::apply_connector_snap(*doc_, *snap);
     return mid.is_null() ? String() : to_gd(mid.str());
 }
+
+bool SxDocument::auto_explode(double spacing) { return doc_->auto_explode(spacing); }
+
+bool SxDocument::set_explode_active(bool active) { return doc_->set_explode_active(active); }
+
+bool SxDocument::explode_active() const { return doc_->explode().active; }
 
 bool SxDocument::export_drawing_svg(const String& path, double scale) {
     return sx::drawings::export_three_view_svg(*doc_, to_std(path), scale);
@@ -1490,6 +1507,11 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("list_connectors"), &SxDocument::list_connectors);
     ClassDB::bind_method(D_METHOD("try_connector_snap", "instance_id", "max_dist"),
                          &SxDocument::try_connector_snap, DEFVAL(8.0));
+    ClassDB::bind_method(D_METHOD("auto_explode", "spacing"), &SxDocument::auto_explode,
+                         DEFVAL(30.0));
+    ClassDB::bind_method(D_METHOD("set_explode_active", "active"),
+                         &SxDocument::set_explode_active);
+    ClassDB::bind_method(D_METHOD("explode_active"), &SxDocument::explode_active);
     ClassDB::bind_method(D_METHOD("export_drawing_svg", "path", "scale"),
                          &SxDocument::export_drawing_svg);
 }

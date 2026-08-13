@@ -288,6 +288,11 @@ public:
     // mate + solve. Returns mate id or "" if nothing snapped. max_dist in mm.
     godot::String try_connector_snap(const godot::String& instance_id, double max_dist = 8.0);
 
+    // Exploded view: auto offsets along +Z; toggle active for display.
+    bool auto_explode(double spacing = 30.0);
+    bool set_explode_active(bool active);
+    bool explode_active() const;
+
     // Three-view (front/top/right) HLR drawing sheet as SVG. False when the
     // document has no bodies or the file cannot be written.
     bool export_drawing_svg(const godot::String& path, double scale);

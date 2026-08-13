@@ -196,7 +196,7 @@ Round 19 test state: kernel 210 cases / 7043 assertions; Godot voice 29 + help 1
 - [x] A–C Standard mates Distance / Angle / Perpendicular / Tangent (kernel + AssemblyPanel + films + DI UI suite)
 - [x] D Mate connectors + magnetic snap (implicit frames, try_connector_snap, drag release + Snap button + film DI)
 - [x] E Interference detection (`check_interferences` + AssemblyPanel + film DI)
-- [ ] F Exploded views
+- [x] F Exploded views (auto_explode +Z offsets, explode.json, AssemblyPanel toggle + film DI)
 - [x] G Extrude through-all / to-face (kernel end conditions + sketch chrome ExtrudeEnd + film DI)
 - [x] H Convert Entities (project host face edges; CONVERT tool + film DI)
 - [ ] I Rib feature

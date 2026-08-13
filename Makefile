@@ -54,6 +54,7 @@ test-godot: build import
 	$(GODOT) --headless --path game --script tests/run_film_convert_ui_tests.gd
 	$(GODOT) --headless --path game --script tests/run_film_interference_ui_tests.gd
 	$(GODOT) --headless --path game --script tests/run_film_connector_ui_tests.gd
+	$(GODOT) --headless --path game --script tests/run_film_explode_ui_tests.gd
 	$(GODOT) --headless --path game --script tests/run_visual_ux_tests.gd
 	$(GODOT) --headless --path game --script tests/run_move_snap_tests.gd
 	$(GODOT) --headless --path game --script tests/run_timeline_ux_tests.gd

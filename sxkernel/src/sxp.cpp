@@ -97,10 +97,19 @@ bool save_sxp(const Document& doc, const std::string& path, std::string* err) {
         configs_json["configurations"].push_back(jc);
     }
 
+    json explode_json;
+    explode_json["active"] = doc.explode().active;
+    explode_json["spacing"] = doc.explode().spacing;
+    explode_json["offsets"] = json::object();
+    for (const auto& [iid, off] : doc.explode().offsets) {
+        explode_json["offsets"][iid.str()] = {off[0], off[1], off[2]};
+    }
+
     ok = ok && add("features.json", doc.graph().to_json().dump(2));
     ok = ok && add("datums.json", datums_json.dump(2));
     ok = ok && add("instances.json", instances_json.dump(2));
     ok = ok && add("mates.json", mates_json.dump(2));
+    ok = ok && add("explode.json", explode_json.dump(2));
     ok = ok && add("configurations.json", configs_json.dump(2));
     ok = ok && add("manifest.json", manifest.dump(2));
     ok = ok && mz_zip_writer_finalize_archive(&zip) == MZ_TRUE;
@@ -279,6 +288,30 @@ bool load_sxp(Document& doc, const std::string& path, std::string* err) {
             }
         } catch (const std::exception& e) {
             log::warn(std::string("sxp: ignoring bad mates.json: ") + e.what());
+        }
+    }
+
+    // Exploded view is optional for backward compatibility.
+    std::string explode_text = read_entry(zip, "explode.json", &found);
+    if (found) {
+        try {
+            json ej = json::parse(explode_text);
+            Document::ExplodeView ev;
+            ev.active = ej.value("active", false);
+            ev.spacing = ej.value("spacing", 30.0);
+            if (ej.contains("offsets") && ej["offsets"].is_object()) {
+                for (auto it = ej["offsets"].begin(); it != ej["offsets"].end(); ++it) {
+                    EntityId iid = EntityId::from_string(it.key());
+                    const auto& arr = it.value();
+                    if (arr.is_array() && arr.size() >= 3) {
+                        ev.offsets[iid] = {arr[0].get<double>(), arr[1].get<double>(),
+                                           arr[2].get<double>()};
+                    }
+                }
+            }
+            doc.restore_explode(std::move(ev));
+        } catch (const std::exception& e) {
+            log::warn(std::string("sxp: ignoring bad explode.json: ") + e.what());
         }
     }
 

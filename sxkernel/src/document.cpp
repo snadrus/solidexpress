@@ -488,6 +488,33 @@ void Document::restore_mate(Mate&& m) {
     bump_revision();
 }
 
+bool Document::auto_explode(double spacing) {
+    if (instances_.empty()) return false;
+    if (spacing < 1e-6) spacing = 30.0;
+    explode_.spacing = spacing;
+    explode_.offsets.clear();
+    for (size_t i = 0; i < instances_.size(); ++i) {
+        explode_.offsets[instances_[i].id] = {0.0, 0.0, spacing * static_cast<double>(i + 1)};
+    }
+    explode_.active = true;
+    bump_revision();
+    return true;
+}
+
+bool Document::set_explode_active(bool active) {
+    if (active && explode_.offsets.empty() && !instances_.empty()) {
+        return auto_explode(explode_.spacing > 0.0 ? explode_.spacing : 30.0);
+    }
+    explode_.active = active;
+    bump_revision();
+    return true;
+}
+
+void Document::restore_explode(ExplodeView&& e) {
+    explode_ = std::move(e);
+    bump_revision();
+}
+
 Document::Configuration* find_configuration(std::vector<Document::Configuration>& configs,
                                             const std::string& name) {
     for (auto& c : configs) {

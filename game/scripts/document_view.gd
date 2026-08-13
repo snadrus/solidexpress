@@ -1771,12 +1771,13 @@ func _rebuild_instance(inst: Dictionary) -> void:
 	else:
 		node.mesh = doc.get_mesh(source)
 	var translation: Vector3 = inst["translation"]
+	var eoff: Vector3 = inst.get("explode_offset", Vector3.ZERO)
 	var axis: Vector3 = inst["rotation_axis"]
 	var angle_deg: float = inst["rotation_angle_deg"]
 	var basis := Basis.IDENTITY
 	if axis.length_squared() > 1e-12 and absf(angle_deg) > 1e-9:
 		basis = Basis(axis.normalized(), deg_to_rad(angle_deg))
-	node.transform = Transform3D(basis, translation)
+	node.transform = Transform3D(basis, translation + eoff)
 	var tint: Color = doc.get_body_color(source).lightened(0.28)
 	_instance_materials[id] = _make_material(tint)
 	node.material_override = _make_material(SELECTED_BODY_COLOR) \

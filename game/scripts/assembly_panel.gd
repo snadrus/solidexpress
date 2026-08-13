@@ -73,6 +73,8 @@ func _ready() -> void:
 		"Report overlapping bodies/instances (static clash volume)")
 	_op_button(vbox, "Snap to connector", _snap_connector, "mate",
 		"Magnetic snap: mate the selected instance to the nearest connector (Onshape/Fusion)")
+	_op_button(vbox, "Explode", _toggle_explode, "pattern",
+		"Toggle exploded view (offsets instances along +Z)")
 
 	view.selection_changed.connect(_on_selection_changed)
 	view.document_changed.connect(refresh_lists)
@@ -390,6 +392,21 @@ func _check_interference() -> void:
 	_mate_error = "Interference: %d clash(es), ΣV=%.2f mm³" % [hits.size(), vol]
 	refresh_lists()
 	status.emit(_mate_error)
+
+
+func _toggle_explode() -> void:
+	if view.doc.explode_active():
+		view.doc.set_explode_active(false)
+		view.refresh()
+		refresh_lists()
+		status.emit("Explode collapsed")
+		return
+	if view.doc.auto_explode(40.0):
+		view.refresh()
+		refresh_lists()
+		status.emit("Exploded view")
+	else:
+		status.emit("Explode needs at least one instance")
 
 
 func _snap_connector() -> void:

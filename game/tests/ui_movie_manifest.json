@@ -117,5 +117,12 @@
     "script": "res://tests/films/film_mate_connector_snap.gd",
     "enabled": true,
     "quit_after": 1500
+  },
+  {
+    "id": "explode_assembly",
+    "title": "Exploded view — offset instances along +Z",
+    "script": "res://tests/films/film_explode_assembly.gd",
+    "enabled": true,
+    "quit_after": 1400
   }
 ]
