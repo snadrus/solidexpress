@@ -199,7 +199,7 @@ Round 19 test state: kernel 210 cases / 7043 assertions; Godot voice 29 + help 1
 - [x] F Exploded views (auto_explode +Z offsets, explode.json, AssemblyPanel toggle + film DI)
 - [x] G Extrude through-all / to-face (kernel end conditions + sketch chrome ExtrudeEnd + film DI)
 - [x] H Convert Entities (project host face edges; CONVERT tool + film DI)
-- [ ] I Rib feature
+- [x] I Rib feature (open-line prism fused into host + sketch Rib chrome + film DI)
 
 ## Later phases
 See friendliness plan (phases 21-27) + AI-first solver upgrade for unmatched voice.

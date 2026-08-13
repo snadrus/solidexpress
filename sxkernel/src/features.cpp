@@ -4,6 +4,8 @@
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepBuilderAPI_MakePolygon.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
 #include <BRepBuilderAPI_TransitionMode.hxx>
@@ -72,6 +74,7 @@ const char* to_string(FeatureType t) {
         case FeatureType::Thread: return "thread";
         case FeatureType::ImportStep: return "import_step";
         case FeatureType::ImportStl: return "import_stl";
+        case FeatureType::Rib: return "rib";
     }
     return "unknown";
 }
@@ -97,6 +100,7 @@ FeatureType feature_type_from_string(const std::string& s) {
     if (s == "thread") return FeatureType::Thread;
     if (s == "import_step") return FeatureType::ImportStep;
     if (s == "import_stl") return FeatureType::ImportStl;
+    if (s == "rib") return FeatureType::Rib;
     throw std::invalid_argument("unknown feature type: " + s);
 }
 
@@ -1243,6 +1247,75 @@ bool FeatureGraph::apply(Document& doc, Feature& f,
                 if (shape::count(result).solids < 1 || shape::volume(result) <= 0.0)
                     return fail("thread destroyed the solid");
                 doc.replace_body_shape(target, result);
+                return true;
+            }
+
+            case FeatureType::Rib: {
+                EntityId sketch_fid =
+                    EntityId::from_string(params.at("sketch").get<std::string>());
+                const Feature* skf = feature(sketch_fid);
+                if (!skf || !skf->sketch) return fail("rib: missing sketch");
+                EntityId target = find_feature_body("target");
+                const Body* tb = doc.body(target);
+                if (!tb) return fail("rib: missing target body");
+                double thickness = num_param(params, "thickness", 2.0, env);
+                double height = num_param(params, "height", 10.0, env);
+                if (thickness < 1e-6 || height < 1e-6)
+                    return fail("rib: thickness and height must be positive");
+
+                const SketchEntity* line = nullptr;
+                for (const auto& e : skf->sketch->entities()) {
+                    if (!e.construction && e.type == SketchEntityType::Line) {
+                        line = &e;
+                        break;
+                    }
+                }
+                if (!line || line->params.size() < 4)
+                    return fail("rib: sketch needs a non-construction line");
+
+                const auto& pl = skf->sketch->plane();
+                auto at = [&](double u, double v) {
+                    return gp_Pnt(pl.origin[0] + pl.x_dir[0] * u + pl.y_dir[0] * v,
+                                  pl.origin[1] + pl.x_dir[1] * u + pl.y_dir[1] * v,
+                                  pl.origin[2] + pl.x_dir[2] * u + pl.y_dir[2] * v);
+                };
+                double x1 = skf->sketch->param(line->params[0]);
+                double y1 = skf->sketch->param(line->params[1]);
+                double x2 = skf->sketch->param(line->params[2]);
+                double y2 = skf->sketch->param(line->params[3]);
+                gp_Pnt p1 = at(x1, y1);
+                gp_Pnt p2 = at(x2, y2);
+                gp_Vec along(p1, p2);
+                if (along.Magnitude() < 1e-6) return fail("rib: line too short");
+                along.Normalize();
+                auto narr = pl.normal();
+                gp_Dir n(narr[0], narr[1], narr[2]);
+                gp_Vec sideways = gp_Vec(n).Crossed(along);
+                if (sideways.Magnitude() < 1e-9) return fail("rib: degenerate sideways");
+                sideways.Normalize();
+                sideways *= (thickness * 0.5);
+
+                BRepBuilderAPI_MakePolygon poly;
+                poly.Add(p1.Translated(-sideways));
+                poly.Add(p1.Translated(sideways));
+                poly.Add(p2.Translated(sideways));
+                poly.Add(p2.Translated(-sideways));
+                poly.Close();
+                if (!poly.IsDone()) return fail("rib: profile wire failed");
+                BRepBuilderAPI_MakeFace mkf(poly.Wire(), /*onlyPlane=*/true);
+                if (!mkf.IsDone()) return fail("rib: profile face failed");
+                // Extrude along the sketch normal (outward fin / stiffener on
+                // the host face). Into-part ribs need a shelled host; v1 adds
+                // measurable volume on solid faces like SW "rib" demos on plates.
+                TopoDS_Shape rib =
+                    BRepPrimAPI_MakePrism(mkf.Face(), gp_Vec(n) * height).Shape();
+                if (rib.IsNull() || shape::volume(rib) <= 0.0)
+                    return fail("rib: prism failed");
+                TopoDS_Shape fused = BRepAlgoAPI_Fuse(tb->shape, rib).Shape();
+                if (fused.IsNull()) return fail("rib: fuse failed");
+                if (shape::volume(fused) <= shape::volume(tb->shape) + 1e-3)
+                    return fail("rib: fuse did not add volume");
+                doc.replace_body_shape(target, fused);
                 return true;
             }
 

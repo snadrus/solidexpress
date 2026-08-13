@@ -478,6 +478,20 @@ func finish_extrude(distance: float, op: String = "new", end: String = "blind",
 	_finish_feature(sk_fid, ex_fid, op, "Extrude failed — is the profile closed?")
 
 
+## Finish the sketch as a Rib (open line → thin prism fused into host body).
+func finish_rib(thickness: float = 2.0, height: float = 10.0) -> void:
+	if not active:
+		return
+	if target_fid == "":
+		status.emit("Rib needs a host body — sketch on a face")
+		return
+	var sk_fid := _ensure_sketch_feature()
+	if sk_fid == "":
+		return
+	var rib_fid: String = view.doc.graph_add_rib(sk_fid, target_fid, thickness, height)
+	_finish_feature(sk_fid, rib_fid, "fuse", "Rib failed — need an open line on a face")
+
+
 ## Finish the sketch and revolve. The axis is the selected line when one is
 ## selected (select tool), otherwise the sketch Y axis through the origin.
 func finish_revolve(angle: float = TAU, op: String = "new") -> void:

@@ -104,6 +104,13 @@ func _build_finish_bar() -> void:
 	rv.custom_minimum_size = Vector2(72, CHIP_H)
 	rv.pressed.connect(func() -> void: action_chosen.emit("revolve"))
 	_finish_bar.add_child(rv)
+	var rib := Button.new()
+	rib.text = "Rib"
+	rib.name = "Rib"
+	rib.tooltip_text = "Rib: extrude open line into host as a thin stiffener"
+	rib.custom_minimum_size = Vector2(56, CHIP_H)
+	rib.pressed.connect(func() -> void: action_chosen.emit("rib"))
+	_finish_bar.add_child(rib)
 
 
 func dim_value() -> float:

@@ -124,5 +124,12 @@
     "script": "res://tests/films/film_explode_assembly.gd",
     "enabled": true,
     "quit_after": 1400
+  },
+  {
+    "id": "rib_stiffener",
+    "title": "Rib stiffener — open line into the solid",
+    "script": "res://tests/films/film_rib_stiffener.gd",
+    "enabled": true,
+    "quit_after": 1600
   }
 ]

@@ -170,6 +170,10 @@ public:
                                     const godot::String& target_fid,
                                     const godot::String& end = "blind",
                                     const godot::String& upto_face = "");
+    // Open-profile rib (first sketch line) fused into target body.
+    godot::String graph_add_rib(const godot::String& sketch_fid,
+                                const godot::String& target_fid, double thickness,
+                                double height);
     // Axis in sketch 2D coordinates (point + direction on the sketch plane).
     godot::String graph_add_revolve(const godot::String& sketch_fid,
                                     const godot::Vector2& axis_point,

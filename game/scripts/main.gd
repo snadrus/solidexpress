@@ -967,6 +967,8 @@ func _on_sketch_action(action: String) -> void:
 			_apply_dimension_from_chrome()
 		"revolve":
 			sketch_mode.finish_revolve(TAU, _finish_op_name())
+		"rib":
+			sketch_mode.finish_rib(2.0, 10.0)
 		"horizontal", "vertical", "parallel", "perpendicular", "equal", "coincident", \
 		"tangent", "midpoint", "symmetric", "concentric", "collinear":
 			_apply_constraint(action, 0.0)

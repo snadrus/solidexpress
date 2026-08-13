@@ -31,6 +31,10 @@ const SCHEMAS := {
 		{"key": "angle", "label": "Angle (rad)", "kind": "float", "min": 0.01, "max": TAU, "step": 0.1},
 		{"key": "op", "label": "Result", "kind": "enum", "options": ["new", "fuse", "cut"]},
 	],
+	"rib": [
+		{"key": "thickness", "label": "Thickness", "kind": "float", "min": 0.1, "max": 1000.0, "step": 0.5},
+		{"key": "height", "label": "Height", "kind": "float", "min": 0.1, "max": 10000.0, "step": 1.0},
+	],
 	"fillet": [
 		{"key": "radius", "label": "Radius", "kind": "float", "min": 0.01, "max": 1000.0, "step": 0.5},
 	],

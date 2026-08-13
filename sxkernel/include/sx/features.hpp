@@ -63,6 +63,8 @@ enum class FeatureType {
                 // BASE feature: file is re-read on regenerate (document dep).
     ImportStl,  // params: {path: string, scale: double (default 1.0)}
                 // BASE feature: mesh import as a single body; re-read on regen.
+    Rib,        // params: {sketch: <fid>, target: <fid>, thickness, height}
+                // Open-profile (first line) → thin prism fused into target.
 };
 
 const char* to_string(FeatureType t);

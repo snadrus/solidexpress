@@ -767,6 +767,22 @@ String SxDocument::graph_add_extrude(const String& sketch_fid, double distance,
     return ok ? to_gd(fid.str()) : String();
 }
 
+String SxDocument::graph_add_rib(const String& sketch_fid, const String& target_fid,
+                                 double thickness, double height) {
+    sx::EntityId fid;
+    bool ok = apply_graph_edit("rib", [&] {
+        sx::Feature f;
+        f.type = sx::FeatureType::Rib;
+        f.params = {{"sketch", to_std(sketch_fid)},
+                    {"target", to_std(target_fid)},
+                    {"thickness", thickness},
+                    {"height", height}};
+        fid = doc_->graph().add(std::move(f));
+        return true;
+    });
+    return ok ? to_gd(fid.str()) : String();
+}
+
 String SxDocument::graph_add_revolve(const String& sketch_fid, const Vector2& axis_point,
                                      const Vector2& axis_dir, double angle, const String& op,
                                      const String& target_fid) {
@@ -1446,6 +1462,9 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("graph_add_extrude", "sketch_fid", "distance", "symmetric", "op",
                                   "target_fid", "end", "upto_face"),
                          &SxDocument::graph_add_extrude, DEFVAL(String("blind")), DEFVAL(String()));
+    ClassDB::bind_method(D_METHOD("graph_add_rib", "sketch_fid", "target_fid", "thickness",
+                                  "height"),
+                         &SxDocument::graph_add_rib);
     ClassDB::bind_method(D_METHOD("graph_add_revolve", "sketch_fid", "axis_point", "axis_dir", "angle", "op", "target_fid"), &SxDocument::graph_add_revolve);
     ClassDB::bind_method(D_METHOD("graph_add_sweep", "sketch_fid", "path"), &SxDocument::graph_add_sweep);
     ClassDB::bind_method(D_METHOD("graph_add_sweep_along_path", "sketch_fid", "path_fid"),

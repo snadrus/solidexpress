@@ -25,7 +25,7 @@ var rollback_bar: Control
 
 ## Feature type -> UIIcons glyph. Primitives resolve their kind from params.
 const TYPE_ICONS := {
-	"sketch": "sketch", "extrude": "extrude", "revolve": "revolve",
+	"sketch": "sketch", "extrude": "extrude", "revolve": "revolve", "rib": "extrude",
 	"fillet": "fillet", "chamfer": "chamfer", "hole": "hole",
 	"mirror": "mirror", "linear_pattern": "linear_pattern",
 	"circular_pattern": "circular_pattern", "shell": "shell",
