@@ -256,7 +256,7 @@ public:
     bool set_instance_fixed(const godot::String& id, bool fixed);
 
     // --- assembly mates (closed-form placement; solve moves instance_b) ---
-    // type: "fixed" | "plane_coincident" | "plane_parallel" | "concentric".
+    // type: "fixed" | "plane_coincident" | "plane_parallel" | "concentric" | "fastened".
     // instance_a may be "" for a grounded body reference. Returns the mate id or "".
     godot::String add_mate(const godot::String& type, const godot::String& instance_a,
                            const godot::String& face_a, const godot::String& instance_b,
@@ -268,9 +268,105 @@ public:
     // Applies all mates in order; true when every mate solved.
     bool solve_mates();
 
+    // Implicit Onshape-style connector on a face (empty dict if not planar/cyl).
+    godot::Dictionary implicit_connector(const godot::String& instance,
+                                         const godot::String& face) const;
+    godot::Array connector_list() const;
+
+    // DOF joints on connectors: the two picked faces become the joint frames.
+    godot::String add_joint(const godot::String& type, const godot::String& instance_a,
+                            const godot::String& face_a, const godot::String& instance_b,
+                            const godot::String& face_b, const godot::String& name);
+    godot::Array joint_list() const;
+    bool remove_joint(const godot::String& id);
+    // Drives the free degree of freedom (radians or mm) and re-poses the part.
+    bool set_joint_value(const godot::String& id, double value);
+    int solve_joints();
+
+    // Exploded view: factor 0 collapses back to the assembled placement.
+    int explode_assembly(double factor);
+    bool is_exploded() const;
+    // Copies a component around its joint axis; each copy inherits the joint.
+    godot::PackedStringArray pattern_instance(const godot::String& instance, int count,
+                                              double total_angle);
+
+    godot::String graph_add_extrude_end(const godot::String& sketch_fid, double distance,
+                                        const godot::String& end, const godot::String& op,
+                                        const godot::String& target_fid);
+    godot::String graph_add_fillet_var(const godot::String& target_fid,
+                                       const godot::PackedStringArray& edge_ids, double radius,
+                                       double radius2);
+    godot::String graph_add_direct_edit(const godot::String& target_fid, const godot::String& kind,
+                                        const godot::String& face_id, double distance,
+                                        const godot::Vector3& direction);
+    godot::String graph_add_holes(const godot::String& target_fid, const godot::String& type,
+                                  const godot::PackedVector3Array& positions,
+                                  const godot::Vector3& direction, float diameter, float depth);
+    double interference_volume(const godot::String& body_a, const godot::String& body_b) const;
+    godot::String import_dxf(const godot::String& path);
+    bool export_3mf(const godot::String& path);
+    bool export_gltf(const godot::String& path);
+    godot::String heal_report(const godot::String& fid) const;
+
+    godot::String graph_add_rib(const godot::String& target_fid, const godot::String& sketch_fid,
+                                double thickness, double height, bool flip);
+    godot::String graph_add_flange(double length, double thickness, double k_factor, double radius,
+                                   double width);
+    godot::String graph_add_frame(const godot::PackedVector3Array& path, double profile_w,
+                                  double profile_h);
+    godot::Array run_query(const godot::String& query) const;
+    godot::String card_digest(const godot::String& fid) const;
+    int apply_rule(const godot::String& when, const godot::String& then);
+    double crank_slider_x(double crank, double rod, double theta) const;
+    double sheet_flat_length(double leg1, double leg2, double thickness, double k_factor,
+                             double radius) const;
+    godot::PackedVector3Array cam_pocket(double x0, double y0, double x1, double y1, double depth,
+                                         double stepover) const;
+    double fea_cantilever(double force_n, double length_mm, double e_mpa, double width_mm,
+                          double thickness_mm) const;
+    godot::Dictionary catalog_fastener(const godot::String& designation) const;
+
     // Three-view (front/top/right) HLR drawing sheet as SVG. False when the
     // document has no bodies or the file cannot be written.
     bool export_drawing_svg(const godot::String& path, double scale);
+
+    // --- in-context snapshots ---
+    godot::String capture_context(const godot::String& source_body, const godot::String& name);
+    bool is_context_stale(const godot::String& context_id) const;
+    bool update_context(const godot::String& context_id);
+    godot::String graph_add_in_context(const godot::String& context_id, double a, double b);
+    godot::Array context_list() const;
+
+    // --- drawing document ---
+    godot::String ensure_drawing_sheet();
+    godot::String add_drawing_dim(const godot::String& entity_a, const godot::String& entity_b);
+    int refresh_drawing_dims();
+    godot::Array bom_rows() const;
+    godot::Dictionary drawing_preview() const;
+    bool export_drawing_dxf(const godot::String& path);
+    bool export_drawing_pdf(const godot::String& path);
+
+    // --- sheet convert / welds ---
+    godot::String graph_add_convert_sheet(const godot::String& target_fid);
+    godot::String add_weld(const godot::String& edge, const godot::String& symbol, double size);
+    godot::Array weld_list() const;
+
+    // --- queries / What's Wrong ---
+    godot::Dictionary diagnose_feature(const godot::String& fid) const;
+    int auto_dimension();
+    godot::Array propose_chips() const;
+    godot::String graph_add_user_csink(const godot::String& target_fid, const godot::Vector3& pos,
+                                       double diameter, double depth, double cs_diameter);
+    godot::String add_sketch3d(const godot::PackedVector3Array& points);
+    int convert_edges(const godot::String& sketch_fid, const godot::PackedStringArray& edge_ids);
+    int pdm_commit(const godot::String& message);
+    godot::Array pdm_log() const;
+
+    // --- print-first ---
+    godot::Dictionary print_analyze(const godot::String& body_id);
+    godot::Dictionary print_orient(const godot::String& body_id);
+    godot::Dictionary print_setup() const;
+    void set_print_min_wall(double mm);
 
 protected:
     static void _bind_methods();

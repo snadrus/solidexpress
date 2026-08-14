@@ -17,6 +17,7 @@ const TABLE: Array[Dictionary] = [
 	{"keys": "Wheel / pinch", "context": "View", "desc": "Zoom toward cursor (Ctrl+two-finger drag also zooms on Linux)"},
 	{"keys": "Ctrl+Empty-drag", "context": "View", "desc": "Rubber-band box select"},
 	{"keys": "Space", "context": "View", "desc": "Orientation panel (views / fit / named view)"},
+	{"keys": "S", "context": "Model", "desc": "Marking menu for the current pick (overlapping faces listed)"},
 	{"keys": "Right-click", "context": "Model", "desc": "Selection context menu (Fillet / Active plane / Look at / Hide / Delete)"},
 	{"keys": "Rotate arcs / Pull tip", "context": "Model", "desc": "Rotate about X/Y/Z or push/pull selected face"},
 	{"keys": "F", "context": "View", "desc": "Fit selection (or all if none)"},

@@ -14,6 +14,7 @@
 // used — that is the "ground" side. `instance_b` must be a real instance:
 // it is the side that moves.
 
+#include <array>
 #include <optional>
 #include <string>
 #include <vector>
@@ -33,7 +34,28 @@ enum class MateType {
     PlaneCoincident,  // face planes opposed, signed gap = offset
     PlaneParallel,    // face normals parallel; translation left free
     Concentric,       // cylindrical face axes colinear (axial slide free)
+    Fastened,         // Onshape-style: implicit connectors, all 6 DOF
 };
+
+// Local frame inferred from a face (Onshape implicit mate connector).
+struct MateConnector {
+    EntityId id;
+    EntityId instance;  // null => ground / source body
+    EntityId face;
+    std::array<double, 3> origin{0, 0, 0};
+    std::array<double, 3> z_dir{0, 0, 1};
+    std::array<double, 3> x_dir{1, 0, 0};
+    std::string name;
+};
+
+void to_json(nlohmann::json& j, const MateConnector& c);
+void from_json(const nlohmann::json& j, MateConnector& c);
+
+// Implicit connector on a planar face (Z = outward normal, origin = mid)
+// or cylindrical face (Z = axis, origin = axis point).
+std::optional<MateConnector> implicit_connector(const Document& doc,
+                                                const EntityId& instance,
+                                                const EntityId& face);
 
 const char* to_string(MateType t);
 MateType mate_type_from_string(const std::string& s);

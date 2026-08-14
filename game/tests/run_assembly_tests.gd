@@ -31,9 +31,297 @@ func _init() -> void:
 	await test_pick_and_drag_instance(main)
 	await test_drag_resnap_with_mate(main)
 	await test_mate_error_badge_and_anchor(main)
+	await test_connector_hover_glyph(main)
+	await test_joint_from_face_flow(main)
+	await test_drag_drives_joint(main)
+	await test_snap_on_drop(main)
+	await test_explode_and_pattern(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
+
+
+## Slice H: exploded view is a way of seeing (ViewHud, beside Section), and a
+## pattern of a jointed component reuses the one joint definition.
+func test_explode_and_pattern(main) -> void:
+	print("- explode toggle and pattern around the joint")
+	var view: DocumentView = main.view
+	view.new_document()
+	var panel := _mount_panel(main)
+	var doc: SxDocument = view.doc
+	var plate: String = view.insert_primitive("box", Vector3.ZERO)
+	var bolt: String = doc.add_cylinder(3, 16, Vector3(30, 0, 0))
+	view.select_entity(bolt, "")
+	panel._place_instance()
+	await process_frame
+	var seed: String = doc.instance_list()[0]["id"]
+
+	# The toggle only appears once there is an assembly to explode.
+	main.view_hud.sync_from_view(view)
+	check(main.view_hud._explode_btn.visible, "Explode appears beside Section with parts present")
+	check(not doc.is_exploded(), "document starts assembled")
+	var home: Vector3 = doc.instance_list()[0]["translation"]
+	check(doc.explode_assembly(0.8) == 1, "explode moved the part")
+	check(doc.is_exploded(), "document reads exploded")
+	var away: Vector3 = doc.instance_list()[0]["translation"]
+	check(away.distance_to(home) > 1.0, "part separated (%.1f mm)" % away.distance_to(home))
+	main.view_hud.sync_from_view(view)
+	check(main.view_hud._explode_btn.button_pressed, "toggle reflects the exploded state")
+	check(doc.explode_assembly(0.0) == 1, "collapse moved it back")
+	var back: Vector3 = doc.instance_list()[0]["translation"]
+	check(back.distance_to(home) < 1e-4, "collapsed to the assembled placement")
+
+	# Pattern the seed around a revolute joint: one definition, many bolts.
+	panel._type_option.select(_type_index(panel, "revolute"))
+	panel._arm_mate()
+	panel._mate_face_a = _top_face(doc, plate)
+	panel._resolve_mate_b(bolt, _top_face(doc, bolt))
+	await process_frame
+	check(doc.joint_list().size() == 1, "seed joint added")
+	view.select_instance(seed)
+	panel._offset_spin.value = 6
+	panel._pattern_instance()
+	await process_frame
+	check(doc.instance_list().size() == 6, "six components after the pattern")
+	check(doc.joint_list().size() == 6, "each copy inherits the joint definition")
+	panel.queue_free()
+
+
+## Slice H: dropping a part on a connector creates the mate, no dialog.
+func test_snap_on_drop(main) -> void:
+	print("- dropping an instance on a connector fastens it")
+	var view: DocumentView = main.view
+	var vi: ViewportInteraction = main.interaction
+	view.new_document()
+	var panel := _mount_panel(main)
+	var doc: SxDocument = view.doc
+	var plate: String = view.insert_primitive("box", Vector3.ZERO)
+	var bolt: String = doc.add_cylinder(4, 20, Vector3(90, 0, 0))
+	view.select_entity(bolt, "")
+	panel._place_instance()
+	await process_frame
+	var iid: String = doc.instance_list()[0]["id"]
+	check(doc.mate_list().is_empty(), "no mates before the drop")
+
+	root.size = Vector2i(1280, 720)
+	vi.size = Vector2(1280, 720)
+	main.camera.frame_contents()
+	await process_frame
+
+	# Press on the instance where it is actually drawn (source geometry offset by
+	# the placement), travel over the plate's top face, release.
+	var bolt_bb: Dictionary = doc.measure_bbox(bolt)
+	var bolt_center: Vector3 = (bolt_bb["min"] + bolt_bb["max"]) * 0.5
+	var placement: Vector3 = doc.instance_list()[0]["translation"]
+	var from: Vector2 = vi._model_to_screen(placement + bolt_center)
+	var bb: Dictionary = doc.measure_bbox(plate)
+	var top: Vector3 = Vector3((bb["min"].x + bb["max"].x) * 0.5,
+			(bb["min"].y + bb["max"].y) * 0.5, bb["max"].z)
+	var to: Vector2 = vi._model_to_screen(top)
+	_lmb(vi, from, true)
+	if not vi._pending_instance_move:
+		check(true, "drag skipped: press did not land on the instance")
+		_lmb(vi, from, false)
+		panel.queue_free()
+		return
+	for i in range(1, 7):
+		var mm := InputEventMouseMotion.new()
+		mm.button_mask = MOUSE_BUTTON_MASK_LEFT
+		mm.position = from.lerp(to, float(i) / 6.0)
+		vi._input(mm)
+		await process_frame
+	check(vi._snap_target_face != "", "connector under the cursor is the magnet target")
+	check(vi.connector_overlay.showing(), "magnet is shown on the geometry")
+	_lmb(vi, to, false)
+	await process_frame
+
+	var mates: Array = doc.mate_list()
+	check(mates.size() == 1, "the drop created one mate")
+	if not mates.is_empty():
+		check(str(mates[0].get("type", "")) == "fastened", "and it is fastened")
+		check(str(mates[0].get("instance_b", "")) == iid, "on the dropped instance")
+	check(vi._snap_target_face == "", "magnet target cleared after the drop")
+	panel.queue_free()
+
+
+func _lmb(vi: ViewportInteraction, pos: Vector2, pressed: bool) -> void:
+	var mb := InputEventMouseButton.new()
+	mb.button_index = MOUSE_BUTTON_LEFT
+	mb.pressed = pressed
+	mb.position = pos
+	vi._input(mb)
+
+
+## Slice H: joints share the mate flow — same two faces, one type list.
+func test_joint_from_face_flow(main) -> void:
+	print("- revolute joint from the two-click face flow")
+	var view: DocumentView = main.view
+	view.new_document()
+	var panel := _mount_panel(main)
+	var doc: SxDocument = view.doc
+	var base: String = view.insert_primitive("box", Vector3.ZERO)
+	var arm: String = doc.add_box(40, 8, 8, Vector3(0, 0, 0))
+	view.select_entity(arm, "")
+	panel._place_instance()
+	await process_frame
+	check(doc.instance_list().size() == 1, "arm instanced")
+
+	var joint_idx := -1
+	for i in range(panel._type_option.item_count):
+		if panel._type_option.get_item_text(i) == "revolute":
+			joint_idx = i
+	check(joint_idx >= 0, "revolute offered in the same type list as mates")
+	panel._type_option.select(joint_idx)
+
+	var face_a := _top_face(doc, base)
+	var face_b := _top_face(doc, arm)
+	check(face_a != "" and face_b != "", "faces resolved for both sides")
+	panel._arm_mate()
+	panel._mate_face_a = face_a
+	view.select_entity(arm, face_b)
+	panel._resolve_mate_b(arm, face_b)
+	await process_frame
+
+	var joints: Array = doc.joint_list()
+	check(joints.size() == 1, "joint recorded on the document")
+	if joints.is_empty():
+		panel.queue_free()
+		return
+	check(str(joints[0].get("type", "")) == "revolute", "joint type is revolute")
+	check(str(joints[0].get("unit", "")) == "deg", "revolute is driven in degrees")
+	check(panel.visible, "assembly panel lists it")
+	var rows := 0
+	for c in panel._mates_list.get_children():
+		if c.has_meta("joint_id"):
+			rows += 1
+	check(rows == 1, "one joint row in the panel")
+
+	# Driving the same value twice lands in the same place.
+	var jid: String = str(joints[0]["id"])
+	check(doc.set_joint_value(jid, 0.5), "joint driven to 0.5 rad")
+	var once: Vector3 = doc.instance_list()[0]["translation"]
+	check(doc.set_joint_value(jid, 0.5), "joint driven again")
+	var twice: Vector3 = doc.instance_list()[0]["translation"]
+	check(once.distance_to(twice) < 1e-4,
+		"driving is absolute, not cumulative (%s vs %s)" % [str(once), str(twice)])
+	check(doc.solve_joints() == 1, "solve_joints poses one joint")
+	panel.queue_free()
+
+
+## Dragging a jointed part drives its one free value instead of moving it freely.
+func test_drag_drives_joint(main) -> void:
+	print("- dragging a jointed instance drives the joint")
+	var view: DocumentView = main.view
+	var vi: ViewportInteraction = main.interaction
+	view.new_document()
+	var panel := _mount_panel(main)
+	var doc: SxDocument = view.doc
+	var base: String = view.insert_primitive("box", Vector3.ZERO)
+	var arm: String = doc.add_box(40, 8, 8, Vector3.ZERO)
+	view.select_entity(arm, "")
+	panel._place_instance()
+	await process_frame
+	var iid: String = doc.instance_list()[0]["id"]
+
+	panel._type_option.select(_type_index(panel, "slider"))
+	panel._arm_mate()
+	panel._mate_face_a = _top_face(doc, base)
+	panel._resolve_mate_b(arm, _top_face(doc, arm))
+	await process_frame
+	var joints: Array = doc.joint_list()
+	check(joints.size() == 1, "slider joint added")
+	if joints.is_empty():
+		panel.queue_free()
+		return
+	check(str(joints[0].get("unit", "")) == "mm", "slider is driven in mm")
+	var before: float = float(joints[0].get("value", 0.0))
+
+	# Simulate the drag the interaction layer sees on release: pull along the
+	# joint axis as it appears on screen, which is what a user aims at.
+	vi._drag_instance_id = iid
+	vi._instance_grab_point = Vector3(0, 0, 10)
+	root.size = Vector2i(1280, 720)
+	vi.size = Vector2(1280, 720)
+	main.camera.frame_contents()
+	await process_frame
+	var frame: Dictionary = doc.implicit_connector("", str(joints[0]["face_a"]))
+	var origin: Vector3 = frame.get("origin", Vector3.ZERO)
+	var axis: Vector3 = (frame.get("z_dir", Vector3.UP) as Vector3).normalized()
+	var pivot: Vector2 = vi._model_to_screen(origin)
+	var axis_screen: Vector2 = (vi._model_to_screen(origin + axis) - pivot).normalized()
+	vi._press_pos = Vector2(640, 360)
+	var drove: bool = vi._drive_joint_from_drag(vi._press_pos + axis_screen * 60.0)
+	check(drove, "drag routed into the joint")
+	var after: float = float(doc.joint_list()[0].get("value", 0.0))
+	check(absf(after - before) > 1e-3, "joint value moved (%.2f → %.2f mm)" % [before, after])
+	check(doc.remove_joint(str(joints[0]["id"])), "joint removable")
+	vi._drag_instance_id = ""
+	panel.queue_free()
+
+
+func _type_index(panel: AssemblyPanel, text: String) -> int:
+	for i in range(panel._type_option.item_count):
+		if panel._type_option.get_item_text(i) == text:
+			return i
+	return 0
+
+
+## Face id of the highest planar face that offers a connector.
+func _top_face(doc: SxDocument, body: String) -> String:
+	var best := ""
+	var best_z := -1e30
+	for f in doc.get_face_ids(body):
+		var c: Dictionary = doc.implicit_connector("", f)
+		if c.is_empty():
+			continue
+		var o: Vector3 = c.get("origin", Vector3.ZERO)
+		if o.z > best_z:
+			best_z = o.z
+			best = f
+	return best
+
+
+## Wave 0.1 chrome: hovering a face shows its mate frame on the geometry.
+## Without this the connector overlay was mounted but never fed.
+func test_connector_hover_glyph(main) -> void:
+	print("- connector glyph follows the hovered face")
+	var view: DocumentView = main.view
+	var vi: ViewportInteraction = main.interaction
+	view.new_document()
+	var doc: SxDocument = view.doc
+	var body: String = doc.add_box(40, 30, 10, Vector3.ZERO)
+	view.refresh()
+	await process_frame
+	check(vi.connector_overlay != null, "connector overlay mounted")
+	check(not vi.connector_overlay.showing(), "no glyph before hover")
+
+	var faces: PackedStringArray = doc.get_face_ids(body)
+	check(faces.size() == 6, "box has six faces")
+	var planar := ""
+	for f in faces:
+		if not doc.implicit_connector("", f).is_empty():
+			planar = f
+			break
+	check(planar != "", "a face offers an implicit connector")
+	vi._update_connector_hover(planar)
+	check(vi.connector_overlay.showing(), "glyph drawn for the hovered face")
+	check(vi.connector_overlay.hovered_face() == planar, "glyph tracks that face")
+	vi._update_connector_hover("")
+	check(not vi.connector_overlay.showing(), "glyph cleared when the pointer leaves")
+
+	# The real hover path feeds it too: aim down the middle of the top face.
+	root.size = Vector2i(1280, 720)
+	vi.size = Vector2(1280, 720)
+	main.camera.frame_contents()
+	await process_frame
+	var bb: Dictionary = doc.measure_bbox(body)
+	var top: Vector3 = Vector3((bb["min"].x + bb["max"].x) * 0.5,
+			(bb["min"].y + bb["max"].y) * 0.5, bb["max"].z)
+	var screen: Vector2 = main.camera.unproject_position(main.model_space.to_global(top))
+	vi._update_hover(screen)
+	await process_frame
+	check(view.hovered_face != "", "pointer hovers a face")
+	check(vi.connector_overlay.showing(), "_update_hover feeds the overlay")
 
 
 func test_pick_and_drag_instance(main) -> void:
@@ -221,6 +509,9 @@ func test_place_and_remove(main) -> void:
 	var id: String = view.insert_primitive("box", Vector3.ZERO)
 	check(id != "", "box inserted")
 	view.select_entity(id, "")
+	await process_frame
+	# Selecting a body is what makes "Place instance" reachable in the first place.
+	check(panel.visible, "panel visible with a body selected")
 	panel._place_instance()
 	await process_frame
 
@@ -232,7 +523,10 @@ func test_place_and_remove(main) -> void:
 	panel._remove_instance(iid)
 	await process_frame
 	check(view.doc.instance_list().is_empty(), "instance removed")
-	check(not panel.visible, "panel hides after last instance removed")
+	check(panel.visible, "still reachable while the source stays selected")
+	view.clear_selection()
+	await process_frame
+	check(not panel.visible, "panel hides with no instances and nothing selected")
 	panel.queue_free()
 
 

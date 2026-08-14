@@ -75,6 +75,12 @@ var _strip_plane: Button
 var _strip_fuse: Button
 var _strip_cut: Button
 var _strip_common: Button
+var _strip_hole: Button
+var _strip_clash: Button
+var _strip_triball: Button
+var connector_overlay: ConnectorOverlay
+var triball: TriBallGizmo
+var marking_menu: MarkingMenu
 ## RMB: click = context menu, drag = orbit (peer FreeCAD / SW-like).
 var _rmb_pressed := false
 var _rmb_press_pos := Vector2.ZERO
@@ -88,6 +94,10 @@ var _pending_instance_move := false
 var _drag_instance_id := ""
 var _instance_start_xform := Transform3D.IDENTITY
 var _instance_grab_point := Vector3.ZERO
+## Snap-on-drop: the connector face under the cursor mid-drag (magnet target),
+## and the face of the dragged part that will seat onto it.
+var _snap_target_face := ""
+var _snap_source_face := ""
 ## Spacebar orientation / named-view popup (SW Spacebar / Onshape S lite).
 var _orient_popup: PopupPanel
 ## Click-a-dimension in-viewport editor (sketch SELECT tool).
@@ -186,6 +196,7 @@ func _ready() -> void:
 	focus_mode = Control.FOCUS_ALL
 	_mount_world_gizmos()
 	_mount_measure_overlay()
+	_mount_wave0_chrome()
 	_build_place_snap_ui()
 	_build_transform_hud()
 	_build_context_menu()
@@ -263,6 +274,24 @@ func _build_selection_strip() -> void:
 	_strip_common = UIIcons.button("common", "Intersect", "Keep only the common volume of the selection")
 	_strip_common.pressed.connect(func() -> void: _ctx_boolean("common"))
 	row.add_child(_strip_common)
+	_strip_hole = Button.new()
+	_strip_hole.name = "StripHole"
+	_strip_hole.text = "Hole"
+	_strip_hole.tooltip_text = "M6 through-all on the selected face / sketch points"
+	_strip_hole.pressed.connect(_ctx_hole_m6)
+	row.add_child(_strip_hole)
+	_strip_clash = Button.new()
+	_strip_clash.name = "StripClash"
+	_strip_clash.text = "Clash"
+	_strip_clash.tooltip_text = "Interference volume of two selected bodies"
+	_strip_clash.pressed.connect(_ctx_clash)
+	row.add_child(_strip_clash)
+	_strip_triball = Button.new()
+	_strip_triball.name = "StripTriBall"
+	_strip_triball.text = "TriBall"
+	_strip_triball.tooltip_text = "Rotate-copy about a ring (primary handle)"
+	_strip_triball.pressed.connect(_ctx_triball)
+	row.add_child(_strip_triball)
 	_strip_fillet = Button.new()
 	_strip_fillet.text = "Fillet"
 	_strip_fillet.pressed.connect(func() -> void: _ctx_fillet())
@@ -767,6 +796,202 @@ func _mount_world_gizmos() -> void:
 	world_gizmos = WorldGizmos.new()
 	world_gizmos.name = "WorldGizmos"
 	model_space.add_child(world_gizmos)
+
+
+func _mount_wave0_chrome() -> void:
+	if model_space != null and model_space.get_node_or_null("ConnectorOverlay") == null:
+		connector_overlay = ConnectorOverlay.new()
+		connector_overlay.name = "ConnectorOverlay"
+		connector_overlay.view = view
+		model_space.add_child(connector_overlay)
+	elif model_space != null:
+		connector_overlay = model_space.get_node("ConnectorOverlay") as ConnectorOverlay
+		if connector_overlay != null:
+			connector_overlay.view = view
+	if model_space != null and model_space.get_node_or_null("TriBallGizmo") == null:
+		triball = TriBallGizmo.new()
+		triball.name = "TriBallGizmo"
+		triball.view = view
+		triball.status.connect(func(t: String) -> void: status.emit(t))
+		triball.copy_committed.connect(_on_triball_copy)
+		model_space.add_child(triball)
+	elif model_space != null:
+		triball = model_space.get_node("TriBallGizmo") as TriBallGizmo
+	if get_node_or_null("MarkingMenu") == null:
+		marking_menu = MarkingMenu.new()
+		marking_menu.name = "MarkingMenu"
+		add_child(marking_menu)
+		marking_menu.verb_picked.connect(_on_marking_verb)
+		marking_menu.pick_chosen.connect(_on_marking_pick)
+	else:
+		marking_menu = get_node("MarkingMenu") as MarkingMenu
+
+
+func _ctx_hole_m6() -> void:
+	if view == null or view.selected_body == "":
+		status.emit("Hole: select a body")
+		return
+	var info: Dictionary = view.feature_info(view.selected_body)
+	var target := str(info.get("id", ""))
+	if target == "":
+		status.emit("Hole: body is not on the timeline")
+		return
+	var pos := Vector3(20, 20, 8)
+	if view.selected_face != "":
+		var mid: Variant = view.doc.face_midpoint(view.selected_face)
+		if mid is Vector3:
+			pos = mid
+	var positions := PackedVector3Array()
+	positions.append(pos)
+	var hid := view.doc.graph_add_holes(target, "simple", positions, Vector3(0, 0, -1), 6.0, 0.0)
+	status.emit("M6 hole" if hid != "" else "Hole failed")
+	view._after_mutation()
+
+
+func _ctx_clash() -> void:
+	if view == null or view.selected_bodies.size() < 2:
+		status.emit("Clash: select two bodies")
+		return
+	var v: float = view.doc.interference_volume(view.selected_bodies[0], view.selected_bodies[1])
+	if v < 0.0:
+		status.emit("Clash: not solids")
+		return
+	status.emit("Interference %.1f mm³" % v)
+
+
+func _ctx_triball() -> void:
+	if view == null or view.selected_body == "" or triball == null:
+		status.emit("TriBall: select a body")
+		return
+	var bb: Dictionary = view.doc.measure_bbox(view.selected_body)
+	var mn: Vector3 = bb.get("min", Vector3.ZERO)
+	var mx: Vector3 = bb.get("max", Vector3.ONE)
+	var mid := (mn + mx) * 0.5
+	triball.begin(mid, Vector3.UP, 6)
+	status.emit("TriBall — drag the ring, then click TriBall again to commit")
+
+
+## A rib follows a sketch profile, so it needs one: the most recent sketch on
+## the timeline, which is the sketch the user just drew and left.
+func _ctx_rib() -> void:
+	if view == null or view.selected_body == "":
+		status.emit("Rib: select a body")
+		return
+	var info: Dictionary = view.feature_info(view.selected_body)
+	var target := str(info.get("id", ""))
+	if target == "":
+		status.emit("Rib: body is not on the timeline")
+		return
+	var sketch := ""
+	for f in view.doc.graph_features():
+		if str(f.get("type", "")) == "sketch":
+			sketch = str(f.get("id", ""))
+	if sketch == "":
+		status.emit("Rib: draw an open profile with Sketch first")
+		return
+	var hid := view.doc.graph_add_rib(target, sketch, 2.0, 8.0)
+	status.emit("Rib along the sketch" if hid != "" else "Rib failed")
+	view._after_mutation()
+
+
+func _ctx_in_context() -> void:
+	if view == null or view.selected_body == "":
+		status.emit("In-context: select the neighbor body")
+		return
+	var ctx: String = view.doc.capture_context(view.selected_body, "Neighbor")
+	if ctx == "":
+		status.emit("In-context: capture failed")
+		return
+	var fid: String = view.doc.graph_add_in_context(ctx, 20.0, 20.0)
+	status.emit("In-context pad from the neighbor" if fid != "" else "In-context pad failed")
+	view._after_mutation()
+
+
+func _ctx_convert_sheet() -> void:
+	if view == null or view.selected_body == "":
+		status.emit("Convert sheet: select a thin solid")
+		return
+	var info: Dictionary = view.feature_info(view.selected_body)
+	var target := str(info.get("id", ""))
+	if target == "":
+		status.emit("Convert sheet: body is not on the timeline")
+		return
+	var fid: String = view.doc.graph_add_convert_sheet(target)
+	status.emit("Converted to sheet metal" if fid != "" else "Convert sheet failed — not thin enough")
+	view._after_mutation()
+
+
+func _ctx_weld() -> void:
+	if view == null or view.selected_edge == "":
+		status.emit("Weld: select an edge")
+		return
+	var id: String = view.doc.add_weld(view.selected_edge, "fillet", 3.0)
+	status.emit("Weld symbol on the sheet" if id != "" else "Weld failed")
+	view._after_mutation()
+
+
+func _on_triball_copy(count: int, angle_rad: float) -> void:
+	if view == null or view.selected_body == "" or count < 2:
+		return
+	var info: Dictionary = view.feature_info(view.selected_body)
+	var target := str(info.get("id", ""))
+	if target == "":
+		return
+	var bb: Dictionary = view.doc.measure_bbox(view.selected_body)
+	var mn: Vector3 = bb.get("min", Vector3.ZERO)
+	var mx: Vector3 = bb.get("max", Vector3.ONE)
+	var mid := (mn + mx) * 0.5
+	var total := angle_rad if absf(angle_rad) > 1e-3 else TAU
+	if view.doc.has_method("circular_pattern"):
+		view.doc.circular_pattern(view.selected_body, mid, Vector3.UP, count, total)
+	status.emit("TriBall copied %d" % count)
+	view._after_mutation()
+
+
+func _on_marking_verb(verb: String) -> void:
+	match verb:
+		"Fillet":
+			_ctx_fillet()
+		"Hole":
+			_ctx_hole_m6()
+		"Clash":
+			_ctx_clash()
+		"TriBall":
+			_ctx_triball()
+		"Rib":
+			_ctx_rib()
+		"In-context pad":
+			_ctx_in_context()
+		"Convert sheet":
+			_ctx_convert_sheet()
+		"Weld":
+			_ctx_weld()
+		"Look at":
+			_ctx_look_at()
+		"Print check":
+			_ctx_print_check()
+		_:
+			status.emit(verb)
+
+
+func _on_marking_pick(entity_id: String) -> void:
+	if view == null or entity_id == "":
+		return
+	view.select_entity(entity_id, "")
+	status.emit("Picked " + entity_id.substr(0, 8))
+
+
+func _open_marking_menu(screen_pos: Vector2) -> void:
+	if marking_menu == null:
+		return
+	var verbs := PackedStringArray(["Fillet", "Hole", "TriBall", "Rib", "In-context pad", "Convert sheet", "Weld", "Print check", "Look at"])
+	if view != null and view.selected_bodies.size() >= 2:
+		verbs.append("Clash")
+	var picks: Array = []
+	if view != null and view.selected_face != "" and view.selected_body != "":
+		picks.append({"id": view.selected_face, "label": "Face " + view.selected_face.substr(0, 8)})
+		picks.append({"id": view.selected_body, "label": "Body " + view.selected_body.substr(0, 8)})
+	marking_menu.show_for(screen_pos, verbs, picks)
 
 
 func _mount_measure_overlay() -> void:
@@ -1495,6 +1720,7 @@ func _update_hover(screen_pos: Vector2) -> void:
 		_last_hover_key = ""
 		mouse_default_cursor_shape = Control.CURSOR_ARROW
 		_measure_hover_miss()
+		_update_connector_hover("")
 		return
 	# Selected body (about to move): same marks as place — touch others to
 	# plant X; otherwise dim to the selection's nearest corner.
@@ -1508,6 +1734,7 @@ func _update_hover(screen_pos: Vector2) -> void:
 	if hit.is_empty():
 		view.clear_hover()
 		_measure_hover_miss()
+		_update_connector_hover("")
 		if _last_hover_key != "":
 			_last_hover_key = ""
 			mouse_default_cursor_shape = Control.CURSOR_ARROW
@@ -1518,6 +1745,7 @@ func _update_hover(screen_pos: Vector2) -> void:
 	var hit_pt: Vector3 = hit.get("point", Vector3.ZERO)
 	view.set_hover(body, face, edge)
 	_update_measure_hover(body, hit_pt)
+	_update_connector_hover(face)
 	var key := "%s|%s|%s|%.3f,%.3f,%.3f" % [body, face, edge, hit_pt.x, hit_pt.y, hit_pt.z]
 	if key == _last_hover_key:
 		return
@@ -1531,6 +1759,129 @@ func _update_hover(screen_pos: Vector2) -> void:
 		status.emit("Face — click selects body first, click again for face · then Pull arrow")
 	else:
 		status.emit("Body — click to select · drag empty space / Alt / two-finger to orbit")
+
+
+## Face of the dragged part that will seat on the drop target: the connector
+## face nearest where the user grabbed it.
+func _grabbed_connector_face(instance_id: String, grab_point: Vector3) -> String:
+	if view == null:
+		return ""
+	var source := ""
+	for inst in view.doc.instance_list():
+		if str(inst.get("id", "")) == instance_id:
+			source = str(inst.get("source_body", ""))
+	if source == "":
+		return ""
+	var best := ""
+	var best_d := 1e30
+	for f in view.doc.get_face_ids(source):
+		var c: Dictionary = view.doc.implicit_connector(instance_id, f)
+		if c.is_empty():
+			continue
+		var d: float = (c.get("origin", Vector3.ZERO) as Vector3).distance_to(grab_point)
+		if d < best_d:
+			best_d = d
+			best = f
+	return best
+
+
+## Light the connector under the cursor while dragging a part over it.
+func _update_snap_target(pos: Vector2) -> void:
+	_snap_target_face = ""
+	if view == null or _snap_source_face == "":
+		_update_connector_hover("")
+		return
+	var ray := _model_ray(pos)
+	var hit: Dictionary = view.pick_info(ray[0], ray[1])
+	var face := str(hit.get("face", ""))
+	if face == "" or face == _snap_source_face:
+		_update_connector_hover("")
+		return
+	if view.doc.implicit_connector("", face).is_empty():
+		_update_connector_hover("")
+		return
+	_snap_target_face = face
+	_update_connector_hover(face)
+
+
+## Release over a connector: fasten the dragged part to it, the way dropping a
+## bolt into a hole should behave. Returns false when there was no target.
+func _snap_on_drop() -> bool:
+	if _snap_target_face == "" or _snap_source_face == "" or _drag_instance_id == "":
+		return false
+	var mid: String = view.doc.add_mate("fastened", "", _snap_target_face, _drag_instance_id,
+			_snap_source_face, 0.0, false, "Snap")
+	_snap_target_face = ""
+	_update_connector_hover("")
+	if mid == "":
+		return false
+	var solved: bool = view.doc.solve_mates()
+	view.refresh()
+	status.emit("Snapped — fastened to the connector" if solved
+			else "Snapped — solve FAILED")
+	return true
+
+
+## The joint driving `instance_id`, or {} when the part is free.
+func _joint_for_instance(instance_id: String) -> Dictionary:
+	if view == null or instance_id == "":
+		return {}
+	for j in view.doc.joint_list():
+		if str(j.get("instance_b", "")) == instance_id:
+			return j
+	return {}
+
+
+## Convert an instance drag into the joint's one free value: mm along the axis
+## for sliders, degrees about it for revolutes. Returns false when the part has
+## no joint, so the caller falls back to a free move.
+func _drive_joint_from_drag(pos: Vector2) -> bool:
+	var joint := _joint_for_instance(_drag_instance_id)
+	if joint.is_empty():
+		return false
+	var frame: Dictionary = view.doc.implicit_connector("", str(joint.get("face_a", "")))
+	if frame.is_empty():
+		return false
+	var origin: Vector3 = frame.get("origin", Vector3.ZERO)
+	var axis: Vector3 = (frame.get("z_dir", Vector3.UP) as Vector3).normalized()
+	# Measure the gesture against the axis as drawn on screen, so a vertical
+	# slider reads a vertical drag and a hinge reads a sweep around its pin.
+	var pivot := _model_to_screen(origin)
+	var axis_screen := _model_to_screen(origin + axis) - pivot
+	var unit := str(joint.get("unit", "mm"))
+	var value := float(joint.get("value", 0.0))
+	if unit == "mm":
+		if axis_screen.length() < 0.5:
+			return false  # axis points at the camera: nothing to drag along
+		var mm_per_px := 1.0 / axis_screen.length()
+		value += (pos - _press_pos).dot(axis_screen.normalized()) * mm_per_px
+	else:
+		var from := _press_pos - pivot
+		var to := pos - pivot
+		if from.length() < 4.0 or to.length() < 4.0:
+			return false  # too close to the pin to read an angle
+		var swept := from.angle_to(to)
+		# Screen Y grows downward, and a receding axis sweeps the other way.
+		if axis.dot(-camera.global_transform.basis.z) > 0.0:
+			swept = -swept
+		value += swept
+	if not view.doc.set_joint_value(str(joint.get("id", "")), value):
+		return false
+	view.refresh()
+	var shown := rad_to_deg(value) if unit == "deg" else value
+	status.emit("%s %.1f %s" % [str(joint.get("name", "Joint")), shown, unit])
+	return true
+
+
+## Onshape-style: the mate frame appears on the face under the cursor, so mates
+## and joints are picked from geometry rather than from a list of frames.
+func _update_connector_hover(face_id: String, instance_id := "") -> void:
+	if connector_overlay == null:
+		return
+	if face_id == "":
+		connector_overlay.clear_hover()
+		return
+	connector_overlay.set_hover(instance_id, face_id)
 
 
 func _update_measure_hover(body: String, hit_point: Vector3) -> void:
@@ -1806,6 +2157,8 @@ func _on_press(pos: Vector2) -> void:
 			_pending_instance_move = true
 			_drag_instance_id = iid
 			_instance_grab_point = ihit["point"]
+			_snap_source_face = _grabbed_connector_face(iid, ihit["point"])
+			_snap_target_face = ""
 			var inode := view.instance_node(iid)
 			_instance_start_xform = inode.transform if inode != null else Transform3D.IDENTITY
 		_press_empty = false
@@ -2034,8 +2387,13 @@ func _on_drag(pos: Vector2) -> void:
 			if inode != null:
 				inode.transform = Transform3D(_instance_start_xform.basis,
 						_instance_start_xform.origin + delta)
-			status.emit("Move instance Δ (%.1f, %.1f) — release re-solves mates"
-					% [delta.x, delta.y])
+			# Magnet: a connector under the cursor lights up and claims the drop.
+			_update_snap_target(pos)
+			if _snap_target_face != "":
+				status.emit("Release to fasten onto the highlighted connector")
+			else:
+				status.emit("Move instance Δ (%.1f, %.1f) — release re-solves mates"
+						% [delta.x, delta.y])
 
 
 func _draw() -> void:
@@ -2290,6 +2648,22 @@ func _on_release(pos: Vector2) -> void:
 			return
 		DragMode.MOVE_INSTANCE:
 			var inode := view.instance_node(_drag_instance_id)
+			# Dropped on a connector: fasten there instead of leaving it loose.
+			if not was_click and inode != null and _snap_on_drop():
+				_drag_mode = DragMode.NONE
+				_drag_instance_id = ""
+				_box_drag = false
+				_additive_click = false
+				_press_travel = 0.0
+				return
+			# A jointed part has one degree of freedom; the drag drives it.
+			if not was_click and inode != null and _drive_joint_from_drag(pos):
+				_drag_mode = DragMode.NONE
+				_drag_instance_id = ""
+				_box_drag = false
+				_additive_click = false
+				_press_travel = 0.0
+				return
 			if not was_click and inode != null:
 				var rot := _instance_rotation(_drag_instance_id)
 				if view.doc.set_instance_transform(_drag_instance_id,
@@ -2469,6 +2843,11 @@ func _gui_key(event: InputEventKey) -> bool:
 				var ids := _selected_body_ids()
 				view.isolate(ids)
 				status.emit("All shown" if ids.is_empty() else "Isolated")
+				return true
+		KEY_S:
+			if not event.ctrl_pressed and _place_kind == "" \
+					and (sketch_mode == null or not sketch_mode.active):
+				_open_marking_menu(get_global_mouse_position())
 				return true
 		KEY_SPACE:
 			# SolidWorks Spacebar / Onshape S-lite: orientation + named views.
@@ -3188,6 +3567,9 @@ func _refresh_selection_strip() -> void:
 	_strip_cut.visible = multi_body
 	_strip_common.visible = multi_body
 	_strip_fillet.visible = not has_instance
+	_strip_hole.visible = not has_instance
+	_strip_clash.visible = multi_body
+	_strip_triball.visible = not has_instance
 	_strip_sketch.visible = not has_instance and view.selected_face != ""
 	_strip_look.visible = not has_instance and view.selected_face != ""
 	_strip_plane.visible = not has_instance and view.selected_face != ""
@@ -3327,6 +3709,14 @@ func _ctx_isolate() -> void:
 
 func _ctx_delete() -> void:
 	_delete_selection()
+
+
+func _ctx_print_check() -> void:
+	if view == null or view.doc == null:
+		status.emit("Print check: no document")
+		return
+	var r: Dictionary = view.doc.print_analyze(view.selected_body)
+	status.emit(str(r.get("digest", "Print check")))
 
 
 func _ctx_look_at() -> void:

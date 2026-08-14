@@ -33,7 +33,8 @@ static std::optional<sx::ConstraintType> parse_constraint_type(const String& s) 
     using CT = sx::ConstraintType;
     for (CT ct : {CT::Coincident, CT::Horizontal, CT::Vertical, CT::Parallel,
                   CT::Perpendicular, CT::PointOnLine, CT::Tangent, CT::Equal,
-                  CT::Distance, CT::Radius, CT::Angle}) {
+                  CT::Distance, CT::Radius, CT::Angle, CT::Concentric, CT::Symmetric,
+                  CT::Midpoint, CT::Fix, CT::Collinear}) {
         if (t == sx::to_string(ct)) return ct;
     }
     return std::nullopt;
@@ -230,6 +231,14 @@ bool SxSketch::set_constraint_value(const String& id, double value) {
     return sketch_->set_constraint_value(parse_id(id), value);
 }
 
+bool SxSketch::set_constraint_weak(const String& id, bool weak) {
+    return sketch_->set_constraint_weak(parse_id(id), weak);
+}
+
+int SxSketch::drop_weak_constraints() {
+    return sketch_->drop_weak_constraints();
+}
+
 PackedStringArray SxSketch::constraint_ids() const {
     PackedStringArray out;
     for (const auto& c : sketch_->constraints()) out.push_back(to_gd(c.id.str()));
@@ -253,6 +262,7 @@ Dictionary SxSketch::constraint_info(const String& id) const {
         if (c.id != cid) continue;
         out["type"] = to_gd(sx::to_string(c.type));
         out["value"] = c.value;
+        out["weak"] = c.weak;
         Array refs;
         for (const auto& r : c.refs) {
             Dictionary ref;
@@ -310,6 +320,8 @@ void SxSketch::_bind_methods() {
     ClassDB::bind_method(D_METHOD("add_constraint", "type", "refs", "value"), &SxSketch::add_constraint);
     ClassDB::bind_method(D_METHOD("remove_constraint", "id"), &SxSketch::remove_constraint);
     ClassDB::bind_method(D_METHOD("set_constraint_value", "id", "value"), &SxSketch::set_constraint_value);
+    ClassDB::bind_method(D_METHOD("set_constraint_weak", "id", "weak"), &SxSketch::set_constraint_weak);
+    ClassDB::bind_method(D_METHOD("drop_weak_constraints"), &SxSketch::drop_weak_constraints);
     ClassDB::bind_method(D_METHOD("constraint_ids"), &SxSketch::constraint_ids);
     ClassDB::bind_method(D_METHOD("constraint_info", "id"), &SxSketch::constraint_info);
     ClassDB::bind_method(D_METHOD("solve"), &SxSketch::solve);

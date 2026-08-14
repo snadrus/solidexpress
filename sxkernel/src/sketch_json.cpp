@@ -42,11 +42,13 @@ struct SketchSerde {
             using CT = ConstraintType;
             for (CT ct : {CT::Coincident, CT::Horizontal, CT::Vertical, CT::Parallel,
                           CT::Perpendicular, CT::PointOnLine, CT::Tangent, CT::Equal,
-                          CT::Distance, CT::Radius, CT::Angle}) {
+                          CT::Distance, CT::Radius, CT::Angle, CT::Concentric,
+                          CT::Symmetric, CT::Midpoint, CT::Fix, CT::Collinear}) {
                 if (t == to_string(ct)) c.type = ct;
             }
             c.value = jc.value("value", 0.0);
             c.driving = jc.value("driving", true);
+            c.weak = jc.value("weak", false);
             for (const auto& jr : jc.at("refs")) {
                 PointRef r;
                 r.entity = EntityId::from_string(jr.at("entity").get<std::string>());
@@ -109,6 +111,7 @@ json sketch_to_json(const Sketch& sk) {
         jc["type"] = to_string(c.type);
         jc["value"] = c.value;
         jc["driving"] = c.driving;
+        jc["weak"] = c.weak;
         json refs = json::array();
         for (const auto& r : c.refs)
             refs.push_back({{"entity", r.entity.str()}, {"role", role_name(r.role)}});

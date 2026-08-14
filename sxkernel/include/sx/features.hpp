@@ -28,11 +28,11 @@ enum class FeatureType {
     Primitive,  // params: {kind: "box|cylinder|sphere|cone|torus", a, b, c,
                 //          origin: [x,y,z], optional z_dir/x_dir: [x,y,z]}
     Sketch,     // embedded sketch; no geometry output
-    Extrude,    // params: {sketch: <feature uuid>, distance, symmetric,
-                //          op: "new|fuse|cut", target: <feature uuid, for fuse/cut>}
+    Extrude,    // params: {sketch, distance, symmetric, end: "blind|through_all|to_face|to_next|symmetric",
+                //          op: "new|fuse|cut", target, optional to_face: <face uuid>}
     Revolve,    // params: {sketch, axis_point: [u,v], axis_dir: [u,v], angle, op, target}
     Boolean,    // params: {op: "fuse|cut|common", target: <fid>, tool: <fid>}
-    Fillet,     // params: {target: <fid>, radius, edges: [1-based map indices]}
+    Fillet,     // params: {target, radius, optional radius2 (variable), edges: [1-based]}
     Chamfer,    // params: {target: <fid>, distance, edges: [...]}
     Hole,       // params: {target: <fid>, type: "simple|counterbore|countersink",
                 //          position: [x,y,z], direction: [x,y,z], diameter, depth
@@ -61,6 +61,21 @@ enum class FeatureType {
                 // BASE feature: file is re-read on regenerate (document dep).
     ImportStl,  // params: {path: string, scale: double (default 1.0)}
                 // BASE feature: mesh import as a single body; re-read on regen.
+    DirectEdit, // params: {target: <fid>, kind: "push_pull|move_face|offset_face|delete_face",
+                //          face: <face uuid> OR face_index: int,
+                //          distance, direction: [x,y,z]}
+    Rib,        // params: {target, thickness, height, origin, direction}
+    Thicken,    // params: {target, offset}
+    Wrap,       // params: {target, sketch, depth}
+    Flange,     // params: {target, length, thickness, k_factor, radius, angle_rad}
+    Knit,       // params: {targets: [fid, ...]} — fuse listed bodies
+    ReplaceFace,// params: {target, face_index, offset}
+    FrameMember,// params: {path: [[x,y,z],...], profile_w, profile_h}
+    InContext,  // params: {context: <id>, a, b} — height from the snapshot
+    ConvertSheet,// params: {target} — tag a thin solid as sheet metal
+    UserFeature,// params: {recipe, steps: [...], plus recipe args}
+    Weld,       // params: {edge, symbol, size} — cosmetic, no solid output
+    Sketch3D,   // params: {points: [[x,y,z],...]} — feeds Path / Sweep
 };
 
 const char* to_string(FeatureType t);

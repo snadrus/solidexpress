@@ -1591,6 +1591,8 @@ func click(pos2: Vector2) -> void:
 					sketch.set_construction(lid, true)
 				_infer_line(lid, a, b)
 				_redraw()
+				# Propose chips follow new geometry even when infer did not solve.
+				selection_actions_needed.emit()
 		Tool.RECT:
 			_click_rect(pos2)
 		Tool.CIRCLE:
@@ -1871,6 +1873,94 @@ func run_solve() -> Dictionary:
 			_conflict_entities[str(ref["entity"])] = true
 	solve_updated.emit(last_dofs, last_solve_status, last_conflicting.size())
 	return res
+
+
+func auto_define() -> int:
+	if sketch == null:
+		return 0
+	var n := 0
+	for cid in sketch.constraint_ids():
+		var info: Dictionary = sketch.constraint_info(cid)
+		if info.get("weak", false):
+			if sketch.set_constraint_weak(cid, false):
+				n += 1
+	run_solve()
+	_redraw()
+	status.emit("Auto-define promoted %d dim(s) — DOF %d" % [n, last_dofs])
+	return n
+
+
+func promote_propose(verb: String = "parallel") -> String:
+	if sketch == null:
+		return ""
+	var want := verb.trim_suffix("?")
+	var lines: Array = []
+	for eid in sketch.entity_ids():
+		var info: Dictionary = sketch.entity_info(eid)
+		if str(info.get("type", "")) == "line":
+			lines.append({"id": eid, "start": info["start"], "end": info["end"]})
+	for i in range(lines.size()):
+		for j in range(i + 1, lines.size()):
+			var da: Vector2 = (lines[i]["end"] as Vector2) - (lines[i]["start"] as Vector2)
+			var db: Vector2 = (lines[j]["end"] as Vector2) - (lines[j]["start"] as Vector2)
+			if da.length() < 1e-6 or db.length() < 1e-6:
+				continue
+			var la := da.length()
+			var lb := db.length()
+			da = da.normalized()
+			db = db.normalized()
+			var dot := absf(da.dot(db))
+			var match_verb := ""
+			if want == "parallel" and dot > 0.98:
+				match_verb = "parallel"
+			elif want == "perpendicular" and dot < 0.15:
+				match_verb = "perpendicular"
+			elif want == "equal" and la > 1e-6 and lb > 1e-6 and absf(la - lb) / maxf(la, lb) < 0.05:
+				match_verb = "equal"
+			if match_verb == "":
+				continue
+			var refs := [
+				{"entity": lines[i]["id"], "role": "self"},
+				{"entity": lines[j]["id"], "role": "self"},
+			]
+			var cid: String = sketch.add_constraint(match_verb, refs, 0.0)
+			run_solve()
+			_redraw()
+			status.emit("Proposed %s" % match_verb)
+			return cid
+	status.emit("Nothing to propose")
+	return ""
+
+
+## On-canvas “parallel?” / “equal?” chips from the live sketch (Wave 3.9).
+func propose_verbs() -> Array:
+	var verbs: Array = []
+	if sketch == null:
+		return verbs
+	var lines: Array = []
+	for eid in sketch.entity_ids():
+		var info: Dictionary = sketch.entity_info(eid)
+		if str(info.get("type", "")) == "line":
+			lines.append({"start": info["start"], "end": info["end"]})
+	for i in range(lines.size()):
+		for j in range(i + 1, lines.size()):
+			var da: Vector2 = (lines[i]["end"] as Vector2) - (lines[i]["start"] as Vector2)
+			var db: Vector2 = (lines[j]["end"] as Vector2) - (lines[j]["start"] as Vector2)
+			if da.length() < 1e-6 or db.length() < 1e-6:
+				continue
+			var la := da.length()
+			var lb := db.length()
+			da = da.normalized()
+			db = db.normalized()
+			var dot := absf(da.dot(db))
+			if dot > 0.98 and "parallel?" not in verbs:
+				verbs.append("parallel?")
+			elif dot < 0.15 and "perpendicular?" not in verbs:
+				verbs.append("perpendicular?")
+			if la > 1e-6 and lb > 1e-6 and absf(la - lb) / maxf(la, lb) < 0.05 \
+					and "equal?" not in verbs:
+				verbs.append("equal?")
+	return verbs
 
 
 ## New line: add horizontal/vertical when near axis-aligned, and coincident

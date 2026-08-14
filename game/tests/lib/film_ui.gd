@@ -110,6 +110,33 @@ static func click_button(ctx: FilmContext, text: String, cue: Dictionary = {}) -
 	await click_control(ctx, b, c)
 
 
+## Press S to raise the marking menu, then click one of its verbs. This is the
+## overflow path for verbs that are not on the SelectionStrip.
+static func marking_verb(ctx: FilmContext, verb: String) -> bool:
+	var ix = ctx.main.interaction
+	if ix == null:
+		_fail("interaction missing for the marking menu")
+		return false
+	var key := InputEventKey.new()
+	key.keycode = KEY_S
+	key.physical_keycode = KEY_S
+	key.pressed = true
+	ix._input(key)
+	await wait_frames(ctx.tree, 3)
+	var menu: MarkingMenu = ix.marking_menu
+	if menu == null or not menu.visible:
+		_fail("marking menu did not open on S")
+		return false
+	var button := find_button(menu, verb)
+	if button == null:
+		menu.hide()
+		_fail("marking menu has no %s verb" % verb)
+		return false
+	await click_control(ctx, button, FilmUICues.alert("S", "%s from the marking menu" % verb))
+	await wait_frames(ctx.tree, 2)
+	return true
+
+
 ## Hold/release Ctrl so Input.is_key_pressed matches a real modifier chord.
 static func _set_ctrl_held(held: bool) -> void:
 	var ke := InputEventKey.new()
@@ -155,6 +182,34 @@ static func viewport_click(
 	if ctrl:
 		_set_ctrl_held(false)
 	await wait_frames(ctx.tree, 2)
+
+
+## Press, travel, release through Interaction — the drag path a user takes.
+static func viewport_drag(ctx: FilmContext, from: Vector2, to: Vector2, cue: Dictionary,
+		steps: int = 6) -> void:
+	var ix = ctx.main.interaction
+	if ix == null:
+		_fail("interaction missing for viewport drag")
+		return
+	await _cue_click(ctx, from, cue)
+	var down := InputEventMouseButton.new()
+	down.button_index = MOUSE_BUTTON_LEFT
+	down.pressed = true
+	down.position = from
+	ix._input(down)
+	await wait_frames(ctx.tree, 1)
+	for i in range(1, steps + 1):
+		var mm := InputEventMouseMotion.new()
+		mm.button_mask = MOUSE_BUTTON_MASK_LEFT
+		mm.position = from.lerp(to, float(i) / steps)
+		ix._input(mm)
+		await wait_frames(ctx.tree, 1)
+	var up := InputEventMouseButton.new()
+	up.button_index = MOUSE_BUTTON_LEFT
+	up.pressed = false
+	up.position = to
+	ix._input(up)
+	await wait_frames(ctx.tree, 3)
 
 
 static func model_to_screen(ctx: FilmContext, model_pt: Vector3) -> Vector2:
@@ -223,6 +278,7 @@ static func enter_sketch(ctx: FilmContext) -> void:
 	if sm != null and sm.active:
 		await wait_frames(ctx.tree, 2)
 		return
+	await ensure_create_rail(ctx)
 	var b := find_palette_sketch_button(ctx.main)
 	if not await click_control(ctx, b, FilmUICues.toolbar_sketch()):
 		return
@@ -475,7 +531,21 @@ static func sweep_along_path_ui(ctx: FilmContext) -> void:
 		ctx.chrome.clear_keys()
 
 
+static func ensure_create_rail(ctx: FilmContext) -> void:
+	# After a place, the body stays selected and the palette hides. Click empty
+	# viewport so the next create verb is visible — same path a user takes.
+	var pal: CanvasItem = ctx.main.palette if ctx.main != null else null
+	if pal != null and pal.is_visible_in_tree():
+		return
+	await viewport_click(ctx, viewport_empty_click_pos(ctx),
+			FilmUICues.alert("Click", "Clear selection — show create rail"))
+	if ctx.main != null and ctx.main.has_method("_update_panel_visibility"):
+		ctx.main._update_panel_visibility()
+	await wait_frames(ctx.tree, 2)
+
+
 static func place_primitive(ctx: FilmContext, kind: String) -> void:
+	await ensure_create_rail(ctx)
 	var b := find_palette_button(ctx.main, kind)
 	if not await click_control(ctx, b, FilmUICues.place_primitive(kind)):
 		return

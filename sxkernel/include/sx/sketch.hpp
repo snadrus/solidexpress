@@ -46,6 +46,11 @@ enum class ConstraintType {
     Distance,       // point, point, value
     Radius,         // circle|arc, value
     Angle,          // line, line, value (radians)
+    Concentric,     // circle|arc, circle|arc (centers coincident)
+    Symmetric,      // point, point, line (mirror about line)
+    Midpoint,       // point, line
+    Fix,            // point (lock x,y)
+    Collinear,      // line, line (or three points)
 };
 
 const char* to_string(ConstraintType t);
@@ -61,6 +66,7 @@ struct SketchConstraint {
     std::vector<PointRef> refs;   // interpretation depends on type
     double value = 0.0;           // for dimensional constraints
     bool driving = true;
+    bool weak = false;  // Creo-style: yields when a strong dim conflicts / Relax
 };
 
 // Plane the sketch lives on (kernel/model space, Z-up world).
@@ -99,6 +105,9 @@ public:
     const std::vector<SketchConstraint>& constraints() const { return constraints_; }
     // Update a dimension value (does not re-solve).
     bool set_constraint_value(const EntityId& id, double value);
+    bool set_constraint_weak(const EntityId& id, bool weak);
+    // Drop every weak constraint (Inventor Relax / conflict yield).
+    int drop_weak_constraints();
 
     // --- parameter access ---
     double param(size_t index) const { return params_[index]; }
