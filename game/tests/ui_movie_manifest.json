@@ -263,5 +263,7 @@
   {"id": "mesh_boolean", "title": "Boolean vs a mesh body", "script": "res://tests/films/film_mesh_boolean.gd", "enabled": true, "quit_after": 700},
   {"id": "gear_mate", "title": "Gear ratio on a joint", "script": "res://tests/films/film_gear_mate.gd", "enabled": true, "quit_after": 700},
   {"id": "pmi_survives_regen", "title": "3D dim survives regen", "script": "res://tests/films/film_pmi_survives_regen.gd", "enabled": true, "quit_after": 700},
-  {"id": "board_in_box", "title": "IDF board in an enclosure", "script": "res://tests/films/film_board_in_box.gd", "enabled": true, "quit_after": 700}
+  {"id": "board_in_box", "title": "IDF board in an enclosure", "script": "res://tests/films/film_board_in_box.gd", "enabled": true, "quit_after": 700},
+  {"id": "print_thin_wall", "title": "Print check flags a thin plate", "script": "res://tests/films/film_print_thin_wall.gd", "enabled": true, "quit_after": 800},
+  {"id": "print_overhang_orient", "title": "Orient lays a tall box on the bed", "script": "res://tests/films/film_print_overhang_orient.gd", "enabled": true, "quit_after": 800}
 ]

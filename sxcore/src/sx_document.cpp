@@ -29,6 +29,7 @@
 #include "sx/fea.hpp"
 #include "sx/joints.hpp"
 #include "sx/pdf.hpp"
+#include "sx/print.hpp"
 #include "sx/query.hpp"
 #include "sx/rules.hpp"
 #include "sx/sheet_metal.hpp"
@@ -1510,6 +1511,50 @@ String SxDocument::import_dxf(const String& path) {
     return id.is_null() ? String() : to_gd(id.str());
 }
 
+static Dictionary report_to_dict(const sx::PrintReport& r) {
+    Dictionary d;
+    d["min_wall"] = r.min_wall;
+    d["overhang_area"] = r.overhang_area;
+    d["height"] = r.height;
+    d["bbox_x"] = r.bbox_x;
+    d["bbox_y"] = r.bbox_y;
+    d["fits_bed"] = r.fits_bed;
+    d["wall_ok"] = r.wall_ok;
+    d["overhang_ok"] = r.overhang_ok;
+    d["digest"] = to_gd(r.digest);
+    return d;
+}
+
+Dictionary SxDocument::print_analyze(const String& body_id) {
+    sx::EntityId id = parse_id(body_id);
+    if (id.is_null() && !doc_->body_ids().empty()) id = doc_->body_ids().front();
+    return report_to_dict(sx::print_analyze(*doc_, id));
+}
+
+Dictionary SxDocument::print_orient(const String& body_id) {
+    sx::EntityId id = parse_id(body_id);
+    if (id.is_null() && !doc_->body_ids().empty()) id = doc_->body_ids().front();
+    return report_to_dict(sx::print_orient(*doc_, id));
+}
+
+void SxDocument::set_print_min_wall(double mm) {
+    sx::PrintSetup s = doc_->print_setup();
+    s.min_wall = mm;
+    doc_->set_print_setup(s);
+}
+
+Dictionary SxDocument::print_setup() const {
+    const sx::PrintSetup& s = doc_->print_setup();
+    Dictionary d;
+    d["bed_x"] = s.bed_x;
+    d["bed_y"] = s.bed_y;
+    d["bed_z"] = s.bed_z;
+    d["layer_height"] = s.layer_height;
+    d["min_wall"] = s.min_wall;
+    d["overhang_deg"] = s.overhang_deg;
+    return d;
+}
+
 bool SxDocument::export_3mf(const String& path) {
     std::string err;
     return sx::interop::export_3mf(*doc_, to_std(path), &err);
@@ -2124,6 +2169,12 @@ void SxDocument::_bind_methods() {
                          &SxDocument::convert_edges);
     ClassDB::bind_method(D_METHOD("pdm_commit", "message"), &SxDocument::pdm_commit);
     ClassDB::bind_method(D_METHOD("pdm_log"), &SxDocument::pdm_log);
+    ClassDB::bind_method(D_METHOD("print_analyze", "body_id"), &SxDocument::print_analyze,
+                         DEFVAL(String()));
+    ClassDB::bind_method(D_METHOD("print_orient", "body_id"), &SxDocument::print_orient,
+                         DEFVAL(String()));
+    ClassDB::bind_method(D_METHOD("print_setup"), &SxDocument::print_setup);
+    ClassDB::bind_method(D_METHOD("set_print_min_wall", "mm"), &SxDocument::set_print_min_wall);
 }
 
 }  // namespace sx_godot

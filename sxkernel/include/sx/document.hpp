@@ -23,6 +23,7 @@
 #include "sx/instances.hpp"
 #include "sx/joints.hpp"
 #include "sx/mates.hpp"
+#include "sx/print.hpp"
 #include "sx/sketch3d.hpp"
 #include "sx/xref.hpp"
 
@@ -222,6 +223,11 @@ public:
     const std::vector<std::pair<std::string, uint64_t>>& pdm_entries() const { return pdm_; }
     void restore_pdm(std::vector<std::pair<std::string, uint64_t>> entries);
 
+    // Print-first setup (bed, thresholds, export rotation). Persisted as print.json.
+    const PrintSetup& print_setup() const { return print_setup_; }
+    void set_print_setup(PrintSetup s);
+    void restore_print_setup(PrintSetup s);
+
 private:
     void register_subshapes(Body& b, bool fresh_ids);
     void regenerate_cards_for_body(const Body& b);
@@ -250,6 +256,7 @@ private:
     std::vector<Sketch3D> sketches3d_;
     std::vector<EntityId> last_released_;
     std::vector<std::pair<std::string, uint64_t>> pdm_;
+    PrintSetup print_setup_;
     std::unique_ptr<CardRegistry> cards_;
     std::unique_ptr<FeatureGraph> graph_;
     uint64_t revision_ = 0;

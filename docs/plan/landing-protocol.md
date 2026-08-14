@@ -235,6 +235,18 @@ Spike → L1–L5 → film. Do not start until the dependency is green. One rail
 | 4.12 | Standard-parts catalog | 0.1, 1.2 | Palette catalog page | `catalog_fastener` | In base, not a paid tier |
 | 4.13 | ECAD board-in-enclosure | W1 | IDX/IDF import | `board_in_box` | Not a schematic editor |
 
+## Wave 5 — Print-first
+
+Depends on: Wave 0.10 3MF, Form rail. Survey: [print-first.md](../survey/print-first.md).
+
+| # | Feature | Chrome | Film |
+|---|---|---|---|
+| 5.1 | Wall thickness digest | Form strip **Analyze**; marking **Print check** | `print_thin_wall` |
+| 5.2 | Overhang + 24-pose orient | Form strip **Orient** | `print_overhang_orient` |
+| 5.3 | 3MF metadata + `print.json` | File → Export 3MF (existing) | asserted in Catch2 |
+
+Chrome delta: Form rail already exists. No ViewHud button. No new dock.
+
 ### Deferred (do not schedule; do not lose)
 
 Park here — or add a Wave 4 row — if a later idea appears. Do not leave it in chat.

@@ -286,6 +286,12 @@ only the real thing passes:
 - [x] 4.11 PMI as a model-space dim; film `pmi_survives_regen`
 - [x] 4.13 IDF board outline; film `board_in_box`
 
+## Wave 5 — Print-first
+See [print-first.md](../survey/print-first.md). Form rail = print prep.
+- [x] 5.1 Wall thickness + digest; film `print_thin_wall`
+- [x] 5.2 Overhang + orient-to-bed; film `print_overhang_orient`
+- [x] 5.3 3MF `sx:bed` metadata + `print.json` in `.sxp`
+
 ## Environment notes
 - System deps installed via apt: ninja-build, zip, libocct-*-dev (7.9.2), libeigen3-dev, libboost-dev
 - Godot 4.7-stable binary at `tools/godot/godot` (gitignored; re-download from godot-builds if missing)

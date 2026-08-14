@@ -968,6 +968,8 @@ func _on_marking_verb(verb: String) -> void:
 			_ctx_weld()
 		"Look at":
 			_ctx_look_at()
+		"Print check":
+			_ctx_print_check()
 		_:
 			status.emit(verb)
 
@@ -982,7 +984,7 @@ func _on_marking_pick(entity_id: String) -> void:
 func _open_marking_menu(screen_pos: Vector2) -> void:
 	if marking_menu == null:
 		return
-	var verbs := PackedStringArray(["Fillet", "Hole", "TriBall", "Rib", "In-context pad", "Convert sheet", "Weld", "Look at"])
+	var verbs := PackedStringArray(["Fillet", "Hole", "TriBall", "Rib", "In-context pad", "Convert sheet", "Weld", "Print check", "Look at"])
 	if view != null and view.selected_bodies.size() >= 2:
 		verbs.append("Clash")
 	var picks: Array = []
@@ -3707,6 +3709,14 @@ func _ctx_isolate() -> void:
 
 func _ctx_delete() -> void:
 	_delete_selection()
+
+
+func _ctx_print_check() -> void:
+	if view == null or view.doc == null:
+		status.emit("Print check: no document")
+		return
+	var r: Dictionary = view.doc.print_analyze(view.selected_body)
+	status.emit(str(r.get("digest", "Print check")))
 
 
 func _ctx_look_at() -> void:

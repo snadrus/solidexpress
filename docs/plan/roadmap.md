@@ -181,6 +181,20 @@ Films and chrome for 4.1–4.13: [landing-protocol.md](landing-protocol.md#wave-
 
 ---
 
+### Wave 5 — Print-first
+
+Picks: [print-first.md](../survey/print-first.md) (P1–P6). Form rail is print prep; 3MF out; no slicer.
+
+| # | Feature | Pick | Gate |
+|---|---|---|---|
+| 5.1 | Wall thickness + digest | P1 | 20 mm cube `min_wall≈20`; 1.2 mm plate fails a 2 mm threshold |
+| 5.2 | Overhang + orient | P2, P3 | L-shelf overhang > 0; 10×10×80 orients to height ≈ 10 |
+| 5.3 | 3MF metadata + `print.json` | P4, P5 | 3MF contains `sx:bed`; `.sxp` round-trips the setup |
+
+Films: `print_thin_wall`, `print_overhang_orient`. Later: lattices, supports, trays (print-first §5).
+
+---
+
 ## 4. Mapping to the implementation plan
 
 | Roadmap | Plan phases | Notes |

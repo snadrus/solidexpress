@@ -16,6 +16,7 @@ A survey of the seven major commercial parametric mechanical CAD (MCAD) applicat
 | [feature-matrix.md](feature-matrix.md) | Products-by-features support matrix (Full / Partial / Add-on / Not supported) with ~190 footnotes covering per-product terminology and tier nuances. |
 | [interaction-patterns.md](interaction-patterns.md) | How peers make actions visually discoverable (hover, gizmos, context chrome) and how SolidExpress maps those patterns. |
 | [tool-approaches.md](tool-approaches.md) | How the best *tools* work — including Shapr3D, Plasticity, IronCAD, Solid Edge, FreeCAD — and the binding SolidExpress picks (A1–A20). |
+| [print-first.md](print-first.md) | How a part becomes a print (P1–P6): wall/overhang/orient/3MF. Form rail, not a slicer. |
 | [../plan/roadmap.md](../plan/roadmap.md) | Sequenced feature waves that implement those picks against current STATUS. |
 | [../plan/landing-protocol.md](../plan/landing-protocol.md) | How each wave row lands: chrome budget, L1–L5, film ids, slices. |
 | [profiles/](profiles/) | One deep-dive per product: positioning, architecture (kernel, formats, deployment), standout features, weaknesses, licensing/pricing, ecosystem. |

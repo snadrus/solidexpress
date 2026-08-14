@@ -27,6 +27,7 @@
 
 #include <Standard_Failure.hxx>
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <exception>
@@ -348,15 +349,27 @@ bool export_3mf(const Document& doc, const std::string& path, std::string* err) 
             set_err(err, "no tessellated triangles to export");
             return false;
         }
+        const PrintSetup& ps = doc.print_setup();
+        auto xform = [&](float x, float y, float z) {
+            return std::array<double, 3>{
+                ps.rot[0] * x + ps.rot[1] * y + ps.rot[2] * z,
+                ps.rot[3] * x + ps.rot[4] * y + ps.rot[5] * z,
+                ps.rot[6] * x + ps.rot[7] * y + ps.rot[8] * z};
+        };
         std::ostringstream model;
         model << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
               << "<model unit=\"millimeter\" "
               << "xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">\n"
+              << "  <metadata name=\"sx:bed\">" << ps.bed_x << "x" << ps.bed_y << "x"
+              << ps.bed_z << "</metadata>\n"
+              << "  <metadata name=\"sx:layer\">" << ps.layer_height << "</metadata>\n"
+              << "  <metadata name=\"sx:min_wall\">" << ps.min_wall << "</metadata>\n"
               << "  <resources>\n    <object id=\"1\" type=\"model\">\n      <mesh>\n"
               << "        <vertices>\n";
         for (size_t i = 0; i + 2 < mesh.positions.size(); i += 3) {
-            model << "          <vertex x=\"" << mesh.positions[i] << "\" y=\""
-                  << mesh.positions[i + 1] << "\" z=\"" << mesh.positions[i + 2] << "\"/>\n";
+            const auto p = xform(mesh.positions[i], mesh.positions[i + 1], mesh.positions[i + 2]);
+            model << "          <vertex x=\"" << p[0] << "\" y=\"" << p[1] << "\" z=\""
+                  << p[2] << "\"/>\n";
         }
         model << "        </vertices>\n        <triangles>\n";
         for (size_t i = 0; i + 2 < mesh.indices.size(); i += 3) {

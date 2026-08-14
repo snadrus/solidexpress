@@ -776,4 +776,13 @@ void Document::restore_pdm(std::vector<std::pair<std::string, uint64_t>> entries
     pdm_ = std::move(entries);
 }
 
+void Document::set_print_setup(PrintSetup s) {
+    print_setup_ = std::move(s);
+    bump_revision();
+}
+
+void Document::restore_print_setup(PrintSetup s) {
+    print_setup_ = std::move(s);
+}
+
 }  // namespace sx

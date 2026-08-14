@@ -362,6 +362,12 @@ public:
     int pdm_commit(const godot::String& message);
     godot::Array pdm_log() const;
 
+    // --- print-first ---
+    godot::Dictionary print_analyze(const godot::String& body_id);
+    godot::Dictionary print_orient(const godot::String& body_id);
+    godot::Dictionary print_setup() const;
+    void set_print_min_wall(double mm);
+
 protected:
     static void _bind_methods();
 

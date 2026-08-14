@@ -31,6 +31,7 @@ var assembly_panel: AssemblyPanel
 var view_hud: ViewHud
 var drawing_sheet: DrawingSheet
 var sheet_metal_view: SheetMetalView
+var print_strip: PrintStrip
 var palette: PanelContainer
 var dim_value: SpinBox
 var finish_op: OptionButton
@@ -333,6 +334,13 @@ func _build_ui() -> void:
 			interaction.arm_pick_active_plane()
 		elif id == 2:
 			interaction.reset_active_plane())
+
+	print_strip = PrintStrip.new()
+	print_strip.name = "PrintStrip"
+	print_strip.visible = false
+	menu_row.add_child(print_strip)
+	print_strip.analyze_requested.connect(_on_print_analyze)
+	print_strip.orient_requested.connect(_on_print_orient)
 
 	# Interaction overlay under chrome (full-rect input); snap bar joins TopChrome.
 	interaction = ViewportInteraction.new()
@@ -1223,6 +1231,39 @@ func _on_mode_menu(id: int) -> void:
 	_update_mode_overlays()
 
 
+func _print_target() -> String:
+	if view != null and view.selected_body != "":
+		return view.selected_body
+	if view != null and view.doc != null:
+		var ids: PackedStringArray = view.doc.body_ids()
+		if ids.size() > 0:
+			return ids[0]
+	return ""
+
+
+func _on_print_analyze() -> void:
+	if view == null or view.doc == null:
+		return
+	var r: Dictionary = view.doc.print_analyze(_print_target())
+	var digest := str(r.get("digest", ""))
+	if print_strip != null:
+		print_strip.set_digest(digest)
+	_on_status(digest if digest != "" else "Print check: nothing to analyze")
+	if view.selected_body != "":
+		card_panel.text = view.selection_card() + "\n\n" + digest
+
+
+func _on_print_orient() -> void:
+	if view == null or view.doc == null:
+		return
+	var r: Dictionary = view.doc.print_orient(_print_target())
+	var digest := str(r.get("digest", ""))
+	if print_strip != null:
+		print_strip.set_digest(digest)
+	_on_status("Oriented — " + digest)
+	view.refresh()
+
+
 func _update_left_rail() -> void:
 	if palette == null or ops_panel == null:
 		return
@@ -1265,6 +1306,8 @@ func _update_mode_overlays() -> void:
 		if view != null and view.doc != null:
 			flat = view.doc.sheet_flat_length(30.0, 30.0, 1.5, 0.44, 1.5)
 		sheet_metal_view.show_split(_work_mode == "Sheet", flat, 0.44)
+	if print_strip != null:
+		print_strip.visible = _work_mode == "Form"
 
 
 ## Selection card sits under the visible left rail (palette / modify / sketch).

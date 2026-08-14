@@ -119,6 +119,7 @@ bool save_sxp(const Document& doc, const std::string& path, std::string* err) {
     ok = ok && add("welds.json", json(doc.welds()).dump(2));
     ok = ok && add("sketches3d.json", json(doc.sketches3d()).dump(2));
     ok = ok && add("pdm.json", json(doc.pdm_entries()).dump(2));
+    ok = ok && add("print.json", json(doc.print_setup()).dump(2));
     ok = ok && add("manifest.json", manifest.dump(2));
     ok = ok && mz_zip_writer_finalize_archive(&zip) == MZ_TRUE;
     mz_zip_writer_end(&zip);
@@ -388,6 +389,9 @@ bool load_sxp(Document& doc, const std::string& path, std::string* err) {
     });
     load_optional("sketches3d.json", [&](const json& j) {
         for (const auto& js : j) doc.restore_sketch3d(js.get<Sketch3D>());
+    });
+    load_optional("print.json", [&](const json& j) {
+        doc.restore_print_setup(j.get<PrintSetup>());
     });
     load_optional("pdm.json", [&](const json& j) {
         std::vector<std::pair<std::string, uint64_t>> entries;
