@@ -3,7 +3,6 @@ extends Node3D
 ## Hover glyphs for implicit mate connectors (Onshape-style). Not a dock.
 
 var view: DocumentView
-var camera: Camera3D
 var _mesh: ImmediateMesh
 var _inst: MeshInstance3D
 var _hover_face := ""
@@ -61,3 +60,12 @@ func _rebuild() -> void:
 func _add_axis(a: Vector3, b: Vector3) -> void:
 	_mesh.surface_add_vertex(a)
 	_mesh.surface_add_vertex(b)
+
+
+## True while a connector glyph is drawn (hover is showing a real frame).
+func showing() -> bool:
+	return _mesh != null and _mesh.get_surface_count() > 0
+
+
+func hovered_face() -> String:
+	return _hover_face

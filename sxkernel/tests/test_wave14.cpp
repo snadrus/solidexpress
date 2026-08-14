@@ -13,6 +13,7 @@
 #include "sx/rules.hpp"
 #include "sx/shape_utils.hpp"
 #include "sx/sheet_metal.hpp"
+#include "sx/sketch.hpp"
 
 using namespace sx;
 
@@ -80,10 +81,22 @@ TEST_CASE("rib joins and grows volume", "[wave1][rib]") {
     REQUIRE(doc.graph().regenerate(doc));
     auto body = doc.graph().feature(fid)->output_body;
     const double v0 = shape::volume(doc.body(body)->shape);
+
+    SketchPlane pl;
+    pl.origin = {0, 0, 4};
+    auto sk = std::make_shared<Sketch>("Rib profile", pl);
+    sk->add_line(4.0, 10.0, 16.0, 10.0);
+    Feature skf;
+    skf.type = FeatureType::Sketch;
+    skf.sketch = sk;
+    auto sk_id = doc.graph().add(std::move(skf));
+
     Feature rib;
     rib.type = FeatureType::Rib;
-    rib.params = {{"target", fid.str()}, {"thickness", 2.0}, {"height", 8.0},
-                  {"origin", {9.0, 0.0, 4.0}}};
+    rib.params = {{"target", fid.str()},
+                  {"sketch", sk_id.str()},
+                  {"thickness", 2.0},
+                  {"height", 8.0}};
     doc.graph().add(std::move(rib));
     REQUIRE(doc.graph().regenerate(doc));
     CHECK(shape::volume(doc.body(body)->shape) > v0);

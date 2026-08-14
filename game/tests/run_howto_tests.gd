@@ -29,6 +29,8 @@ func _init() -> void:
 	await howto_extrude_letter_a(main)
 	await howto_horizontal_hole(main)
 	await howto_landing_bindings(main)
+	await howto_rib_follows_sketch(main)
+	await howto_flange_unfolds(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -330,6 +332,75 @@ func howto_horizontal_hole(main) -> void:
 			break
 	check(has_boolean, "Subtract recorded as a timeline boolean feature")
 	await process_frame
+
+
+## docs/howto/rib-and-wrap.md — the rib is swept from the sketch, so a longer
+## profile adds more material. A fixed block would not care about the sketch.
+func howto_rib_follows_sketch(main) -> void:
+	print("- howto_rib_follows_sketch")
+	var view: DocumentView = main.view
+	var ix: ViewportInteraction = main.interaction
+
+	var gains := []
+	for legs in [1, 2]:
+		view.new_document()
+		var body: String = view.insert_primitive("box", Vector3.ZERO)
+		await process_frame
+		var before: float = float(view.doc.measure_mass(body).get("volume", 0.0))
+		var bb: Dictionary = view.doc.measure_bbox(body)
+		var top: float = float(bb["max"].z)
+
+		var sk := SxSketch.new()
+		sk.set_plane(Vector3(0, 0, top), Vector3(1, 0, 0), Vector3(0, 1, 0))
+		sk.add_line(10, 25, 40, 25)
+		if legs == 2:
+			sk.add_line(40, 25, 40, 40)
+		var sk_fid: String = view.doc.graph_add_sketch(sk)
+		check(sk_fid != "", "open rib profile on the timeline (%d leg/s)" % legs)
+
+		view.select_entity(body, "")
+		ix._ctx_rib()
+		await process_frame
+		var has_rib := false
+		for f in view.doc.graph_features():
+			if str(f.get("type", "")) == "rib":
+				has_rib = true
+		check(has_rib, "S-menu Rib recorded a timeline feature (%d leg/s)" % legs)
+		var after: float = float(view.doc.measure_mass(body).get("volume", 0.0))
+		gains.append(after - before)
+
+	check(gains[0] > 100.0, "one-leg rib adds material (%.0f mm³)" % gains[0])
+	check(gains[1] > gains[0] * 1.3,
+		"second leg adds more (%.0f vs %.0f mm³)" % [gains[1], gains[0]])
+
+
+## docs/howto/flange-box-flat.md — a real bend, and a blank that weighs the same.
+func howto_flange_unfolds(main) -> void:
+	print("- howto_flange_unfolds")
+	var view: DocumentView = main.view
+	view.new_document()
+	var fid: String = view.doc.graph_add_flange(30.0, 1.5, 0.44, 1.5, 40.0)
+	check(fid != "", "flange on the timeline")
+	await process_frame
+
+	var flat := 0.0
+	var body := ""
+	for f in view.doc.graph_features():
+		if str(f.get("id", "")) == fid:
+			body = str(f.get("output_body", ""))
+			var p: Variant = JSON.parse_string(str(f.get("params", "{}")))
+			if p is Dictionary:
+				flat = float(p.get("flat_length", 0.0))
+	check(flat == view.doc.sheet_flat_length(30.0, 30.0, 1.5, 0.44, 1.5),
+		"flat_length matches the bend-allowance formula (%.3f mm)" % flat)
+	check(body != "", "flange made a body")
+	var folded: float = float(view.doc.measure_mass(body).get("volume", 0.0))
+	var blank: float = flat * 40.0 * 1.5
+	check(absf(folded - blank) < blank * 0.01,
+		"folded %.0f mm³ matches the %.0f mm³ blank" % [folded, blank])
+	# A bend is curved; two fused boxes are not.
+	var bb: Dictionary = view.doc.measure_bbox(body)
+	check(float(bb["max"].z) > 25.0, "the flange leg stands up (%.1f mm)" % float(bb["max"].z))
 
 
 ## docs/howto/{crank-slider,flange-box-flat,catalog-fastener,fea-bracket}.md

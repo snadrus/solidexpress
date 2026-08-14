@@ -4,7 +4,10 @@
 
 #include <string>
 
+#include <TopoDS_Shape.hxx>
 #include <nlohmann/json.hpp>
+
+#include "sx/shape_utils.hpp"
 
 namespace sx::sheet {
 
@@ -25,5 +28,23 @@ struct FlangeParams {
 
 void to_json(nlohmann::json& j, const FlangeParams& p);
 void from_json(const nlohmann::json& j, FlangeParams& p);
+
+// A folded sheet and the blank it unfolds to. `folded` carries a real
+// cylindrical bend face; `flat` is the developed blank, so their volumes agree
+// to within the K-factor's departure from the mid-plane (K = 0.5).
+struct FlangeBuild {
+    TopoDS_Shape folded;
+    TopoDS_Shape flat;
+    double flat_length = 0.0;
+    double bend_allowance = 0.0;
+};
+
+// Two legs joined by one bend, swept `width` deep. Legs follow the same
+// convention as flat_length(): the straight portion of a leg is leg - thickness,
+// the rest is consumed by the bend region. Returns null shapes when the legs
+// are shorter than the thickness or the angle is not in (0, pi).
+FlangeBuild build_flange(double base_leg, double flange_leg, double width,
+                         const FlangeParams& p, const shape::Placement& at = {},
+                         std::string* err = nullptr);
 
 }  // namespace sx::sheet

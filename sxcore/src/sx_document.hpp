@@ -291,9 +291,10 @@ public:
     bool export_gltf(const godot::String& path);
     godot::String heal_report(const godot::String& fid) const;
 
-    godot::String graph_add_rib(const godot::String& target_fid, double thickness, double height,
-                                const godot::Vector3& origin);
-    godot::String graph_add_flange(double length, double thickness, double k_factor, double radius);
+    godot::String graph_add_rib(const godot::String& target_fid, const godot::String& sketch_fid,
+                                double thickness, double height, bool flip);
+    godot::String graph_add_flange(double length, double thickness, double k_factor, double radius,
+                                   double width);
     godot::String graph_add_frame(const godot::PackedVector3Array& path, double profile_w,
                                   double profile_h);
     godot::Array run_query(const godot::String& query) const;

@@ -31,9 +31,53 @@ func _init() -> void:
 	await test_pick_and_drag_instance(main)
 	await test_drag_resnap_with_mate(main)
 	await test_mate_error_badge_and_anchor(main)
+	await test_connector_hover_glyph(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
+
+
+## Wave 0.1 chrome: hovering a face shows its mate frame on the geometry.
+## Without this the connector overlay was mounted but never fed.
+func test_connector_hover_glyph(main) -> void:
+	print("- connector glyph follows the hovered face")
+	var view: DocumentView = main.view
+	var vi: ViewportInteraction = main.interaction
+	view.new_document()
+	var doc: SxDocument = view.doc
+	var body: String = doc.add_box(40, 30, 10, Vector3.ZERO)
+	view.refresh()
+	await process_frame
+	check(vi.connector_overlay != null, "connector overlay mounted")
+	check(not vi.connector_overlay.showing(), "no glyph before hover")
+
+	var faces: PackedStringArray = doc.get_face_ids(body)
+	check(faces.size() == 6, "box has six faces")
+	var planar := ""
+	for f in faces:
+		if not doc.implicit_connector("", f).is_empty():
+			planar = f
+			break
+	check(planar != "", "a face offers an implicit connector")
+	vi._update_connector_hover(planar)
+	check(vi.connector_overlay.showing(), "glyph drawn for the hovered face")
+	check(vi.connector_overlay.hovered_face() == planar, "glyph tracks that face")
+	vi._update_connector_hover("")
+	check(not vi.connector_overlay.showing(), "glyph cleared when the pointer leaves")
+
+	# The real hover path feeds it too: aim down the middle of the top face.
+	root.size = Vector2i(1280, 720)
+	vi.size = Vector2(1280, 720)
+	main.camera.frame_contents()
+	await process_frame
+	var bb: Dictionary = doc.measure_bbox(body)
+	var top: Vector3 = Vector3((bb["min"].x + bb["max"].x) * 0.5,
+			(bb["min"].y + bb["max"].y) * 0.5, bb["max"].z)
+	var screen: Vector2 = main.camera.unproject_position(main.model_space.to_global(top))
+	vi._update_hover(screen)
+	await process_frame
+	check(view.hovered_face != "", "pointer hovers a face")
+	check(vi.connector_overlay.showing(), "_update_hover feeds the overlay")
 
 
 func test_pick_and_drag_instance(main) -> void:
@@ -221,6 +265,9 @@ func test_place_and_remove(main) -> void:
 	var id: String = view.insert_primitive("box", Vector3.ZERO)
 	check(id != "", "box inserted")
 	view.select_entity(id, "")
+	await process_frame
+	# Selecting a body is what makes "Place instance" reachable in the first place.
+	check(panel.visible, "panel visible with a body selected")
 	panel._place_instance()
 	await process_frame
 
@@ -232,7 +279,10 @@ func test_place_and_remove(main) -> void:
 	panel._remove_instance(iid)
 	await process_frame
 	check(view.doc.instance_list().is_empty(), "instance removed")
-	check(not panel.visible, "panel hides after last instance removed")
+	check(panel.visible, "still reachable while the source stays selected")
+	view.clear_selection()
+	await process_frame
+	check(not panel.visible, "panel hides with no instances and nothing selected")
 	panel.queue_free()
 
 

@@ -1423,24 +1423,25 @@ bool SxDocument::export_gltf(const String& path) {
     return sx::interop::export_gltf(*doc_, to_std(path), &err);
 }
 
-String SxDocument::graph_add_rib(const String& target_fid, double thickness, double height,
-                                 const Vector3& origin) {
+String SxDocument::graph_add_rib(const String& target_fid, const String& sketch_fid,
+                                 double thickness, double height, bool flip) {
     sx::EntityId fid;
     bool ok = apply_graph_edit("rib", [&] {
         sx::Feature f;
         f.type = sx::FeatureType::Rib;
         f.params = {{"target", to_std(target_fid)},
+                    {"sketch", to_std(sketch_fid)},
                     {"thickness", thickness},
                     {"height", height},
-                    {"origin", {origin.x, origin.y, origin.z}}};
+                    {"flip", flip}};
         fid = doc_->graph().add(std::move(f));
         return true;
     });
     return ok ? to_gd(fid.str()) : String();
 }
 
-String SxDocument::graph_add_flange(double length, double thickness, double k_factor,
-                                    double radius) {
+String SxDocument::graph_add_flange(double length, double thickness, double k_factor, double radius,
+                                    double width) {
     sx::EntityId fid;
     bool ok = apply_graph_edit("flange", [&] {
         sx::Feature f;
@@ -1449,6 +1450,7 @@ String SxDocument::graph_add_flange(double length, double thickness, double k_fa
                     {"thickness", thickness},
                     {"k_factor", k_factor},
                     {"radius", radius},
+                    {"width", width},
                     {"angle_rad", 1.5707963267948966}};
         fid = doc_->graph().add(std::move(f));
         return true;
@@ -1692,10 +1694,12 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("export_3mf", "path"), &SxDocument::export_3mf);
     ClassDB::bind_method(D_METHOD("export_gltf", "path"), &SxDocument::export_gltf);
     ClassDB::bind_method(D_METHOD("heal_report", "fid"), &SxDocument::heal_report);
-    ClassDB::bind_method(D_METHOD("graph_add_rib", "target_fid", "thickness", "height", "origin"),
-                         &SxDocument::graph_add_rib);
-    ClassDB::bind_method(D_METHOD("graph_add_flange", "length", "thickness", "k_factor", "radius"),
-                         &SxDocument::graph_add_flange);
+    ClassDB::bind_method(
+        D_METHOD("graph_add_rib", "target_fid", "sketch_fid", "thickness", "height", "flip"),
+        &SxDocument::graph_add_rib, DEFVAL(false));
+    ClassDB::bind_method(
+        D_METHOD("graph_add_flange", "length", "thickness", "k_factor", "radius", "width"),
+        &SxDocument::graph_add_flange, DEFVAL(30.0));
     ClassDB::bind_method(D_METHOD("graph_add_frame", "path", "profile_w", "profile_h"),
                          &SxDocument::graph_add_frame);
     ClassDB::bind_method(D_METHOD("run_query", "query"), &SxDocument::run_query);

@@ -68,8 +68,10 @@ func _run_one(entry: Dictionary) -> void:
 	ctx.clock = FilmClock.new()
 	ctx.tree = self
 
+	# A script with a parse error still loads as a GDScript but cannot be
+	# instantiated; without this guard the film was skipped silently.
 	var film_script: GDScript = load(script_path) as GDScript
-	if film_script == null:
+	if film_script == null or not film_script.can_instantiate():
 		check(false, "%s: load script %s" % [film_id, script_path])
 		main.queue_free()
 		return

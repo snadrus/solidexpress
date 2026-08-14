@@ -148,7 +148,11 @@ func refresh_lists() -> void:
 			cl.add_theme_font_size_override("font_size", 11)
 			_mates_list.add_child(cl)
 
-	visible = not instances.is_empty() or not mates.is_empty() or _mate_armed or not connectors.is_empty()
+	# Also show on a body selection: placing the *first* instance is the one
+	# assembly verb you need while the assembly is still empty.
+	var can_instance: bool = view != null and view.selected_body != ""
+	visible = can_instance or not instances.is_empty() or not mates.is_empty() or _mate_armed \
+			or not connectors.is_empty()
 	_refreshing = false
 
 
@@ -256,6 +260,7 @@ func _arm_mate() -> void:
 
 func _on_selection_changed(_body: String, face: String) -> void:
 	if not _mate_armed:
+		refresh_lists()  # selection decides whether "Place instance" is reachable
 		return
 	if face == "":
 		return

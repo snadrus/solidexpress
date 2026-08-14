@@ -1,16 +1,16 @@
-# Rib joins faces
+# Rib follows a sketch
 
-Goal: a rib fuses onto the target and volume grows. Marking menu **Rib** (S) — no OpsPanel row.
+Goal: a rib is swept from an **open** sketch profile, so it grows and turns with the profile instead of being a fixed block. Marking menu **Rib** (S) — no OpsPanel row.
 
 ## Steps
 
-1. Place a box.
-2. Select the body → **S** → Rib, or the timeline records `graph_add_rib`.
-3. Volume is larger than the stock box.
+1. Place a plate.
+2. **Sketch** on it and draw an open two-leg profile with the line tool. Leave sketch mode (an open profile has nothing to extrude).
+3. Select the plate → **S** → **Rib**.
 
 ## What “good” looks like
 
-- Timeline row type `rib`.
-- Volume increases.
+- Timeline row type `rib`, still one solid.
+- Volume rises by roughly profile length × thickness × height, so a second leg adds more than the first alone.
 
-Film: `rib_and_wrap`. Kernel: `[wave1][rib]`.
+Film: `rib_and_wrap`. Kernel: `[tier0][rib]`, `[wave1][rib]`.

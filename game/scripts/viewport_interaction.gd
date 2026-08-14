@@ -867,6 +867,8 @@ func _ctx_triball() -> void:
 	status.emit("TriBall — drag the ring, then click TriBall again to commit")
 
 
+## A rib follows a sketch profile, so it needs one: the most recent sketch on
+## the timeline, which is the sketch the user just drew and left.
 func _ctx_rib() -> void:
 	if view == null or view.selected_body == "":
 		status.emit("Rib: select a body")
@@ -876,8 +878,15 @@ func _ctx_rib() -> void:
 	if target == "":
 		status.emit("Rib: body is not on the timeline")
 		return
-	var hid := view.doc.graph_add_rib(target, 2.0, 8.0, Vector3(9, 0, 4))
-	status.emit("Rib" if hid != "" else "Rib failed")
+	var sketch := ""
+	for f in view.doc.graph_features():
+		if str(f.get("type", "")) == "sketch":
+			sketch = str(f.get("id", ""))
+	if sketch == "":
+		status.emit("Rib: draw an open profile with Sketch first")
+		return
+	var hid := view.doc.graph_add_rib(target, sketch, 2.0, 8.0)
+	status.emit("Rib along the sketch" if hid != "" else "Rib failed")
 	view._after_mutation()
 
 
@@ -1663,6 +1672,7 @@ func _update_hover(screen_pos: Vector2) -> void:
 		_last_hover_key = ""
 		mouse_default_cursor_shape = Control.CURSOR_ARROW
 		_measure_hover_miss()
+		_update_connector_hover("")
 		return
 	# Selected body (about to move): same marks as place — touch others to
 	# plant X; otherwise dim to the selection's nearest corner.
@@ -1676,6 +1686,7 @@ func _update_hover(screen_pos: Vector2) -> void:
 	if hit.is_empty():
 		view.clear_hover()
 		_measure_hover_miss()
+		_update_connector_hover("")
 		if _last_hover_key != "":
 			_last_hover_key = ""
 			mouse_default_cursor_shape = Control.CURSOR_ARROW
@@ -1686,6 +1697,7 @@ func _update_hover(screen_pos: Vector2) -> void:
 	var hit_pt: Vector3 = hit.get("point", Vector3.ZERO)
 	view.set_hover(body, face, edge)
 	_update_measure_hover(body, hit_pt)
+	_update_connector_hover(face)
 	var key := "%s|%s|%s|%.3f,%.3f,%.3f" % [body, face, edge, hit_pt.x, hit_pt.y, hit_pt.z]
 	if key == _last_hover_key:
 		return
@@ -1699,6 +1711,17 @@ func _update_hover(screen_pos: Vector2) -> void:
 		status.emit("Face — click selects body first, click again for face · then Pull arrow")
 	else:
 		status.emit("Body — click to select · drag empty space / Alt / two-finger to orbit")
+
+
+## Onshape-style: the mate frame appears on the face under the cursor, so mates
+## and joints are picked from geometry rather than from a list of frames.
+func _update_connector_hover(face_id: String, instance_id := "") -> void:
+	if connector_overlay == null:
+		return
+	if face_id == "":
+		connector_overlay.clear_hover()
+		return
+	connector_overlay.set_hover(instance_id, face_id)
 
 
 func _update_measure_hover(body: String, hit_point: Vector3) -> void:

@@ -49,6 +49,7 @@
 #include "sx/shape_utils.hpp"
 #include "sx/sheet_metal.hpp"
 #include "sx/sketch_json.hpp"
+#include "sx/surface_ops.hpp"
 
 using nlohmann::json;
 
@@ -1356,10 +1357,22 @@ bool FeatureGraph::apply(Document& doc, Feature& f,
                 EntityId target = find_feature_body("target");
                 const Body* tb = doc.body(target);
                 if (!tb) return fail("missing target body");
-                const double th = num_param(params, "thickness", 2.0, env);
-                const double h = num_param(params, "height", 10.0, env);
-                auto pl = placement_from(params);
-                TopoDS_Shape rib = shape::make_box(th, h, h, pl);
+                const Feature* skf = params.contains("sketch")
+                                         ? feature(EntityId::from_string(
+                                               params["sketch"].get<std::string>()))
+                                         : nullptr;
+                if (!skf || !skf->sketch) return fail("rib needs a sketch profile");
+                std::vector<gp_Pnt> profile;
+                for (const auto& jp : sketch_ordered_polyline(*skf->sketch))
+                    profile.push_back(pnt_from(jp));
+                const auto n = skf->sketch->plane().normal();
+                gp_Dir up(n[0], n[1], n[2]);
+                double h = num_param(params, "height", 10.0, env);
+                if (params.value("flip", false)) h = -h;
+                std::string rerr;
+                TopoDS_Shape rib = surf::rib_solid(profile, num_param(params, "thickness", 2.0, env),
+                                                   h, up, &rerr);
+                if (rib.IsNull()) return fail(rerr);
                 BRepAlgoAPI_Fuse fuse(tb->shape, rib);
                 if (!fuse.IsDone()) return fail("rib fuse failed");
                 doc.replace_body_shape(target, fuse.Shape());
@@ -1370,11 +1383,11 @@ bool FeatureGraph::apply(Document& doc, Feature& f,
                 EntityId target = find_feature_body("target");
                 const Body* tb = doc.body(target);
                 if (!tb) return fail("missing target body");
-                const double off = num_param(params, "offset", 1.0, env);
-                BRepOffsetAPI_MakeOffsetShape mk;
-                mk.PerformBySimple(tb->shape, off);
-                if (!mk.IsDone()) return fail("thicken failed");
-                doc.replace_body_shape(target, mk.Shape());
+                std::string terr;
+                TopoDS_Shape solid =
+                    surf::thicken(tb->shape, num_param(params, "offset", 1.0, env), &terr);
+                if (solid.IsNull()) return fail(terr);
+                doc.replace_body_shape(target, solid);
                 return true;
             }
 
@@ -1382,62 +1395,108 @@ bool FeatureGraph::apply(Document& doc, Feature& f,
                 EntityId target = find_feature_body("target");
                 const Body* tb = doc.body(target);
                 if (!tb) return fail("missing target body");
+                const Feature* skf = params.contains("sketch")
+                                         ? feature(EntityId::from_string(
+                                               params["sketch"].get<std::string>()))
+                                         : nullptr;
+                if (!skf || !skf->sketch) return fail("wrap needs a sketch profile");
+                std::string perr;
+                TopoDS_Shape profile = skf->sketch->profile_face(&perr);
+                if (profile.IsNull()) return fail("wrap profile: " + perr);
                 const double depth = num_param(params, "depth", 1.0, env);
-                auto pl = placement_from(params);
-                TopoDS_Shape stamp = shape::make_box(8.0, 8.0, depth, pl);
-                BRepAlgoAPI_Cut cut(tb->shape, stamp);
-                if (!cut.IsDone()) return fail("wrap cut failed");
-                doc.replace_body_shape(target, cut.Shape());
+                // Project the profile clear through the body, then keep only the
+                // part inside the skin so the stamp follows the surface.
+                Bnd_Box box;
+                BRepBndLib::Add(tb->shape, box);
+                if (box.IsVoid()) return fail("wrap target has no extent");
+                double xmin, ymin, zmin, xmax, ymax, zmax;
+                box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+                const double reach = gp_Vec(xmax - xmin, ymax - ymin, zmax - zmin).Magnitude() + 4.0;
+                const auto n = skf->sketch->plane().normal();
+                gp_Vec dir(n[0], n[1], n[2]);
+                dir.Normalize();
+                gp_Trsf back;
+                back.SetTranslation(dir * -reach);
+                TopoDS_Shape start = BRepBuilderAPI_Transform(profile, back, true).Shape();
+                TopoDS_Shape column = BRepPrimAPI_MakePrism(start, dir * (2.0 * reach)).Shape();
+                if (column.IsNull()) return fail("wrap projection failed");
+                const bool emboss = params.value("mode", "deboss") == "emboss";
+                std::string serr;
+                TopoDS_Shape stamp = surf::surface_stamp(tb->shape, column, depth, emboss, &serr);
+                if (stamp.IsNull()) return fail("wrap: " + serr);
+                TopoDS_Shape result;
+                if (emboss) {
+                    BRepAlgoAPI_Fuse fuse(tb->shape, stamp);
+                    if (!fuse.IsDone()) return fail("emboss fuse failed");
+                    result = fuse.Shape();
+                } else {
+                    BRepAlgoAPI_Cut cut(tb->shape, stamp);
+                    if (!cut.IsDone()) return fail("deboss cut failed");
+                    result = cut.Shape();
+                }
+                if (result.IsNull() || shape::volume(result) <= 1e-9)
+                    return fail("wrap destroyed the body");
+                doc.replace_body_shape(target, result);
                 return true;
             }
 
             case FeatureType::Flange: {
-                const double length = num_param(params, "length", 20.0, env);
-                const double thick = num_param(params, "thickness", 1.5, env);
-                const double k = num_param(params, "k_factor", 0.44, env);
-                const double rad = num_param(params, "radius", 1.5, env);
-                const double ang = num_param(params, "angle_rad", 1.5707963267948966, env);
-                f.params["flat_length"] = sheet::flat_length(length, length, thick, k, rad, ang);
-                TopoDS_Shape base = shape::make_box(length, length, thick);
-                shape::Placement wall;
-                wall.origin = {0, 0, thick};
-                TopoDS_Shape up = shape::make_box(thick, length, length, wall);
-                BRepAlgoAPI_Fuse fuse(base, up);
-                if (!fuse.IsDone()) return fail("flange fuse failed");
+                sheet::FlangeParams sp;
+                sp.length = num_param(params, "length", 20.0, env);
+                sp.thickness = num_param(params, "thickness", 1.5, env);
+                sp.k_factor = num_param(params, "k_factor", 0.44, env);
+                sp.radius = num_param(params, "radius", 1.5, env);
+                sp.angle_rad = num_param(params, "angle_rad", 1.5707963267948966, env);
+                const double base_leg = num_param(params, "base_length", sp.length, env);
+                const double width = num_param(params, "width", 30.0, env);
+                std::string serr;
+                auto build = sheet::build_flange(base_leg, sp.length, width, sp,
+                                                 placement_from(params), &serr);
+                if (build.folded.IsNull()) return fail("flange: " + serr);
+                f.params["flat_length"] = build.flat_length;
+                f.params["flat_width"] = width;
+                f.params["bend_allowance"] = build.bend_allowance;
                 if (params.contains("target") && params["target"].is_string()) {
                     EntityId target = find_feature_body("target");
                     const Body* tb = doc.body(target);
                     if (!tb) return fail("missing flange target");
-                    BRepAlgoAPI_Fuse onto(tb->shape, fuse.Shape());
+                    BRepAlgoAPI_Fuse onto(tb->shape, build.folded);
                     if (!onto.IsDone()) return fail("flange onto target failed");
                     doc.replace_body_shape(target, onto.Shape());
                 } else {
-                    put_body(doc, f.output_body, fuse.Shape(), f.name);
+                    put_body(doc, f.output_body, build.folded, f.name);
                 }
                 return true;
             }
 
             case FeatureType::Knit: {
-                if (!params.contains("targets") || !params["targets"].is_array())
-                    return fail("knit needs targets");
-                TopoDS_Shape acc;
-                EntityId keep;
-                for (const auto& jt : params["targets"]) {
-                    const Feature* ref = feature(EntityId::from_string(jt.get<std::string>()));
-                    EntityId tid = ref ? ref->output_body : EntityId{};
-                    const Body* b = doc.body(tid);
-                    if (!b) continue;
-                    if (acc.IsNull()) {
-                        acc = b->shape;
-                        keep = tid;
-                    } else {
-                        BRepAlgoAPI_Fuse fuse(acc, b->shape);
-                        if (!fuse.IsDone()) return fail("knit fuse failed");
-                        acc = fuse.Shape();
+                // Surfaces to sew come from earlier features ("targets") or from
+                // loose bodies ("bodies", e.g. imported sheets).
+                std::vector<TopoDS_Shape> parts;
+                std::vector<EntityId> ids;
+                auto take = [&](const EntityId& id) {
+                    const Body* b = doc.body(id);
+                    if (!b || b->shape.IsNull()) return;
+                    parts.push_back(b->shape);
+                    ids.push_back(id);
+                };
+                if (params.contains("targets") && params["targets"].is_array()) {
+                    for (const auto& jt : params["targets"]) {
+                        const Feature* ref = feature(EntityId::from_string(jt.get<std::string>()));
+                        if (ref) take(ref->output_body);
                     }
                 }
-                if (acc.IsNull() || keep.is_null()) return fail("knit empty");
-                doc.replace_body_shape(keep, acc);
+                if (params.contains("bodies") && params["bodies"].is_array()) {
+                    for (const auto& jb : params["bodies"])
+                        take(EntityId::from_string(jb.get<std::string>()));
+                }
+                if (parts.size() < 2) return fail("knit needs two or more surfaces");
+                std::string kerr;
+                TopoDS_Shape knitted = surf::knit(parts, 1e-6, &kerr);
+                if (knitted.IsNull()) return fail("knit: " + kerr);
+                doc.replace_body_shape(ids.front(), knitted);
+                // The sewn sheets are consumed, like boolean tool bodies.
+                for (size_t i = 1; i < ids.size(); ++i) doc.remove_body(ids[i]);
                 return true;
             }
 
@@ -1445,12 +1504,35 @@ bool FeatureGraph::apply(Document& doc, Feature& f,
                 EntityId target = find_feature_body("target");
                 const Body* tb = doc.body(target);
                 if (!tb) return fail("missing target body");
-                const double off = num_param(params, "offset", 2.0, env);
-                // Offset the whole solid (face-local replace is a later OCCT path).
-                BRepOffsetAPI_MakeOffsetShape mk;
-                mk.PerformBySimple(tb->shape, off);
-                if (!mk.IsDone()) return fail("replace face offset failed");
-                doc.replace_body_shape(target, mk.Shape());
+                TopTools_IndexedMapOfShape faces;
+                TopExp::MapShapes(tb->shape, TopAbs_FACE, faces);
+                TopoDS_Shape face;
+                if (params.contains("face") && params["face"].is_string()) {
+                    face = doc.resolve(EntityId::from_string(params["face"].get<std::string>()));
+                } else {
+                    const int idx = params.value("face_index", 1);
+                    if (idx < 1 || idx > faces.Extent()) return fail("face index out of range");
+                    face = faces(idx);
+                }
+                if (face.IsNull()) return fail("replace face needs a face of the target");
+
+                TopoDS_Shape tool;
+                if (params.contains("tool") && params["tool"].is_string()) {
+                    const Body* ob = doc.body(find_feature_body("tool"));
+                    if (!ob) return fail("missing replacement surface");
+                    tool = ob->shape;
+                } else if (params.contains("plane_origin") && params.contains("plane_normal")) {
+                    tool = surf::plane_tool(tb->shape, pnt_from(params["plane_origin"]),
+                                            dir_from(params["plane_normal"]));
+                } else {
+                    return fail("replace face needs a tool surface or a plane");
+                }
+                if (tool.IsNull()) return fail("replacement surface is empty");
+
+                std::string rerr;
+                TopoDS_Shape result = surf::replace_face(tb->shape, face, tool, &rerr);
+                if (result.IsNull()) return fail(rerr);
+                doc.replace_body_shape(target, result);
                 return true;
             }
 

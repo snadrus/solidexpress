@@ -110,6 +110,33 @@ static func click_button(ctx: FilmContext, text: String, cue: Dictionary = {}) -
 	await click_control(ctx, b, c)
 
 
+## Press S to raise the marking menu, then click one of its verbs. This is the
+## overflow path for verbs that are not on the SelectionStrip.
+static func marking_verb(ctx: FilmContext, verb: String) -> bool:
+	var ix = ctx.main.interaction
+	if ix == null:
+		_fail("interaction missing for the marking menu")
+		return false
+	var key := InputEventKey.new()
+	key.keycode = KEY_S
+	key.physical_keycode = KEY_S
+	key.pressed = true
+	ix._input(key)
+	await wait_frames(ctx.tree, 3)
+	var menu: MarkingMenu = ix.marking_menu
+	if menu == null or not menu.visible:
+		_fail("marking menu did not open on S")
+		return false
+	var button := find_button(menu, verb)
+	if button == null:
+		menu.hide()
+		_fail("marking menu has no %s verb" % verb)
+		return false
+	await click_control(ctx, button, FilmUICues.alert("S", "%s from the marking menu" % verb))
+	await wait_frames(ctx.tree, 2)
+	return true
+
+
 ## Hold/release Ctrl so Input.is_key_pressed matches a real modifier chord.
 static func _set_ctrl_held(held: bool) -> void:
 	var ke := InputEventKey.new()
