@@ -1591,6 +1591,8 @@ func click(pos2: Vector2) -> void:
 					sketch.set_construction(lid, true)
 				_infer_line(lid, a, b)
 				_redraw()
+				# Propose chips follow new geometry even when infer did not solve.
+				selection_actions_needed.emit()
 		Tool.RECT:
 			_click_rect(pos2)
 		Tool.CIRCLE:
