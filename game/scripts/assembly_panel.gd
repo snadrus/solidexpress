@@ -46,6 +46,8 @@ func _ready() -> void:
 		"Place a linked copy of the selected body offset to the side")
 	_op_button(vbox, "Insert Components…", _insert_components, "instance",
 		"Insert bodies from another .sxp as component instances (multi-doc)")
+	_op_button(vbox, "Pattern around joint", _pattern_instance, "circular_pattern",
+		"Copy the selected component around its joint axis; every copy inherits the joint")
 
 	vbox.add_child(HSeparator.new())
 
@@ -244,6 +246,26 @@ func _place_instance() -> void:
 		status.emit("Placed instance at (%.0f, %.0f, %.0f)" % [offset.x, offset.y, offset.z])
 	else:
 		status.emit("Instance failed")
+
+
+## One joint definition, many bolts: the copies ride the seed's axis.
+func _pattern_instance() -> void:
+	var seed := view.selected_instance
+	if seed == "":
+		var insts: Array = view.doc.instance_list()
+		if insts.size() == 1:
+			seed = str(insts[0].get("id", ""))
+	if seed == "":
+		status.emit("Select a component instance to pattern")
+		return
+	var count := int(_offset_spin.value) if _offset_spin.value >= 2.0 else 8
+	var made: PackedStringArray = view.doc.pattern_instance(seed, count, TAU)
+	if made.is_empty():
+		status.emit("Pattern failed — needs an instance and count of two or more")
+		return
+	view.refresh()
+	refresh_lists()
+	status.emit("Patterned %d more around the joint axis" % made.size())
 
 
 func _insert_components() -> void:

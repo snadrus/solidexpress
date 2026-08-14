@@ -5,7 +5,12 @@
 #include <fstream>
 #include <sstream>
 
+#include <BRep_Builder.hxx>
+#include <gp_Dir.hxx>
+
 #include "sx/document.hpp"
+#include "sx/drawing_doc.hpp"
+#include "sx/drawings.hpp"
 #include "sx/features.hpp"
 
 namespace sx {
@@ -130,6 +135,92 @@ EntityId import_dxf_sketch(Document& doc, const std::string& path, std::string* 
     f.name = "DXF";
     f.sketch = std::move(sk);
     return doc.graph().add(std::move(f));
+}
+
+bool write_dxf(const std::vector<DxfEntity>& entities, const std::string& path, std::string* err) {
+    std::ofstream out(path);
+    if (!out) {
+        if (err) *err = "cannot write DXF " + path;
+        return false;
+    }
+    auto pair = [&](int code, const std::string& v) { out << code << "\n" << v << "\n"; };
+    auto num = [&](int code, double v) {
+        out << code << "\n" << v << "\n";
+    };
+    pair(0, "SECTION");
+    pair(2, "ENTITIES");
+    for (const auto& e : entities) {
+        if (e.kind == DxfEntity::Kind::Line) {
+            pair(0, "LINE");
+            pair(8, "0");
+            num(10, e.x1);
+            num(20, e.y1);
+            num(11, e.x2);
+            num(21, e.y2);
+        } else if (e.kind == DxfEntity::Kind::Circle) {
+            pair(0, "CIRCLE");
+            pair(8, "0");
+            num(10, e.cx);
+            num(20, e.cy);
+            num(40, e.radius);
+        } else if (e.kind == DxfEntity::Kind::Arc) {
+            pair(0, "ARC");
+            pair(8, "0");
+            num(10, e.cx);
+            num(20, e.cy);
+            num(40, e.radius);
+            num(50, e.start_angle);
+            num(51, e.end_angle);
+        }
+    }
+    pair(0, "ENDSEC");
+    pair(0, "EOF");
+    return true;
+}
+
+bool export_drawing_dxf(const Document& doc, const std::string& path, std::string* err) {
+    std::vector<DxfEntity> ents;
+    auto add_proj = [&](const drawings::ViewProjection& v, double ox, double oy) {
+        auto add_poly = [&](const drawings::Polyline2& pl) {
+            for (size_t i = 1; i < pl.size(); ++i) {
+                DxfEntity e;
+                e.kind = DxfEntity::Kind::Line;
+                e.x1 = pl[i - 1][0] + ox;
+                e.y1 = pl[i - 1][1] + oy;
+                e.x2 = pl[i][0] + ox;
+                e.y2 = pl[i][1] + oy;
+                ents.push_back(e);
+            }
+        };
+        for (const auto& pl : v.visible) add_poly(pl);
+        for (const auto& pl : v.hidden) add_poly(pl);
+    };
+    if (!doc.drawing_sheets().empty()) {
+        for (const auto& view : doc.drawing_sheets().front().views) {
+            add_proj(project_drawing_view(doc, view), view.offset_x, view.offset_y);
+        }
+    } else {
+        TopoDS_Compound comp;
+        BRep_Builder builder;
+        builder.MakeCompound(comp);
+        int n = 0;
+        for (const auto& id : doc.body_ids()) {
+            const Body* b = doc.body(id);
+            if (!b || b->shape.IsNull()) continue;
+            builder.Add(comp, b->shape);
+            ++n;
+        }
+        if (n == 0) {
+            if (err) *err = "empty document";
+            return false;
+        }
+        add_proj(drawings::project(comp, gp_Dir(0, 1, 0), gp_Dir(0, 0, 1)), 0, 0);
+    }
+    if (ents.empty()) {
+        if (err) *err = "drawing produced no entities";
+        return false;
+    }
+    return write_dxf(ents, path, err);
 }
 
 }  // namespace sx

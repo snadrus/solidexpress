@@ -45,6 +45,8 @@
 #include "sx/curves.hpp"
 #include "sx/document.hpp"
 #include "sx/interop.hpp"
+#include "sx/sketch3d.hpp"
+#include "sx/xref.hpp"
 #include "sx/log.hpp"
 #include "sx/shape_utils.hpp"
 #include "sx/sheet_metal.hpp"
@@ -85,6 +87,11 @@ const char* to_string(FeatureType t) {
         case FeatureType::Knit: return "knit";
         case FeatureType::ReplaceFace: return "replace_face";
         case FeatureType::FrameMember: return "frame_member";
+        case FeatureType::InContext: return "in_context";
+        case FeatureType::ConvertSheet: return "convert_sheet";
+        case FeatureType::UserFeature: return "user_feature";
+        case FeatureType::Weld: return "weld";
+        case FeatureType::Sketch3D: return "sketch3d";
     }
     return "unknown";
 }
@@ -118,6 +125,11 @@ FeatureType feature_type_from_string(const std::string& s) {
     if (s == "knit") return FeatureType::Knit;
     if (s == "replace_face") return FeatureType::ReplaceFace;
     if (s == "frame_member") return FeatureType::FrameMember;
+    if (s == "in_context") return FeatureType::InContext;
+    if (s == "convert_sheet") return FeatureType::ConvertSheet;
+    if (s == "user_feature") return FeatureType::UserFeature;
+    if (s == "weld") return FeatureType::Weld;
+    if (s == "sketch3d") return FeatureType::Sketch3D;
     throw std::invalid_argument("unknown feature type: " + s);
 }
 
@@ -131,6 +143,9 @@ static bool creates_body(const Feature& f) {
         return f.params.value("op", "new") == "new";
     if (f.type == FeatureType::Flange)
         return !f.params.contains("target");
+    if (f.type == FeatureType::InContext) return true;
+    if (f.type == FeatureType::UserFeature)
+        return !f.params.contains("target") || f.params.value("target", "").empty();
     return false;
 }
 
@@ -762,6 +777,7 @@ bool FeatureGraph::apply(Document& doc, Feature& f,
 
         switch (f.type) {
             case FeatureType::Sketch:
+                if (f.params.contains("converted_edges")) rebuild_converted_points(doc, f.id);
                 return true;  // no geometry output
 
             case FeatureType::Primitive: {
@@ -1560,6 +1576,78 @@ bool FeatureGraph::apply(Document& doc, Feature& f,
                 f.params["cut_length"] = len;
                 return true;
             }
+
+            case FeatureType::InContext: {
+                const std::string ctx_s = params.value("context", "");
+                const ContextSnapshot* ctx =
+                    ctx_s.empty() ? nullptr : doc.context(EntityId::from_string(ctx_s));
+                const double height = ctx ? ctx->height : num_param(params, "c", 10.0, env);
+                const double a = num_param(params, "a", 20.0, env);
+                const double b = num_param(params, "b", 20.0, env);
+                put_body(doc, f.output_body, shape::make_box(a, b, height), f.name);
+                return true;
+            }
+
+            case FeatureType::ConvertSheet: {
+                EntityId target = find_feature_body("target");
+                const Body* tb = doc.body(target);
+                if (!tb) return fail("convert sheet needs a solid");
+                double thickness = 0.0;
+                if (!sheet::is_thin_solid(tb->shape, &thickness))
+                    return fail("solid is not thin enough to convert");
+                f.params["thickness"] = thickness;
+                f.params["flat_area"] = sheet::flat_area(tb->shape);
+                return true;
+            }
+
+            case FeatureType::UserFeature: {
+                const auto steps = params.value("steps", json::array());
+                if (steps.empty()) return fail("user feature has no steps");
+                for (const auto& step : steps) {
+                    const std::string st = step.value("type", "");
+                    if (st == "hole") {
+                        EntityId target;
+                        try {
+                            target = EntityId::from_string(step.value("target", params.value("target", "")));
+                        } catch (...) {
+                            return fail("user feature hole needs a target");
+                        }
+                        // Target may be a feature id or a body id.
+                        if (!doc.body(target)) {
+                            if (const Feature* tf = feature(target)) target = tf->output_body;
+                        }
+                        const Body* tb = doc.body(target);
+                        if (!tb) return fail("user feature missing target body");
+                        const double diameter = step.value("diameter", params.value("diameter", 6.0));
+                        const double depth = step.value("depth", params.value("depth", 10.0));
+                        json pos = step.contains("position") ? step["position"]
+                                                             : json::array({params.value("x", 0.0),
+                                                                            params.value("y", 0.0),
+                                                                            params.value("z", 0.0)});
+                        TopoDS_Shape tool = build_feature_hole_tool(
+                            pnt_from(pos), gp_Dir(0, 0, -1), diameter, depth,
+                            step.value("hole_type", "countersink"), 0.0, 0.0,
+                            step.value("cs_diameter", params.value("cs_diameter", 12.0)),
+                            step.value("cs_angle_deg", params.value("cs_angle_deg", 90.0)));
+                        if (tool.IsNull()) return fail("user feature hole tool failed");
+                        BRepAlgoAPI_Cut cut(tb->shape, tool);
+                        if (!cut.IsDone()) return fail("user feature hole cut failed");
+                        doc.replace_body_shape(target, cut.Shape());
+                    } else if (st == "box") {
+                        put_body(doc, f.output_body,
+                                 shape::make_box(step.value("a", 10.0), step.value("b", 10.0),
+                                                 step.value("c", 10.0)),
+                                 f.name);
+                    } else {
+                        return fail("user feature step not supported: " + st);
+                    }
+                }
+                return true;
+            }
+
+            case FeatureType::Weld:
+            case FeatureType::Sketch3D:
+                return true;
         }
     } catch (const Standard_Failure& e) {
         return fail(e.GetMessageString() ? e.GetMessageString() : "OCCT failure");

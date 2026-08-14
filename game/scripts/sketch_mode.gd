@@ -1873,6 +1873,51 @@ func run_solve() -> Dictionary:
 	return res
 
 
+func auto_define() -> int:
+	if sketch == null:
+		return 0
+	var n := 0
+	for cid in sketch.constraint_ids():
+		var info: Dictionary = sketch.constraint_info(cid)
+		if info.get("weak", false):
+			if sketch.set_constraint_weak(cid, false):
+				n += 1
+	run_solve()
+	_redraw()
+	status.emit("Auto-define promoted %d dim(s) — DOF %d" % [n, last_dofs])
+	return n
+
+
+func promote_propose() -> String:
+	if sketch == null:
+		return ""
+	var lines: Array = []
+	for eid in sketch.entity_ids():
+		var info: Dictionary = sketch.entity_info(eid)
+		if str(info.get("type", "")) == "line":
+			lines.append({"id": eid, "start": info["start"], "end": info["end"]})
+	for i in range(lines.size()):
+		for j in range(i + 1, lines.size()):
+			var da: Vector2 = (lines[i]["end"] as Vector2) - (lines[i]["start"] as Vector2)
+			var db: Vector2 = (lines[j]["end"] as Vector2) - (lines[j]["start"] as Vector2)
+			if da.length() < 1e-6 or db.length() < 1e-6:
+				continue
+			da = da.normalized()
+			db = db.normalized()
+			if absf(da.dot(db)) > 0.98:
+				var refs := [
+					{"entity": lines[i]["id"], "role": "self"},
+					{"entity": lines[j]["id"], "role": "self"},
+				]
+				var cid: String = sketch.add_constraint("parallel", refs, 0.0)
+				run_solve()
+				_redraw()
+				status.emit("Proposed parallel")
+				return cid
+	status.emit("Nothing to propose")
+	return ""
+
+
 ## New line: add horizontal/vertical when near axis-aligned, and coincident
 ## constraints where its endpoints land on existing line endpoints.
 func _infer_line(lid: String, a: Vector2, b: Vector2) -> void:

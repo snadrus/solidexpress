@@ -283,6 +283,13 @@ public:
     bool set_joint_value(const godot::String& id, double value);
     int solve_joints();
 
+    // Exploded view: factor 0 collapses back to the assembled placement.
+    int explode_assembly(double factor);
+    bool is_exploded() const;
+    // Copies a component around its joint axis; each copy inherits the joint.
+    godot::PackedStringArray pattern_instance(const godot::String& instance, int count,
+                                              double total_angle);
+
     godot::String graph_add_extrude_end(const godot::String& sketch_fid, double distance,
                                         const godot::String& end, const godot::String& op,
                                         const godot::String& target_fid);
@@ -322,6 +329,38 @@ public:
     // Three-view (front/top/right) HLR drawing sheet as SVG. False when the
     // document has no bodies or the file cannot be written.
     bool export_drawing_svg(const godot::String& path, double scale);
+
+    // --- in-context snapshots ---
+    godot::String capture_context(const godot::String& source_body, const godot::String& name);
+    bool is_context_stale(const godot::String& context_id) const;
+    bool update_context(const godot::String& context_id);
+    godot::String graph_add_in_context(const godot::String& context_id, double a, double b);
+    godot::Array context_list() const;
+
+    // --- drawing document ---
+    godot::String ensure_drawing_sheet();
+    godot::String add_drawing_dim(const godot::String& entity_a, const godot::String& entity_b);
+    int refresh_drawing_dims();
+    godot::Array bom_rows() const;
+    godot::Dictionary drawing_preview() const;
+    bool export_drawing_dxf(const godot::String& path);
+    bool export_drawing_pdf(const godot::String& path);
+
+    // --- sheet convert / welds ---
+    godot::String graph_add_convert_sheet(const godot::String& target_fid);
+    godot::String add_weld(const godot::String& edge, const godot::String& symbol, double size);
+    godot::Array weld_list() const;
+
+    // --- queries / What's Wrong ---
+    godot::Dictionary diagnose_feature(const godot::String& fid) const;
+    int auto_dimension();
+    godot::Array propose_chips() const;
+    godot::String graph_add_user_csink(const godot::String& target_fid, const godot::Vector3& pos,
+                                       double diameter, double depth, double cs_diameter);
+    godot::String add_sketch3d(const godot::PackedVector3Array& points);
+    int convert_edges(const godot::String& sketch_fid, const godot::PackedStringArray& edge_ids);
+    int pdm_commit(const godot::String& message);
+    godot::Array pdm_log() const;
 
 protected:
     static void _bind_methods();

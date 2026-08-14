@@ -35,9 +35,56 @@ func _init() -> void:
 	await test_joint_from_face_flow(main)
 	await test_drag_drives_joint(main)
 	await test_snap_on_drop(main)
+	await test_explode_and_pattern(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
+
+
+## Slice H: exploded view is a way of seeing (ViewHud, beside Section), and a
+## pattern of a jointed component reuses the one joint definition.
+func test_explode_and_pattern(main) -> void:
+	print("- explode toggle and pattern around the joint")
+	var view: DocumentView = main.view
+	view.new_document()
+	var panel := _mount_panel(main)
+	var doc: SxDocument = view.doc
+	var plate: String = view.insert_primitive("box", Vector3.ZERO)
+	var bolt: String = doc.add_cylinder(3, 16, Vector3(30, 0, 0))
+	view.select_entity(bolt, "")
+	panel._place_instance()
+	await process_frame
+	var seed: String = doc.instance_list()[0]["id"]
+
+	# The toggle only appears once there is an assembly to explode.
+	main.view_hud.sync_from_view(view)
+	check(main.view_hud._explode_btn.visible, "Explode appears beside Section with parts present")
+	check(not doc.is_exploded(), "document starts assembled")
+	var home: Vector3 = doc.instance_list()[0]["translation"]
+	check(doc.explode_assembly(0.8) == 1, "explode moved the part")
+	check(doc.is_exploded(), "document reads exploded")
+	var away: Vector3 = doc.instance_list()[0]["translation"]
+	check(away.distance_to(home) > 1.0, "part separated (%.1f mm)" % away.distance_to(home))
+	main.view_hud.sync_from_view(view)
+	check(main.view_hud._explode_btn.button_pressed, "toggle reflects the exploded state")
+	check(doc.explode_assembly(0.0) == 1, "collapse moved it back")
+	var back: Vector3 = doc.instance_list()[0]["translation"]
+	check(back.distance_to(home) < 1e-4, "collapsed to the assembled placement")
+
+	# Pattern the seed around a revolute joint: one definition, many bolts.
+	panel._type_option.select(_type_index(panel, "revolute"))
+	panel._arm_mate()
+	panel._mate_face_a = _top_face(doc, plate)
+	panel._resolve_mate_b(bolt, _top_face(doc, bolt))
+	await process_frame
+	check(doc.joint_list().size() == 1, "seed joint added")
+	view.select_instance(seed)
+	panel._offset_spin.value = 6
+	panel._pattern_instance()
+	await process_frame
+	check(doc.instance_list().size() == 6, "six components after the pattern")
+	check(doc.joint_list().size() == 6, "each copy inherits the joint definition")
+	panel.queue_free()
 
 
 ## Slice H: dropping a part on a connector creates the mate, no dialog.

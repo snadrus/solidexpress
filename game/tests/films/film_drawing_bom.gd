@@ -13,6 +13,13 @@ func run_film(ctx: FilmContext) -> void:
 		ctx.view.select_entity(bodies[0], "")
 		await FilmUI.click_button(ctx, "Place instance of selection")
 		await FilmUI.click_button(ctx, "Place instance of selection")
-	var n: int = doc.instance_list().size()
-	await ctx.beat("BOM qty = %d instances of the seed" % n, 0.8)
+	doc.ensure_drawing_sheet()
+	var rows: Array = doc.bom_rows()
+	var qty := 0
+	for r in rows:
+		qty += int(r.get("qty", 0))
+	var mode := ctx.main.find_child("ModeRail", true, false) as MenuButton
+	if mode != null:
+		mode.get_popup().id_pressed.emit(1)
+	await ctx.beat("BOM qty = %d (from the sheet, not a count in the test)" % qty, 0.8)
 	await ctx.camera.showcase_smooth(1.0, 22.0)

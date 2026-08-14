@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <string>
 
+#include "sx/assembly_ops.hpp"
 #include "sx/cam.hpp"
 #include "sx/catalog.hpp"
 #include "sx/document.hpp"
@@ -146,6 +147,70 @@ TEST_CASE("drawing dim follows a resized box", "[wave1][draw]") {
     auto bb2 = measure::bounding_box(doc, body);
     REQUIRE(bb2);
     CHECK(bb2->max[0] - bb2->min[0] == Approx(55.0).margin(1e-6));
+}
+
+TEST_CASE("explode separates parts and collapses back exactly", "[wave1][explode]") {
+    Document doc;
+    auto plate = doc.add_body(shape::make_box(60, 60, 6), "Plate");
+    auto pin = doc.add_body(shape::make_cylinder(4, 20), "Pin");
+    auto a = doc.add_instance(pin, {10, 10, 6}, {0, 0, 0, 1}, "Pin-1");
+    auto b = doc.add_instance(pin, {50, 50, 6}, {0, 0, 0, 1}, "Pin-2");
+    const auto home_a = doc.instance(a)->translation;
+    const auto home_b = doc.instance(b)->translation;
+
+    CHECK_FALSE(is_exploded(doc));
+    CHECK(explode(doc, 1.0) == 2);
+    CHECK(is_exploded(doc));
+    // Both parts moved, and they moved apart rather than together.
+    const gp_Vec moved_a(doc.instance(a)->translation[0] - home_a[0],
+                         doc.instance(a)->translation[1] - home_a[1],
+                         doc.instance(a)->translation[2] - home_a[2]);
+    const gp_Vec moved_b(doc.instance(b)->translation[0] - home_b[0],
+                         doc.instance(b)->translation[1] - home_b[1],
+                         doc.instance(b)->translation[2] - home_b[2]);
+    CHECK(moved_a.Magnitude() > 1.0);
+    CHECK(moved_b.Magnitude() > 1.0);
+    CHECK(moved_a.Dot(moved_b) < 0.0);
+
+    // Collapsing restores the assembled placement exactly.
+    CHECK(explode(doc, 0.0) == 2);
+    CHECK_FALSE(is_exploded(doc));
+    for (int i = 0; i < 3; ++i) {
+        CHECK(doc.instance(a)->translation[i] == Approx(home_a[i]).margin(1e-9));
+        CHECK(doc.instance(b)->translation[i] == Approx(home_b[i]).margin(1e-9));
+    }
+    (void)plate;
+}
+
+TEST_CASE("patterning a jointed component copies the joint", "[wave1][pattern]") {
+    Document doc;
+    auto plate = doc.add_body(shape::make_box(100, 100, 6), "Plate");
+    auto bolt = doc.add_body(shape::make_cylinder(3, 16), "Bolt");
+    auto seed = doc.add_instance(bolt, {30, 0, 6}, {0, 0, 0, 1}, "Bolt-1");
+    Joint j;
+    j.type = JointType::Revolute;
+    j.a.origin = {0, 0, 6};
+    j.a.z_dir = {0, 0, 1};
+    j.b.instance = seed;
+    j.b.origin = {0, 0, 0};
+    j.b.z_dir = {0, 0, 1};
+    REQUIRE_FALSE(doc.add_joint(std::move(j)).is_null());
+
+    std::string err;
+    auto made = pattern_instance(doc, seed, 8, 6.283185307179586, &err);
+    CHECK(made.size() == 7);
+    CHECK(doc.instances().size() == 8);
+    // One joint definition per bolt, all on the same axis.
+    CHECK(doc.joints().size() == 8);
+    // The copies sit on the same 30 mm circle as the seed.
+    for (const auto& id : made) {
+        const Instance* inst = doc.instance(id);
+        REQUIRE(inst);
+        const double r = std::hypot(inst->translation[0], inst->translation[1]);
+        CHECK(r == Approx(30.0).margin(1e-6));
+    }
+    CHECK(pattern_instance(doc, seed, 1, 1.0, &err).empty());
+    (void)plate;
 }
 
 TEST_CASE("BOM counts two instances of one source", "[wave1][bom]") {

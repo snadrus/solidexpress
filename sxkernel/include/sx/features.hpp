@@ -71,6 +71,11 @@ enum class FeatureType {
     Knit,       // params: {targets: [fid, ...]} — fuse listed bodies
     ReplaceFace,// params: {target, face_index, offset}
     FrameMember,// params: {path: [[x,y,z],...], profile_w, profile_h}
+    InContext,  // params: {context: <id>, a, b} — height from the snapshot
+    ConvertSheet,// params: {target} — tag a thin solid as sheet metal
+    UserFeature,// params: {recipe, steps: [...], plus recipe args}
+    Weld,       // params: {edge, symbol, size} — cosmetic, no solid output
+    Sketch3D,   // params: {points: [[x,y,z],...]} — feeds Path / Sweep
 };
 
 const char* to_string(FeatureType t);

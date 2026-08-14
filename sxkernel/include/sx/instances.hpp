@@ -29,6 +29,10 @@ struct Instance {
     // Optional provenance from multi-doc Insert Components (empty for
     // same-doc Place instance). Non-authoritative — geometry is copied in.
     std::string source_path;
+    // Assembled placement, remembered while the view is exploded so collapsing
+    // restores the mated position exactly instead of re-solving into it.
+    std::array<double, 3> assembled_translation{0, 0, 0};
+    bool exploded = false;
 };
 
 void to_json(nlohmann::json& j, const Instance& inst);

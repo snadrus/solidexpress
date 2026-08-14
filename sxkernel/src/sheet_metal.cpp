@@ -4,7 +4,9 @@
 #include <cmath>
 #include <vector>
 
+#include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
+#include <Bnd_Box.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
@@ -124,6 +126,47 @@ FlangeBuild build_flange(double base_leg, double flange_leg, double width, const
     out.folded = BRepBuilderAPI_Transform(folded, place, true).Shape();
     out.flat = shape::make_box(out.flat_length, width, t, at);
     return out;
+}
+
+bool is_thin_solid(const TopoDS_Shape& s, double* thickness) {
+    if (s.IsNull()) return false;
+    Bnd_Box box;
+    BRepBndLib::Add(s, box);
+    if (box.IsVoid()) return false;
+    double xmin, ymin, zmin, xmax, ymax, zmax;
+    box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    const double dx = xmax - xmin, dy = ymax - ymin, dz = zmax - zmin;
+    const double t = std::min({dx, dy, dz});
+    const double m = std::max({dx, dy, dz});
+    if (t < 1e-6 || t > m * 0.25) return false;
+    if (thickness) *thickness = t;
+    return true;
+}
+
+double flat_area(const TopoDS_Shape& s) {
+    Bnd_Box box;
+    BRepBndLib::Add(s, box);
+    if (box.IsVoid()) return 0.0;
+    double xmin, ymin, zmin, xmax, ymax, zmax;
+    box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    double d[3] = {xmax - xmin, ymax - ymin, zmax - zmin};
+    std::sort(d, d + 3);
+    return d[1] * d[2];
+}
+
+TopoDS_Shape unfold_thin_solid(const TopoDS_Shape& s, std::string* err) {
+    double t = 0.0;
+    if (!is_thin_solid(s, &t)) {
+        if (err) *err = "solid is not a thin sheet";
+        return {};
+    }
+    Bnd_Box box;
+    BRepBndLib::Add(s, box);
+    double xmin, ymin, zmin, xmax, ymax, zmax;
+    box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+    double d[3] = {xmax - xmin, ymax - ymin, zmax - zmin};
+    std::sort(d, d + 3);
+    return shape::make_box(d[2], d[1], t);
 }
 
 }  // namespace sx::sheet

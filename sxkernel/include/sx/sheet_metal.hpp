@@ -47,4 +47,10 @@ FlangeBuild build_flange(double base_leg, double flange_leg, double width,
                          const FlangeParams& p, const shape::Placement& at = {},
                          std::string* err = nullptr);
 
+// Convert a thin solid: the smallest bbox side is the thickness. Flat is the
+// mid-plane rectangle (the two larger sides).
+bool is_thin_solid(const TopoDS_Shape& s, double* thickness);
+double flat_area(const TopoDS_Shape& s);
+TopoDS_Shape unfold_thin_solid(const TopoDS_Shape& s, std::string* err = nullptr);
+
 }  // namespace sx::sheet

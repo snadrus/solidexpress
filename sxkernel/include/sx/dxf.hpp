@@ -25,4 +25,11 @@ int add_dxf_to_sketch(Sketch& sketch, const std::vector<DxfEntity>& entities);
 // Create a Sketch feature on the document graph from a DXF file.
 EntityId import_dxf_sketch(class Document& doc, const std::string& path, std::string* err = nullptr);
 
+// Write R12 ENTITIES (LINE / CIRCLE / ARC). Mirror of DxfEntity. No libdxfrw.
+bool write_dxf(const std::vector<DxfEntity>& entities, const std::string& path,
+               std::string* err = nullptr);
+
+// Export the drawing document (or a three-view fallback) as DXF lines.
+bool export_drawing_dxf(const Document& doc, const std::string& path, std::string* err = nullptr);
+
 }  // namespace sx

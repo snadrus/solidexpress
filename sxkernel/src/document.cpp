@@ -1,7 +1,9 @@
 #include "sx/document.hpp"
 
 #include <TopExp.hxx>
+#include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
+#include <TopTools_ListOfShape.hxx>
 
 #include <algorithm>
 #include <cmath>
@@ -100,6 +102,7 @@ void Document::replace_body_shape(const EntityId& body_id, const TopoDS_Shape& s
     // shape so surviving faces/edges/vertices keep their EntityIds (and
     // therefore their cards, aliases, and selections).
     auto match = naming::match_subshapes(b->shape, b->subshape_ids, shape);
+    last_released_ = match.released;
     for (const auto& [kind, ids] : b->subshape_ids)
         for (const auto& id : ids) subshape_index_.erase(id);
     for (const auto& id : match.released) cards_->erase(id);
@@ -253,6 +256,30 @@ void Document::regenerate_cards_for_body(const Body& b) {
         fc.digest = shape::describe_face(faces(i));
         fc.relations = {b.id};
         cards_->upsert(std::move(fc));
+    }
+
+    // Adjacency: faces that share an edge become card relations (and feed
+    // adjacent-to= queries / the selection-card digest).
+    TopTools_IndexedDataMapOfShapeListOfShape edge_faces;
+    TopExp::MapShapesAndAncestors(b.shape, TopAbs_EDGE, TopAbs_FACE, edge_faces);
+    for (int i = 1; i <= faces.Extent(); ++i) {
+        const EntityId face_id = face_ids[static_cast<size_t>(i - 1)];
+        Card* fc = cards_->find_mut(face_id);
+        if (!fc) continue;
+        TopTools_IndexedMapOfShape my_edges;
+        TopExp::MapShapes(faces(i), TopAbs_EDGE, my_edges);
+        for (int e = 1; e <= my_edges.Extent(); ++e) {
+            if (!edge_faces.Contains(my_edges(e))) continue;
+            const TopTools_ListOfShape& nbrs = edge_faces.FindFromKey(my_edges(e));
+            for (const TopoDS_Shape& n : nbrs) {
+                const int fi = faces.FindIndex(n);
+                if (fi < 1 || fi == i) continue;
+                const EntityId nid = face_ids[static_cast<size_t>(fi - 1)];
+                if (std::find(fc->relations.begin(), fc->relations.end(), nid) ==
+                    fc->relations.end())
+                    fc->relations.push_back(nid);
+            }
+        }
     }
 }
 
@@ -610,6 +637,143 @@ void Document::restore_configuration(Configuration&& c, bool active) {
     } else {
         configurations_.push_back(std::move(c));
     }
+}
+
+EntityId Document::add_context(ContextSnapshot snap) {
+    if (snap.id.is_null()) snap.id = EntityId::generate();
+    if (snap.name.empty()) snap.name = "Context " + std::to_string(contexts_.size() + 1);
+    const EntityId id = snap.id;
+    contexts_.push_back(std::move(snap));
+    bump_revision();
+    return id;
+}
+
+bool Document::remove_context(const EntityId& id) {
+    for (size_t i = 0; i < contexts_.size(); ++i) {
+        if (contexts_[i].id == id) {
+            contexts_.erase(contexts_.begin() + static_cast<long>(i));
+            bump_revision();
+            return true;
+        }
+    }
+    return false;
+}
+
+const ContextSnapshot* Document::context(const EntityId& id) const {
+    for (const auto& c : contexts_)
+        if (c.id == id) return &c;
+    return nullptr;
+}
+
+ContextSnapshot* Document::context_mut(const EntityId& id) {
+    for (auto& c : contexts_)
+        if (c.id == id) return &c;
+    return nullptr;
+}
+
+void Document::restore_context(ContextSnapshot&& c) {
+    contexts_.push_back(std::move(c));
+    bump_revision();
+}
+
+EntityId Document::add_drawing_sheet(DrawingSheetDoc sheet) {
+    if (sheet.id.is_null()) sheet.id = EntityId::generate();
+    const EntityId id = sheet.id;
+    drawing_sheets_.push_back(std::move(sheet));
+    bump_revision();
+    return id;
+}
+
+bool Document::remove_drawing_sheet(const EntityId& id) {
+    for (size_t i = 0; i < drawing_sheets_.size(); ++i) {
+        if (drawing_sheets_[i].id == id) {
+            drawing_sheets_.erase(drawing_sheets_.begin() + static_cast<long>(i));
+            bump_revision();
+            return true;
+        }
+    }
+    return false;
+}
+
+const DrawingSheetDoc* Document::drawing_sheet(const EntityId& id) const {
+    for (const auto& s : drawing_sheets_)
+        if (s.id == id) return &s;
+    return nullptr;
+}
+
+DrawingSheetDoc* Document::drawing_sheet_mut(const EntityId& id) {
+    for (auto& s : drawing_sheets_)
+        if (s.id == id) return &s;
+    return nullptr;
+}
+
+void Document::restore_drawing_sheet(DrawingSheetDoc&& s) {
+    drawing_sheets_.push_back(std::move(s));
+    bump_revision();
+}
+
+EntityId Document::add_weld(CosmeticWeld w) {
+    if (w.id.is_null()) w.id = EntityId::generate();
+    const EntityId id = w.id;
+    welds_.push_back(std::move(w));
+    bump_revision();
+    return id;
+}
+
+bool Document::remove_weld(const EntityId& id) {
+    for (size_t i = 0; i < welds_.size(); ++i) {
+        if (welds_[i].id == id) {
+            welds_.erase(welds_.begin() + static_cast<long>(i));
+            bump_revision();
+            return true;
+        }
+    }
+    return false;
+}
+
+void Document::restore_weld(CosmeticWeld&& w) {
+    welds_.push_back(std::move(w));
+    bump_revision();
+}
+
+EntityId Document::add_sketch3d(Sketch3D s) {
+    if (s.id.is_null()) s.id = EntityId::generate();
+    if (s.name.empty()) s.name = "3D Sketch " + std::to_string(sketches3d_.size() + 1);
+    const EntityId id = s.id;
+    sketches3d_.push_back(std::move(s));
+    bump_revision();
+    return id;
+}
+
+bool Document::remove_sketch3d(const EntityId& id) {
+    for (size_t i = 0; i < sketches3d_.size(); ++i) {
+        if (sketches3d_[i].id == id) {
+            sketches3d_.erase(sketches3d_.begin() + static_cast<long>(i));
+            bump_revision();
+            return true;
+        }
+    }
+    return false;
+}
+
+const Sketch3D* Document::sketch3d(const EntityId& id) const {
+    for (const auto& s : sketches3d_)
+        if (s.id == id) return &s;
+    return nullptr;
+}
+
+void Document::restore_sketch3d(Sketch3D&& s) {
+    sketches3d_.push_back(std::move(s));
+    bump_revision();
+}
+
+void Document::add_pdm_entry(const std::string& message) {
+    pdm_.emplace_back(message, revision_);
+    bump_revision();
+}
+
+void Document::restore_pdm(std::vector<std::pair<std::string, uint64_t>> entries) {
+    pdm_ = std::move(entries);
 }
 
 }  // namespace sx

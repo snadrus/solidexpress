@@ -18,15 +18,24 @@
 #include <gp_Vec.hxx>
 #include <type_traits>
 #include <variant>
+#include "sx/assembly_ops.hpp"
+#include "sx/autodim.hpp"
 #include "sx/cam.hpp"
 #include "sx/catalog.hpp"
+#include "sx/diagnose.hpp"
+#include "sx/drawing_doc.hpp"
 #include "sx/drawings.hpp"
 #include "sx/dxf.hpp"
 #include "sx/fea.hpp"
 #include "sx/joints.hpp"
+#include "sx/pdf.hpp"
 #include "sx/query.hpp"
 #include "sx/rules.hpp"
 #include "sx/sheet_metal.hpp"
+#include "sx/sketch3d.hpp"
+#include "sx/specialized.hpp"
+#include "sx/user_feature.hpp"
+#include "sx/xref.hpp"
 #include "sx/materials.hpp"
 #include "sx/mates.hpp"
 #include "sx/measure.hpp"
@@ -36,6 +45,7 @@
 #include "sx_sketch.hpp"
 #include <godot_cpp/variant/packed_float32_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
+#include <godot_cpp/variant/packed_vector2_array.hpp>
 #include <godot_cpp/variant/packed_vector3_array.hpp>
 
 #include "sx/cards.hpp"
@@ -622,7 +632,17 @@ Dictionary SxDocument::pick(const Vector3& origin, const Vector3& direction) con
 
 String SxDocument::card_markdown(const String& entity_id) const {
     const sx::Card* c = doc_->cards().find(parse_id(entity_id));
-    return c ? to_gd(c->to_markdown()) : String();
+    if (!c) return String();
+    String md = to_gd(c->to_markdown());
+    // Surface the feature digest on the selection card (Wave 3.2).
+    for (const auto& f : doc_->graph().timeline()) {
+        if (f.output_body == c->id || (!c->relations.empty() && f.output_body == c->relations[0])) {
+            md += "\n\n## Feature\n\n";
+            md += to_gd(sx::card_digest(f));
+            break;
+        }
+    }
+    return md;
 }
 
 void SxDocument::set_card_alias(const String& entity_id, const String& text) {
@@ -660,6 +680,10 @@ Array SxDocument::graph_features() const {
         const bool failed = !last_failed_fid_.empty() && f.id.str() == last_failed_fid_;
         d["failed"] = failed;
         d["error"] = failed ? to_gd(last_graph_error_) : String();
+        String ctx_id;
+        if (f.params.contains("context")) ctx_id = to_gd(f.params["context"].get<std::string>());
+        d["context_id"] = ctx_id;
+        d["context_stale"] = !ctx_id.is_empty() && sx::is_context_stale(*doc_, parse_id(ctx_id));
         out.push_back(d);
     }
     return out;
@@ -1370,6 +1394,20 @@ bool SxDocument::set_joint_value(const String& id, double value) {
 
 int SxDocument::solve_joints() { return sx::solve_joints(*doc_); }
 
+int SxDocument::explode_assembly(double factor) { return sx::explode(*doc_, factor); }
+
+bool SxDocument::is_exploded() const { return sx::is_exploded(*doc_); }
+
+PackedStringArray SxDocument::pattern_instance(const String& instance, int count,
+                                               double total_angle) {
+    PackedStringArray out;
+    std::string err;
+    for (const auto& id : sx::pattern_instance(*doc_, parse_id(instance), count, total_angle, &err))
+        out.push_back(to_gd(id.str()));
+    if (out.is_empty() && !err.empty()) sx::log::warn("pattern_instance: " + err);
+    return out;
+}
+
 Array SxDocument::connector_list() const {
     Array out;
     for (const auto& c : doc_->connectors()) {
@@ -1599,6 +1637,273 @@ bool SxDocument::export_drawing_svg(const String& path, double scale) {
     return sx::drawings::export_three_view_svg(*doc_, to_std(path), scale);
 }
 
+String SxDocument::capture_context(const String& source_body, const String& name) {
+    std::string err;
+    auto id = sx::capture_context(*doc_, parse_id(source_body), to_std(name), &err);
+    if (id.is_null() && !err.empty()) sx::log::warn("capture_context: " + err);
+    return id.is_null() ? String() : to_gd(id.str());
+}
+
+bool SxDocument::is_context_stale(const String& context_id) const {
+    return sx::is_context_stale(*doc_, parse_id(context_id));
+}
+
+bool SxDocument::update_context(const String& context_id) {
+    std::string err;
+    if (!sx::update_context(*doc_, parse_id(context_id), &err)) return false;
+    std::string regen_err;
+    return doc_->graph().regenerate(*doc_, &regen_err);
+}
+
+String SxDocument::graph_add_in_context(const String& context_id, double a, double b) {
+    sx::EntityId fid;
+    bool ok = apply_graph_edit("in_context", [&] {
+        sx::Feature f;
+        f.type = sx::FeatureType::InContext;
+        f.params = {{"context", to_std(context_id)}, {"a", a}, {"b", b}};
+        fid = doc_->graph().add(std::move(f));
+        if (auto* ctx = doc_->context_mut(parse_id(context_id))) ctx->consumer_feature = fid;
+        return true;
+    });
+    return ok ? to_gd(fid.str()) : String();
+}
+
+Array SxDocument::context_list() const {
+    Array out;
+    for (const auto& c : doc_->contexts()) {
+        Dictionary d;
+        d["id"] = to_gd(c.id.str());
+        d["name"] = to_gd(c.name);
+        d["source_body"] = to_gd(c.source_body.str());
+        d["stale"] = sx::is_context_stale(*doc_, c.id);
+        d["height"] = c.height;
+        out.push_back(d);
+    }
+    return out;
+}
+
+String SxDocument::ensure_drawing_sheet() {
+    return to_gd(sx::ensure_drawing_sheet(*doc_).str());
+}
+
+String SxDocument::add_drawing_dim(const String& entity_a, const String& entity_b) {
+    const sx::EntityId sheet = sx::ensure_drawing_sheet(*doc_);
+    sx::EntityId view;
+    if (const auto* s = doc_->drawing_sheet(sheet); s && !s->views.empty()) view = s->views.front().id;
+    return to_gd(sx::add_drawing_dim(*doc_, sheet, view, parse_id(entity_a),
+                                     entity_b.is_empty() ? sx::EntityId{} : parse_id(entity_b))
+                     .str());
+}
+
+int SxDocument::refresh_drawing_dims() { return sx::refresh_drawing_dims(*doc_); }
+
+Array SxDocument::bom_rows() const {
+    Array out;
+    for (const auto& r : sx::bom_from_instances(*doc_)) {
+        Dictionary d;
+        d["item"] = r.item;
+        d["name"] = to_gd(r.name);
+        d["qty"] = r.qty;
+        d["source"] = to_gd(r.source);
+        out.push_back(d);
+    }
+    return out;
+}
+
+Dictionary SxDocument::drawing_preview() const {
+    Dictionary out;
+    if (doc_->drawing_sheets().empty()) {
+        const_cast<SxDocument*>(this)->ensure_drawing_sheet();
+    }
+    if (doc_->drawing_sheets().empty()) return out;
+    const auto& sheet = doc_->drawing_sheets().front();
+    out["title"] = to_gd(sheet.title);
+    out["scale"] = sheet.scale;
+    Array views;
+    for (const auto& v : sheet.views) {
+        Dictionary dv;
+        dv["id"] = to_gd(v.id.str());
+        dv["name"] = to_gd(v.name);
+        dv["kind"] = to_gd(v.kind);
+        dv["offset_x"] = v.offset_x;
+        dv["offset_y"] = v.offset_y;
+        auto proj = sx::project_drawing_view(*doc_, v);
+        auto pack = [](const std::vector<sx::drawings::Polyline2>& pls) {
+            Array a;
+            for (const auto& pl : pls) {
+                PackedVector2Array pv;
+                for (const auto& p : pl) pv.push_back(Vector2(p[0], p[1]));
+                a.push_back(pv);
+            }
+            return a;
+        };
+        dv["visible"] = pack(proj.visible);
+        dv["hidden"] = pack(proj.hidden);
+        dv["hatch"] = pack(sx::section_hatch(*doc_, v));
+        views.push_back(dv);
+    }
+    out["views"] = views;
+    Array dims;
+    for (const auto& d : sheet.dims) {
+        Dictionary dd;
+        dd["id"] = to_gd(d.id.str());
+        dd["value"] = d.value;
+        dd["kind"] = to_gd(d.kind);
+        dims.push_back(dd);
+    }
+    out["dims"] = dims;
+    out["bom"] = bom_rows();
+    Array welds;
+    for (const auto& w : doc_->welds()) {
+        Dictionary dw;
+        dw["symbol"] = to_gd(w.symbol);
+        dw["size"] = w.size;
+        welds.push_back(dw);
+    }
+    out["welds"] = welds;
+    return out;
+}
+
+bool SxDocument::export_drawing_dxf(const String& path) {
+    std::string err;
+    return sx::export_drawing_dxf(*doc_, to_std(path), &err);
+}
+
+bool SxDocument::export_drawing_pdf(const String& path) {
+    if (doc_->drawing_sheets().empty()) sx::ensure_drawing_sheet(*doc_);
+    std::vector<sx::drawings::PlacedView> views;
+    if (!doc_->drawing_sheets().empty()) {
+        for (const auto& v : doc_->drawing_sheets().front().views) {
+            sx::drawings::PlacedView pv;
+            pv.view = sx::project_drawing_view(*doc_, v);
+            pv.label = v.name;
+            pv.offset_x = v.offset_x;
+            pv.offset_y = v.offset_y;
+            views.push_back(pv);
+        }
+    }
+    return sx::write_pdf(views, to_std(path), 1.0, "SOLIDEXPRESS");
+}
+
+String SxDocument::graph_add_convert_sheet(const String& target_fid) {
+    sx::EntityId fid;
+    bool ok = apply_graph_edit("convert_sheet", [&] {
+        sx::Feature f;
+        f.type = sx::FeatureType::ConvertSheet;
+        f.params = {{"target", to_std(target_fid)}};
+        fid = doc_->graph().add(std::move(f));
+        return true;
+    });
+    return ok ? to_gd(fid.str()) : String();
+}
+
+String SxDocument::add_weld(const String& edge, const String& symbol, double size) {
+    sx::CosmeticWeld w;
+    w.edge = parse_id(edge);
+    w.symbol = to_std(symbol);
+    w.size = size;
+    return to_gd(doc_->add_weld(std::move(w)).str());
+}
+
+Array SxDocument::weld_list() const {
+    Array out;
+    for (const auto& w : doc_->welds()) {
+        Dictionary d;
+        d["id"] = to_gd(w.id.str());
+        d["edge"] = to_gd(w.edge.str());
+        d["symbol"] = to_gd(w.symbol);
+        d["size"] = w.size;
+        out.push_back(d);
+    }
+    return out;
+}
+
+Dictionary SxDocument::diagnose_feature(const String& fid) const {
+    Dictionary d;
+    auto diag = sx::diagnose_failed_feature(*doc_, parse_id(fid), last_graph_error_);
+    d["feature"] = to_gd(diag.feature.str());
+    d["name"] = to_gd(diag.feature_name);
+    d["error"] = to_gd(diag.error);
+    PackedStringArray released;
+    for (const auto& id : diag.released) released.push_back(to_gd(id.str()));
+    d["released"] = released;
+    PackedStringArray repairs;
+    for (const auto& r : diag.repairs) repairs.push_back(to_gd(r));
+    d["repairs"] = repairs;
+    return d;
+}
+
+int SxDocument::auto_dimension() {
+    for (auto it = doc_->graph().timeline().rbegin(); it != doc_->graph().timeline().rend(); ++it) {
+        if (it->type == sx::FeatureType::Sketch && it->sketch)
+            return sx::auto_dimension(*it->sketch);
+    }
+    return 0;
+}
+
+Array SxDocument::propose_chips() const {
+    Array out;
+    for (auto it = doc_->graph().timeline().rbegin(); it != doc_->graph().timeline().rend(); ++it) {
+        if (it->type != sx::FeatureType::Sketch || !it->sketch) continue;
+        for (const auto& c : sx::propose_on_select(*it->sketch, {})) {
+            Dictionary d;
+            d["verb"] = to_gd(c.verb);
+            d["a"] = to_gd(c.a.str());
+            d["b"] = to_gd(c.b.str());
+            d["score"] = c.score;
+            out.push_back(d);
+        }
+        break;
+    }
+    return out;
+}
+
+String SxDocument::graph_add_user_csink(const String& target_fid, const Vector3& pos, double diameter,
+                                        double depth, double cs_diameter) {
+    std::string err;
+    nlohmann::json args = {{"target", to_std(target_fid)},
+                           {"x", pos.x},
+                           {"y", pos.y},
+                           {"z", pos.z},
+                           {"diameter", diameter},
+                           {"depth", depth},
+                           {"cs_diameter", cs_diameter}};
+    auto id = sx::instantiate_user_feature(*doc_, sx::user_csink_recipe(), args, &err);
+    return id.is_null() ? String() : to_gd(id.str());
+}
+
+String SxDocument::add_sketch3d(const PackedVector3Array& points) {
+    sx::Sketch3D s;
+    for (int i = 0; i < points.size(); ++i) {
+        const Vector3 p = points[i];
+        s.points.push_back({p.x, p.y, p.z});
+    }
+    return to_gd(doc_->add_sketch3d(std::move(s)).str());
+}
+
+int SxDocument::convert_edges(const String& sketch_fid, const PackedStringArray& edge_ids) {
+    std::vector<sx::EntityId> ids;
+    for (int i = 0; i < edge_ids.size(); ++i) ids.push_back(parse_id(edge_ids[i]));
+    std::string err;
+    return sx::convert_edges_to_sketch(*doc_, parse_id(sketch_fid), ids, &err);
+}
+
+int SxDocument::pdm_commit(const String& message) {
+    sx::pdm_commit(*doc_, to_std(message));
+    return static_cast<int>(doc_->pdm_entries().size());
+}
+
+Array SxDocument::pdm_log() const {
+    Array out;
+    for (const auto& e : sx::pdm_log(*doc_)) {
+        Dictionary d;
+        d["message"] = to_gd(e.message);
+        d["revision"] = static_cast<int>(e.revision);
+        out.push_back(d);
+    }
+    return out;
+}
+
 void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("add_box", "dx", "dy", "dz", "origin"), &SxDocument::add_box);
     ClassDB::bind_method(D_METHOD("add_cylinder", "radius", "height", "origin"), &SxDocument::add_cylinder);
@@ -1742,6 +2047,10 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("remove_joint", "id"), &SxDocument::remove_joint);
     ClassDB::bind_method(D_METHOD("set_joint_value", "id", "value"), &SxDocument::set_joint_value);
     ClassDB::bind_method(D_METHOD("solve_joints"), &SxDocument::solve_joints);
+    ClassDB::bind_method(D_METHOD("explode_assembly", "factor"), &SxDocument::explode_assembly);
+    ClassDB::bind_method(D_METHOD("is_exploded"), &SxDocument::is_exploded);
+    ClassDB::bind_method(D_METHOD("pattern_instance", "instance", "count", "total_angle"),
+                         &SxDocument::pattern_instance);
     ClassDB::bind_method(D_METHOD("graph_add_extrude_end", "sketch_fid", "distance", "end", "op",
                                   "target_fid"),
                          &SxDocument::graph_add_extrude_end);
@@ -1785,6 +2094,36 @@ void SxDocument::_bind_methods() {
                          &SxDocument::catalog_fastener);
     ClassDB::bind_method(D_METHOD("export_drawing_svg", "path", "scale"),
                          &SxDocument::export_drawing_svg);
+    ClassDB::bind_method(D_METHOD("capture_context", "source_body", "name"),
+                         &SxDocument::capture_context);
+    ClassDB::bind_method(D_METHOD("is_context_stale", "context_id"), &SxDocument::is_context_stale);
+    ClassDB::bind_method(D_METHOD("update_context", "context_id"), &SxDocument::update_context);
+    ClassDB::bind_method(D_METHOD("graph_add_in_context", "context_id", "a", "b"),
+                         &SxDocument::graph_add_in_context);
+    ClassDB::bind_method(D_METHOD("context_list"), &SxDocument::context_list);
+    ClassDB::bind_method(D_METHOD("ensure_drawing_sheet"), &SxDocument::ensure_drawing_sheet);
+    ClassDB::bind_method(D_METHOD("add_drawing_dim", "entity_a", "entity_b"),
+                         &SxDocument::add_drawing_dim, DEFVAL(String()));
+    ClassDB::bind_method(D_METHOD("refresh_drawing_dims"), &SxDocument::refresh_drawing_dims);
+    ClassDB::bind_method(D_METHOD("bom_rows"), &SxDocument::bom_rows);
+    ClassDB::bind_method(D_METHOD("drawing_preview"), &SxDocument::drawing_preview);
+    ClassDB::bind_method(D_METHOD("export_drawing_dxf", "path"), &SxDocument::export_drawing_dxf);
+    ClassDB::bind_method(D_METHOD("export_drawing_pdf", "path"), &SxDocument::export_drawing_pdf);
+    ClassDB::bind_method(D_METHOD("graph_add_convert_sheet", "target_fid"),
+                         &SxDocument::graph_add_convert_sheet);
+    ClassDB::bind_method(D_METHOD("add_weld", "edge", "symbol", "size"), &SxDocument::add_weld);
+    ClassDB::bind_method(D_METHOD("weld_list"), &SxDocument::weld_list);
+    ClassDB::bind_method(D_METHOD("diagnose_feature", "fid"), &SxDocument::diagnose_feature);
+    ClassDB::bind_method(D_METHOD("auto_dimension"), &SxDocument::auto_dimension);
+    ClassDB::bind_method(D_METHOD("propose_chips"), &SxDocument::propose_chips);
+    ClassDB::bind_method(D_METHOD("graph_add_user_csink", "target_fid", "pos", "diameter", "depth",
+                                  "cs_diameter"),
+                         &SxDocument::graph_add_user_csink);
+    ClassDB::bind_method(D_METHOD("add_sketch3d", "points"), &SxDocument::add_sketch3d);
+    ClassDB::bind_method(D_METHOD("convert_edges", "sketch_fid", "edge_ids"),
+                         &SxDocument::convert_edges);
+    ClassDB::bind_method(D_METHOD("pdm_commit", "message"), &SxDocument::pdm_commit);
+    ClassDB::bind_method(D_METHOD("pdm_log"), &SxDocument::pdm_log);
 }
 
 }  // namespace sx_godot

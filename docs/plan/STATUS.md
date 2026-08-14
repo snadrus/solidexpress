@@ -235,29 +235,56 @@ only the real thing passes:
 - [x] 1.2 Snap-to-mate on drop: the connector under the cursor lights up mid-drag
   and the release creates the fastened mate on the part's own nearest connector;
   film `snap_bolt_drop`
-- [x] 1.6/1.7 Draw mode rail + `drawing_sheet.gd`; film `drawing_follows_model`
-- [x] 1.8 BOM from instance counts; film `drawing_bom`
+- [x] 1.3 Exploded views: ViewHud toggle, assembled translation remembered, `.sxp` round-trip; film `explode_gearbox`
+- [x] 1.4 Pattern of instance around the seed joint; film `bolt_circle_pattern`
+- [x] 1.5 In-context snapshots (`sx/xref.hpp`): neighbor edits do not flow until **Update Context** on the consumer timeline row; film `context_update`
+- [x] 1.6/1.7 Drawing document in `.sxp` (sheets, views, scale, title block) + live HLR in Draw mode; associative dims by naming UUIDs; film `drawing_follows_model`
+- [x] 1.8 BOM table + balloons from `Document::instances()`; film `drawing_bom`
+- [x] 1.6 Section / detail hatch; film `drawing_section`
+- [x] 1.9 Own DXF writer + vector PDF, File menu; no new dependency
+- [x] 1.10 Associative convert stores edge UUIDs; film `convert_survives_edit`
+- [x] 1.11 3D sketch as a separate curve set feeding Path; film `sweep_3d_polyline`
 - [x] 1.12 Rib feature + marking-menu verb; film `rib_and_wrap`
-- Parked (same protocol, later PR): snap-on-drop, explode, assembly patterns, in-context Update, drawing section/hatch, DXF/PDF writer, associative convert, 3D sketch
 
 ## Wave 2 — Sheet metal, frames, surfaces
 - [x] 2.1 Sheet mode + K-factor flange; film `flange_box_flat`
 - [x] 2.2 Split folded|flat overlay (`sheet_metal_view.gd`); film `flat_edits_folded`
+- [x] 2.3 Convert thin solid → sheet metal; film `convert_thin_box`
 - [x] 2.4 Flat on drawing SVG; film `flat_on_drawing`
 - [x] 2.5 Frame members + cut_length; film `frame_cutlist`
-- Parked: convert-to-sheet, weld symbols, knit-to-solid film, zebra shader, face-local replace
+- [x] 2.6 Cosmetic welds + drawing symbol; film `weld_on_sheet`
+- [x] 2.7 Knit-to-solid; film `knit_to_box`
+- [x] 2.8 Zebra ViewHud toggle (section shader path); film `zebra_cylinder`
+- [x] 2.9 Face-local replace; film `replace_face`
 
 ## Wave 3 — Queries, cards, rules
 - [x] 3.1 `type=` `created-by=` queries; film `query_hole_walls`
 - [x] 3.2 Card digest sentence; film `card_digest`
+- [x] 3.1 `adjacent-to=` shared-edge walk; adjacency on face cards
+- [x] 3.2 Card digest sentence on the selection card
+- [x] 3.3 User-feature language (`user_csink` recipe); film `user_csink`
+- [x] 3.4 Intent → fastened mate (“make these flush”); film `intent_flush`
+- [x] 3.5 What's Wrong popover from the FailBadge; film `whats_wrong_fillet`
+- [x] 3.6 Auto-dimension chip; film `auto_define_plate`
 - [x] 3.7 `if width > 100 then suppress rib`; film `rules_three_configs`
-- Parked: user-feature language, intent→mate, What’s Wrong rematch, auto-dim, CLI binary, propose-on-select, `nl_four_holes`
+- [x] 3.8 `sxcli` links sxkernel only; `cli_bracket_step`
+- [x] 3.9 Propose-on-select chips; film `propose_parallel`
+- [x] Exit film `nl_four_holes`
 
 ## Wave 4 — Specialized (spike → film)
 - [x] 4.3 2.5-axis pocket + own post; Cam rail; film `cam_pocket`
 - [x] 4.4 Cantilever deflection scales with L cubed; Sim rail; film `fea_bracket`
 - [x] 4.12 In-base catalog M6x20; film `catalog_fastener`
-- Parked: configs v2, C2 fillets, SubD, PDM-lite, routing, mold, mesh boolean, gear mate, PMI, ECAD
+- [x] 4.1 Config-aware BOM; film `config_drawing`
+- [x] 4.2 C2 / two-radius fillet; film `fillet_c2`
+- [x] 4.5 SubD spike (fillet-all); film `subd_to_solid`
+- [x] 4.6 PDM-lite version notes (`pdm.json`); film `branch_merge_sxp`
+- [x] 4.7 Tube along a 3D path; film `route_tube`
+- [x] 4.8 Mold core/cavity split; film `core_cavity`
+- [x] 4.9 Mesh boolean volume; film `mesh_boolean`
+- [x] 4.10 Gear ratio on connectors; film `gear_mate`
+- [x] 4.11 PMI as a model-space dim; film `pmi_survives_regen`
+- [x] 4.13 IDF board outline; film `board_in_box`
 
 ## Environment notes
 - System deps installed via apt: ninja-build, zip, libocct-*-dev (7.9.2), libeigen3-dev, libboost-dev

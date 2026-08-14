@@ -894,6 +894,42 @@ func _ctx_rib() -> void:
 	view._after_mutation()
 
 
+func _ctx_in_context() -> void:
+	if view == null or view.selected_body == "":
+		status.emit("In-context: select the neighbor body")
+		return
+	var ctx: String = view.doc.capture_context(view.selected_body, "Neighbor")
+	if ctx == "":
+		status.emit("In-context: capture failed")
+		return
+	var fid: String = view.doc.graph_add_in_context(ctx, 20.0, 20.0)
+	status.emit("In-context pad from the neighbor" if fid != "" else "In-context pad failed")
+	view._after_mutation()
+
+
+func _ctx_convert_sheet() -> void:
+	if view == null or view.selected_body == "":
+		status.emit("Convert sheet: select a thin solid")
+		return
+	var info: Dictionary = view.feature_info(view.selected_body)
+	var target := str(info.get("id", ""))
+	if target == "":
+		status.emit("Convert sheet: body is not on the timeline")
+		return
+	var fid: String = view.doc.graph_add_convert_sheet(target)
+	status.emit("Converted to sheet metal" if fid != "" else "Convert sheet failed — not thin enough")
+	view._after_mutation()
+
+
+func _ctx_weld() -> void:
+	if view == null or view.selected_edge == "":
+		status.emit("Weld: select an edge")
+		return
+	var id: String = view.doc.add_weld(view.selected_edge, "fillet", 3.0)
+	status.emit("Weld symbol on the sheet" if id != "" else "Weld failed")
+	view._after_mutation()
+
+
 func _on_triball_copy(count: int, angle_rad: float) -> void:
 	if view == null or view.selected_body == "" or count < 2:
 		return
@@ -924,6 +960,12 @@ func _on_marking_verb(verb: String) -> void:
 			_ctx_triball()
 		"Rib":
 			_ctx_rib()
+		"In-context pad":
+			_ctx_in_context()
+		"Convert sheet":
+			_ctx_convert_sheet()
+		"Weld":
+			_ctx_weld()
 		"Look at":
 			_ctx_look_at()
 		_:
@@ -940,7 +982,7 @@ func _on_marking_pick(entity_id: String) -> void:
 func _open_marking_menu(screen_pos: Vector2) -> void:
 	if marking_menu == null:
 		return
-	var verbs := PackedStringArray(["Fillet", "Hole", "TriBall", "Rib", "Look at"])
+	var verbs := PackedStringArray(["Fillet", "Hole", "TriBall", "Rib", "In-context pad", "Convert sheet", "Weld", "Look at"])
 	if view != null and view.selected_bodies.size() >= 2:
 		verbs.append("Clash")
 	var picks: Array = []

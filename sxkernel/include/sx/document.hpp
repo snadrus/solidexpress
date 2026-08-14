@@ -17,11 +17,14 @@
 #include <vector>
 
 #include "sx/datum.hpp"
+#include "sx/drawing_doc.hpp"
 #include "sx/entity.hpp"
 #include "sx/ids.hpp"
 #include "sx/instances.hpp"
 #include "sx/joints.hpp"
 #include "sx/mates.hpp"
+#include "sx/sketch3d.hpp"
+#include "sx/xref.hpp"
 
 namespace sx {
 
@@ -181,6 +184,44 @@ public:
     // Used by the .sxp loader to restore persisted configurations exactly.
     void restore_configuration(Configuration&& c, bool active);
 
+    // --- in-context snapshots (see sx/xref.hpp) ---
+    EntityId add_context(ContextSnapshot snap);
+    bool remove_context(const EntityId& id);
+    const ContextSnapshot* context(const EntityId& id) const;
+    ContextSnapshot* context_mut(const EntityId& id);
+    const std::vector<ContextSnapshot>& contexts() const { return contexts_; }
+    void restore_context(ContextSnapshot&& c);
+
+    // --- drawing document ---
+    EntityId add_drawing_sheet(DrawingSheetDoc sheet);
+    bool remove_drawing_sheet(const EntityId& id);
+    const DrawingSheetDoc* drawing_sheet(const EntityId& id) const;
+    DrawingSheetDoc* drawing_sheet_mut(const EntityId& id);
+    const std::vector<DrawingSheetDoc>& drawing_sheets() const { return drawing_sheets_; }
+    std::vector<DrawingSheetDoc>& drawing_sheets_mut() { return drawing_sheets_; }
+    void restore_drawing_sheet(DrawingSheetDoc&& s);
+
+    // --- cosmetic welds ---
+    EntityId add_weld(CosmeticWeld w);
+    bool remove_weld(const EntityId& id);
+    const std::vector<CosmeticWeld>& welds() const { return welds_; }
+    void restore_weld(CosmeticWeld&& w);
+
+    // --- 3D sketches (curve set, not the 2D solver) ---
+    EntityId add_sketch3d(Sketch3D s);
+    bool remove_sketch3d(const EntityId& id);
+    const Sketch3D* sketch3d(const EntityId& id) const;
+    const std::vector<Sketch3D>& sketches3d() const { return sketches3d_; }
+    void restore_sketch3d(Sketch3D&& s);
+
+    // Ids released by the last replace_body_shape (What's Wrong rematch).
+    const std::vector<EntityId>& last_released_ids() const { return last_released_; }
+
+    // PDM-lite version notes (Wave 4.6). Persisted as pdm.json.
+    void add_pdm_entry(const std::string& message);
+    const std::vector<std::pair<std::string, uint64_t>>& pdm_entries() const { return pdm_; }
+    void restore_pdm(std::vector<std::pair<std::string, uint64_t>> entries);
+
 private:
     void register_subshapes(Body& b, bool fresh_ids);
     void regenerate_cards_for_body(const Body& b);
@@ -203,6 +244,12 @@ private:
     std::vector<Joint> joints_;
     std::vector<Configuration> configurations_;
     std::string active_configuration_;
+    std::vector<ContextSnapshot> contexts_;
+    std::vector<DrawingSheetDoc> drawing_sheets_;
+    std::vector<CosmeticWeld> welds_;
+    std::vector<Sketch3D> sketches3d_;
+    std::vector<EntityId> last_released_;
+    std::vector<std::pair<std::string, uint64_t>> pdm_;
     std::unique_ptr<CardRegistry> cards_;
     std::unique_ptr<FeatureGraph> graph_;
     uint64_t revision_ = 0;

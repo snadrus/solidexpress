@@ -2,6 +2,7 @@
 
 #include <sstream>
 
+#include "sx/cards.hpp"
 #include "sx/document.hpp"
 #include "sx/entity.hpp"
 #include "sx/features.hpp"
@@ -22,6 +23,7 @@ std::vector<QueryHit> run_query(const Document& doc, const std::string& query) {
     std::vector<QueryHit> hits;
     std::string type_filter;
     std::string created_by;
+    std::string adjacent_to;
     std::istringstream in(query);
     std::string tok;
     while (in >> tok) {
@@ -31,6 +33,26 @@ std::vector<QueryHit> run_query(const Document& doc, const std::string& query) {
         std::string v = trim_key(tok.substr(eq + 1));
         if (k == "type") type_filter = v;
         if (k == "created-by") created_by = v;
+        if (k == "adjacent-to") adjacent_to = v;
+    }
+    if (!adjacent_to.empty()) {
+        try {
+            const EntityId seed = EntityId::from_string(adjacent_to);
+            const Card* c = doc.cards().find(seed);
+            if (c) {
+                for (const auto& r : c->relations) {
+                    const Card* rc = doc.cards().find(r);
+                    const std::string kind = rc ? to_string(rc->kind) : "face";
+                    if (!type_filter.empty() && kind != type_filter &&
+                        !(type_filter == "face" && kind == "face"))
+                        continue;
+                    if (r == seed) continue;
+                    hits.push_back({r, kind});
+                }
+            }
+        } catch (...) {
+        }
+        return hits;
     }
     if (!created_by.empty()) {
         try {
@@ -69,6 +91,8 @@ std::string card_digest(const Feature& f) {
     if (f.params.contains("op")) ss << " " << f.params["op"].get<std::string>();
     if (f.params.contains("end")) ss << " end=" << f.params["end"].get<std::string>();
     if (f.params.contains("diameter")) ss << " Ø" << f.params["diameter"].get<double>();
+    if (f.params.contains("context")) ss << " in-context";
+    if (f.params.contains("recipe")) ss << " recipe=" << f.params["recipe"].get<std::string>();
     return ss.str();
 }
 

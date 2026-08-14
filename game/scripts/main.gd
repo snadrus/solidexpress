@@ -40,7 +40,7 @@ var notes_edit: TextEdit
 var file_dialog: FileDialog
 var confirm_dialog: ConfirmationDialog
 var current_path := ""
-enum FileAction { NONE, OPEN, SAVE_AS, IMPORT_STEP, IMPORT_STL, EXPORT_STEP, EXPORT_STL, EXPORT_CONTEXT, EXPORT_DRAWING, INSERT_SXP, IMPORT_DXF, EXPORT_3MF, EXPORT_GLTF }
+enum FileAction { NONE, OPEN, SAVE_AS, IMPORT_STEP, IMPORT_STL, EXPORT_STEP, EXPORT_STL, EXPORT_CONTEXT, EXPORT_DRAWING, INSERT_SXP, IMPORT_DXF, EXPORT_3MF, EXPORT_GLTF, EXPORT_DRAWING_DXF, EXPORT_DRAWING_PDF }
 var _file_action: FileAction = FileAction.NONE
 var _pending_discard: Callable = Callable()
 var _file_popup: PopupMenu
@@ -246,6 +246,8 @@ func _build_ui() -> void:
 	_file_popup.add_separator()
 	_file_popup.add_item("Export AI Context...", 7)
 	_file_popup.add_item("Export Drawing (SVG)...", 8)
+	_file_popup.add_item("Export Drawing (DXF)...", 13)
+	_file_popup.add_item("Export Drawing (PDF)...", 14)
 	_file_popup.add_separator()
 	_recent_menu = PopupMenu.new()
 	_recent_menu.name = "RecentMenu"
@@ -484,6 +486,18 @@ func _build_ui() -> void:
 	view_hud.section_toggle_requested.connect(func() -> void:
 		interaction.toggle_section()
 		view_hud.sync_from_view(view))
+	view_hud.zebra_toggle_requested.connect(func(on: bool) -> void:
+		view.set_zebra(on)
+		view_hud.sync_from_view(view)
+		_on_status("Zebra on" if on else "Zebra off"))
+	view_hud.explode_toggle_requested.connect(func(on: bool) -> void:
+		var moved: int = view.doc.explode_assembly(0.8 if on else 0.0)
+		view.refresh()
+		view_hud.sync_from_view(view)
+		if moved == 0:
+			_on_status("Nothing to explode")
+		else:
+			_on_status("Exploded %d part(s)" % moved if on else "Collapsed to assembled"))
 	view_hud.fit_requested.connect(func() -> void:
 		camera.frame_selection_or_all(false)
 		_on_status("Framed selection" if view.selected_body != "" else "Framed all"))
@@ -584,6 +598,12 @@ func _build_ui() -> void:
 		var b := UIIcons.button(entry[1], "", entry[2])
 		b.pressed.connect(sketch_mode.set_tool.bind(entry[0]))
 		rows.add_child(b)
+	var auto_def := UIIcons.button("dimension", "Auto-define", "Promote weak dims until DOF 0")
+	auto_def.pressed.connect(func() -> void: sketch_mode.auto_define())
+	rows.add_child(auto_def)
+	var propose := UIIcons.button("parallel", "Propose", "Promote a proposed parallel / equal")
+	propose.pressed.connect(func() -> void: sketch_mode.promote_propose())
+	rows.add_child(propose)
 	rows.add_child(HSeparator.new())
 	dof_label = Label.new()
 	dof_label.text = "—"
@@ -1223,6 +1243,10 @@ func _update_left_rail() -> void:
 
 func _update_mode_overlays() -> void:
 	if drawing_sheet != null:
+		if _work_mode == "Draw" and view != null and view.doc != null:
+			view.doc.ensure_drawing_sheet()
+			view.doc.refresh_drawing_dims()
+			drawing_sheet.set_preview(view.doc.drawing_preview())
 		drawing_sheet.show_sheet(_work_mode == "Draw")
 	if sheet_metal_view != null:
 		var flat := 0.0
@@ -1509,6 +1533,10 @@ func _on_file_menu(id: int) -> void:
 			_show_file_dialog(FileAction.EXPORT_3MF, FileDialog.FILE_MODE_SAVE_FILE, "*.3mf ; 3MF")
 		12:
 			_show_file_dialog(FileAction.EXPORT_GLTF, FileDialog.FILE_MODE_SAVE_FILE, "*.gltf ; glTF")
+		13:
+			_show_file_dialog(FileAction.EXPORT_DRAWING_DXF, FileDialog.FILE_MODE_SAVE_FILE, "*.dxf ; DXF drawing")
+		14:
+			_show_file_dialog(FileAction.EXPORT_DRAWING_PDF, FileDialog.FILE_MODE_SAVE_FILE, "*.pdf ; PDF drawing")
 
 
 func _do_new() -> void:
@@ -1719,6 +1747,14 @@ func _on_file_selected(path: String) -> void:
 			_on_status("Exported 3MF" if view.doc.export_3mf(path) else "3MF export failed")
 		FileAction.EXPORT_GLTF:
 			_on_status("Exported glTF" if view.doc.export_gltf(path) else "glTF export failed")
+		FileAction.EXPORT_DRAWING_DXF:
+			if not path.ends_with(".dxf"):
+				path += ".dxf"
+			_on_status("Exported DXF" if view.doc.export_drawing_dxf(path) else "DXF export failed")
+		FileAction.EXPORT_DRAWING_PDF:
+			if not path.ends_with(".pdf"):
+				path += ".pdf"
+			_on_status("Exported PDF" if view.doc.export_drawing_pdf(path) else "PDF export failed")
 
 
 ## OS drag-and-drop onto the window (STL / SVG / STEP / .sxp).
