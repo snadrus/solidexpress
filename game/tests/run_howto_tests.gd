@@ -31,6 +31,8 @@ func _init() -> void:
 	await howto_landing_bindings(main)
 	await howto_rib_follows_sketch(main)
 	await howto_flange_unfolds(main)
+	await howto_print_thin_wall(main)
+	await howto_print_overhang_orient(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -424,8 +426,54 @@ func howto_landing_bindings(main) -> void:
 	check(mode != null, "Mode rail on the top bar")
 	check(main.drawing_sheet != null and not main.drawing_sheet.visible, "drawing sheet hidden in Model")
 	check(main.sheet_metal_view != null and not main.sheet_metal_view.visible, "sheet split hidden in Model")
+	check(main.print_strip != null and not main.print_strip.visible, "print strip hidden in Model")
 	main._on_mode_menu(1)
 	check(main.drawing_sheet.visible, "Draw mode shows the sheet")
+	main._on_mode_menu(5)
+	check(main.print_strip.visible, "Form mode shows the print strip")
+	check(not main.drawing_sheet.visible, "Form hides the drawing sheet")
 	main._on_mode_menu(0)
 	check(not main.drawing_sheet.visible, "Model hides the sheet")
+	check(not main.print_strip.visible, "Model hides the print strip")
 	await process_frame
+
+
+## docs/howto/print-thin-wall.md
+func howto_print_thin_wall(main) -> void:
+	print("- howto_print_thin_wall")
+	var view: DocumentView = main.view
+	view.new_document()
+	view.doc.add_box(20, 20, 1.2, Vector3.ZERO)
+	view.doc.set_print_min_wall(2.0)
+	main._on_mode_menu(5)
+	await process_frame
+	check(main.print_strip != null and main.print_strip.visible, "Form strip visible")
+	var analyze := main.find_child("PrintAnalyze", true, false) as Button
+	check(analyze != null and analyze.is_visible_in_tree(), "Analyze chip is clickable")
+	if analyze != null:
+		analyze.pressed.emit()
+		await process_frame
+	var r: Dictionary = view.doc.print_analyze("")
+	check(not bool(r.get("wall_ok", true)), "1.2 mm plate fails a 2 mm wall")
+	check(str(r.get("digest", "")).findn("thin") >= 0, "digest names the thin wall")
+	main._on_mode_menu(0)
+
+
+## docs/howto/print-overhang-orient.md
+func howto_print_overhang_orient(main) -> void:
+	print("- howto_print_overhang_orient")
+	var view: DocumentView = main.view
+	view.new_document()
+	view.doc.add_box(10, 10, 80, Vector3.ZERO)
+	main._on_mode_menu(5)
+	await process_frame
+	var before: Dictionary = view.doc.print_analyze("")
+	var orient := main.find_child("PrintOrient", true, false) as Button
+	check(orient != null and orient.is_visible_in_tree(), "Orient chip is clickable")
+	if orient != null:
+		orient.pressed.emit()
+		await process_frame
+	var after: Dictionary = view.doc.print_analyze("")
+	check(float(before.get("height", 0)) > 70.0, "tall box starts ~80 mm high")
+	check(float(after.get("height", 99)) < 12.0, "Orient lays it down (~10 mm)")
+	main._on_mode_menu(0)

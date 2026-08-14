@@ -1,7 +1,9 @@
-# Application composition root: 3D world (camera, light, grid, DocumentView
+# Application composition root: 3D world (camera, light, grid, DocumentView)
 # inside a Z-up ModelSpace) plus the 2D UI shell (palette, card panel, status
 # bar). Phase 1 drag-and-drop experience.
 extends Node3D
+
+const _PrintStrip := preload("res://scripts/print_strip.gd")
 
 var model_space: Node3D
 var view: DocumentView
@@ -31,7 +33,7 @@ var assembly_panel: AssemblyPanel
 var view_hud: ViewHud
 var drawing_sheet: DrawingSheet
 var sheet_metal_view: SheetMetalView
-var print_strip: PrintStrip
+var print_strip
 var palette: PanelContainer
 var dim_value: SpinBox
 var finish_op: OptionButton
@@ -335,10 +337,10 @@ func _build_ui() -> void:
 		elif id == 2:
 			interaction.reset_active_plane())
 
-	print_strip = PrintStrip.new()
+	print_strip = _PrintStrip.new()
 	print_strip.name = "PrintStrip"
 	print_strip.visible = false
-	menu_row.add_child(print_strip)
+	top_chrome.add_child(print_strip)
 	print_strip.analyze_requested.connect(_on_print_analyze)
 	print_strip.orient_requested.connect(_on_print_orient)
 
