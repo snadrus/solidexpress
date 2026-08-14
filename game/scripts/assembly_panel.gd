@@ -54,9 +54,9 @@ func _ready() -> void:
 
 	_type_option = OptionButton.new()
 	_type_option.name = "MateType"
-	_type_option.tooltip_text = "Mate type: coincident, parallel, concentric, or fixed"
+	_type_option.tooltip_text = "Mate type: fastened (6-DOF connectors), coincident, parallel, concentric, or fixed"
 	_type_option.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	for t in ["plane_coincident", "plane_parallel", "concentric", "fixed"]:
+	for t in ["fastened", "plane_coincident", "plane_parallel", "concentric", "fixed"]:
 		_type_option.add_item(t)
 	vbox.add_child(_type_option)
 
@@ -135,7 +135,20 @@ func refresh_lists() -> void:
 	for mate in mates:
 		_mates_list.add_child(_make_mate_row(mate))
 
-	visible = not instances.is_empty() or not mates.is_empty() or _mate_armed
+	var connectors: Array = view.doc.connector_list() if view.doc.has_method("connector_list") else []
+	if not connectors.is_empty():
+		var ch := Label.new()
+		ch.text = "Connectors"
+		ch.add_theme_font_size_override("font_size", 11)
+		_mates_list.add_child(ch)
+		for c in connectors:
+			var cl := Label.new()
+			cl.text = str(c.get("name", "connector"))
+			cl.tooltip_text = "Implicit/explicit mate connector"
+			cl.add_theme_font_size_override("font_size", 11)
+			_mates_list.add_child(cl)
+
+	visible = not instances.is_empty() or not mates.is_empty() or _mate_armed or not connectors.is_empty()
 	_refreshing = false
 
 

@@ -64,6 +64,8 @@ public:
                                  double value);
     bool remove_constraint(const godot::String& id);
     bool set_constraint_value(const godot::String& id, double value);
+    bool set_constraint_weak(const godot::String& id, bool weak);
+    int drop_weak_constraints();
     godot::PackedStringArray constraint_ids() const;
     // Snapshot for UI glyphs: {type: String, value: float,
     //   refs: Array of {entity: String, role: String}}. Empty if unknown id.

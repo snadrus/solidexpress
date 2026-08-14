@@ -1,8 +1,14 @@
 #include "sx/features.hpp"
 
+#include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepAlgoAPI_Defeaturing.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepBndLib.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
+#include <Bnd_Box.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
@@ -32,6 +38,7 @@
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 
@@ -40,6 +47,7 @@
 #include "sx/interop.hpp"
 #include "sx/log.hpp"
 #include "sx/shape_utils.hpp"
+#include "sx/sheet_metal.hpp"
 #include "sx/sketch_json.hpp"
 
 using nlohmann::json;
@@ -68,6 +76,14 @@ const char* to_string(FeatureType t) {
         case FeatureType::Thread: return "thread";
         case FeatureType::ImportStep: return "import_step";
         case FeatureType::ImportStl: return "import_stl";
+        case FeatureType::DirectEdit: return "direct_edit";
+        case FeatureType::Rib: return "rib";
+        case FeatureType::Thicken: return "thicken";
+        case FeatureType::Wrap: return "wrap";
+        case FeatureType::Flange: return "flange";
+        case FeatureType::Knit: return "knit";
+        case FeatureType::ReplaceFace: return "replace_face";
+        case FeatureType::FrameMember: return "frame_member";
     }
     return "unknown";
 }
@@ -93,6 +109,14 @@ FeatureType feature_type_from_string(const std::string& s) {
     if (s == "thread") return FeatureType::Thread;
     if (s == "import_step") return FeatureType::ImportStep;
     if (s == "import_stl") return FeatureType::ImportStl;
+    if (s == "direct_edit") return FeatureType::DirectEdit;
+    if (s == "rib") return FeatureType::Rib;
+    if (s == "thicken") return FeatureType::Thicken;
+    if (s == "wrap") return FeatureType::Wrap;
+    if (s == "flange") return FeatureType::Flange;
+    if (s == "knit") return FeatureType::Knit;
+    if (s == "replace_face") return FeatureType::ReplaceFace;
+    if (s == "frame_member") return FeatureType::FrameMember;
     throw std::invalid_argument("unknown feature type: " + s);
 }
 
@@ -100,10 +124,12 @@ static bool creates_body(const Feature& f) {
     if (f.type == FeatureType::Primitive || f.type == FeatureType::ImportStep ||
         f.type == FeatureType::ImportStl || f.type == FeatureType::Mirror ||
         f.type == FeatureType::Sweep || f.type == FeatureType::Loft ||
-        f.type == FeatureType::HelixSweep)
+        f.type == FeatureType::HelixSweep || f.type == FeatureType::FrameMember)
         return true;
     if (f.type == FeatureType::Extrude || f.type == FeatureType::Revolve)
         return f.params.value("op", "new") == "new";
+    if (f.type == FeatureType::Flange)
+        return !f.params.contains("target");
     return false;
 }
 
@@ -760,8 +786,43 @@ bool FeatureGraph::apply(Document& doc, Feature& f,
                     gp_Vec dir(n[0], n[1], n[2]);
                     dir.Normalize();
                     double dist = num_param(params, "distance", 10.0, env);
+                    std::string end = params.value("end", "");
+                    if (end.empty())
+                        end = params.value("symmetric", false) ? "symmetric" : "blind";
+                    const bool symmetric = (end == "symmetric") || params.value("symmetric", false);
+                    const std::string op_early = params.value("op", "new");
+                    if ((end == "through_all" || end == "to_next" || end == "to_face") &&
+                        op_early != "new") {
+                        EntityId target = find_feature_body("target");
+                        const Body* tb = doc.body(target);
+                        if (tb && !tb->shape.IsNull()) {
+                            Bnd_Box box;
+                            BRepBndLib::Add(tb->shape, box);
+                            if (!box.IsVoid()) {
+                                double xmin, ymin, zmin, xmax, ymax, zmax;
+                                box.Get(xmin, ymin, zmin, xmax, ymax, zmax);
+                                gp_Vec ext(xmax - xmin, ymax - ymin, zmax - zmin);
+                                dist = ext.Magnitude() + 4.0;
+                            }
+                            if (end == "to_face" && params.contains("to_face") &&
+                                params["to_face"].is_string()) {
+                                TopoDS_Shape tf = doc.resolve(
+                                    EntityId::from_string(params["to_face"].get<std::string>()));
+                                if (!tf.IsNull()) {
+                                    const auto& o = skf->sketch->plane().origin;
+                                    gp_Pnt orig(o[0], o[1], o[2]);
+                                    BRepExtrema_DistShapeShape ds(
+                                        BRepBuilderAPI_MakeVertex(orig).Vertex(), tf);
+                                    if (ds.IsDone() && ds.NbSolution() >= 1) {
+                                        gp_Pnt hit = ds.PointOnShape2(1);
+                                        dist = std::max(1e-3, gp_Vec(orig, hit).Dot(dir));
+                                    }
+                                }
+                            }
+                        }
+                    }
                     TopoDS_Shape profile = face;
-                    if (params.value("symmetric", false)) {
+                    if (symmetric) {
                         gp_Trsf t;
                         t.SetTranslation(dir * (-dist / 2.0));
                         profile = BRepBuilderAPI_Transform(face, t, true).Shape();
@@ -832,10 +893,16 @@ bool FeatureGraph::apply(Document& doc, Feature& f,
                 TopoDS_Shape result;
                 if (f.type == FeatureType::Fillet) {
                     BRepFilletAPI_MakeFillet mk(tb->shape);
+                    const double r2 = params.contains("radius2")
+                                          ? num_param(params, "radius2", v, env)
+                                          : v;
                     for (const auto& je : params.at("edges")) {
                         int idx = je.get<int>();
                         if (idx < 1 || idx > edges.Extent()) return fail("edge index out of range");
-                        mk.Add(v, TopoDS::Edge(edges(idx)));
+                        if (std::abs(r2 - v) > 1e-12)
+                            mk.Add(v, r2, TopoDS::Edge(edges(idx)));
+                        else
+                            mk.Add(v, TopoDS::Edge(edges(idx)));
                     }
                     mk.Build();
                     if (!mk.IsDone()) return fail("fillet failed");
@@ -865,12 +932,30 @@ bool FeatureGraph::apply(Document& doc, Feature& f,
                 double depth_param = num_param(params, "depth", 0.0, env);
                 double depth = depth_param > 0.0 ? depth_param : k_hole_through;
                 std::string htype = params.value("type", "simple");
-                TopoDS_Shape tool = build_feature_hole_tool(
-                    pnt_from(params.at("position")), dir_from(params.at("direction")),
-                    diameter, depth, htype, num_param(params, "cb_diameter", 0.0, env),
-                    num_param(params, "cb_depth", 0.0, env),
-                    num_param(params, "cs_diameter", 0.0, env),
-                    num_param(params, "cs_angle_deg", 90.0, env));
+                std::vector<gp_Pnt> positions;
+                if (params.contains("positions") && params["positions"].is_array() &&
+                    !params["positions"].empty()) {
+                    for (const auto& jp : params["positions"]) positions.push_back(pnt_from(jp));
+                } else {
+                    positions.push_back(pnt_from(params.at("position")));
+                }
+                TopoDS_Shape tool;
+                for (const auto& pos : positions) {
+                    TopoDS_Shape one = build_feature_hole_tool(
+                        pos, dir_from(params.at("direction")), diameter, depth, htype,
+                        num_param(params, "cb_diameter", 0.0, env),
+                        num_param(params, "cb_depth", 0.0, env),
+                        num_param(params, "cs_diameter", 0.0, env),
+                        num_param(params, "cs_angle_deg", 90.0, env));
+                    if (one.IsNull() || !shape::is_valid(one)) return fail("hole tool failed");
+                    if (tool.IsNull()) {
+                        tool = one;
+                    } else {
+                        BRepAlgoAPI_Fuse fuse(tool, one);
+                        if (!fuse.IsDone()) return fail("hole tool fuse failed");
+                        tool = fuse.Shape();
+                    }
+                }
                 if (tool.IsNull() || !shape::is_valid(tool)) return fail("hole tool failed");
                 BRepAlgoAPI_Cut cut(tb->shape, tool);
                 if (!cut.IsDone()) return fail("hole cut failed");
@@ -1195,7 +1280,202 @@ bool FeatureGraph::apply(Document& doc, Feature& f,
                     if (result.IsNull() || !shape::is_valid(result))
                         return fail("scale transform failed");
                 }
+                if (params.value("heal", true) && !is_stl) {
+                    std::string report;
+                    result = interop::heal_shape(result, &report);
+                    f.params["heal_report"] = report;
+                }
                 put_body(doc, f.output_body, result, f.name);
+                return true;
+            }
+
+            case FeatureType::DirectEdit: {
+                EntityId target = find_feature_body("target");
+                const Body* tb = doc.body(target);
+                if (!tb) return fail("missing target body");
+                TopoDS_Shape face_shape;
+                if (params.contains("face") && params["face"].is_string()) {
+                    face_shape = doc.resolve(EntityId::from_string(params["face"].get<std::string>()));
+                } else if (params.contains("face_index")) {
+                    TopTools_IndexedMapOfShape faces;
+                    TopExp::MapShapes(tb->shape, TopAbs_FACE, faces);
+                    int idx = params["face_index"].get<int>();
+                    if (idx < 1 || idx > faces.Extent()) return fail("face index out of range");
+                    face_shape = faces(idx);
+                }
+                if (face_shape.IsNull() || face_shape.ShapeType() != TopAbs_FACE)
+                    return fail("direct edit needs a face");
+                const std::string kind = params.value("kind", "push_pull");
+                if (kind == "delete_face") {
+                    BRepAlgoAPI_Defeaturing def;
+                    def.SetShape(tb->shape);
+                    def.AddFaceToRemove(TopoDS::Face(face_shape));
+                    def.Build();
+                    if (!def.IsDone()) return fail("delete face failed");
+                    TopoDS_Shape result = def.Shape();
+                    if (result.IsNull() || !shape::is_valid(result))
+                        return fail("delete face result invalid");
+                    doc.replace_body_shape(target, result);
+                    return true;
+                }
+                double distance = num_param(params, "distance", 0.0, env);
+                gp_Dir dir(0, 0, 1);
+                if (params.contains("direction") && params["direction"].is_array())
+                    dir = dir_from(params["direction"]);
+                else {
+                    BRepAdaptor_Surface surf(TopoDS::Face(face_shape));
+                    if (surf.GetType() == GeomAbs_Plane) {
+                        dir = surf.Plane().Axis().Direction();
+                        if (face_shape.Orientation() == TopAbs_REVERSED) dir.Reverse();
+                    }
+                }
+                if (std::abs(distance) < 1e-12) return true;
+                gp_Vec vec(dir);
+                vec *= distance;
+                TopoDS_Shape prism = BRepPrimAPI_MakePrism(face_shape, vec).Shape();
+                if (prism.IsNull()) return fail("direct edit prism failed");
+                TopoDS_Shape result;
+                if (distance >= 0.0) {
+                    BRepAlgoAPI_Fuse fuse(tb->shape, prism);
+                    if (!fuse.IsDone()) return fail("push/pull fuse failed");
+                    result = fuse.Shape();
+                } else {
+                    BRepAlgoAPI_Cut cut(tb->shape, prism);
+                    if (!cut.IsDone()) return fail("push/pull cut failed");
+                    result = cut.Shape();
+                }
+                if (result.IsNull() || !shape::is_valid(result))
+                    return fail("direct edit result invalid");
+                if (shape::count(result).solids < 1 || shape::volume(result) <= 0.0)
+                    return fail("direct edit destroyed the solid");
+                doc.replace_body_shape(target, result);
+                return true;
+            }
+
+            case FeatureType::Rib: {
+                EntityId target = find_feature_body("target");
+                const Body* tb = doc.body(target);
+                if (!tb) return fail("missing target body");
+                const double th = num_param(params, "thickness", 2.0, env);
+                const double h = num_param(params, "height", 10.0, env);
+                auto pl = placement_from(params);
+                TopoDS_Shape rib = shape::make_box(th, h, h, pl);
+                BRepAlgoAPI_Fuse fuse(tb->shape, rib);
+                if (!fuse.IsDone()) return fail("rib fuse failed");
+                doc.replace_body_shape(target, fuse.Shape());
+                return true;
+            }
+
+            case FeatureType::Thicken: {
+                EntityId target = find_feature_body("target");
+                const Body* tb = doc.body(target);
+                if (!tb) return fail("missing target body");
+                const double off = num_param(params, "offset", 1.0, env);
+                BRepOffsetAPI_MakeOffsetShape mk;
+                mk.PerformBySimple(tb->shape, off);
+                if (!mk.IsDone()) return fail("thicken failed");
+                doc.replace_body_shape(target, mk.Shape());
+                return true;
+            }
+
+            case FeatureType::Wrap: {
+                EntityId target = find_feature_body("target");
+                const Body* tb = doc.body(target);
+                if (!tb) return fail("missing target body");
+                const double depth = num_param(params, "depth", 1.0, env);
+                auto pl = placement_from(params);
+                TopoDS_Shape stamp = shape::make_box(8.0, 8.0, depth, pl);
+                BRepAlgoAPI_Cut cut(tb->shape, stamp);
+                if (!cut.IsDone()) return fail("wrap cut failed");
+                doc.replace_body_shape(target, cut.Shape());
+                return true;
+            }
+
+            case FeatureType::Flange: {
+                const double length = num_param(params, "length", 20.0, env);
+                const double thick = num_param(params, "thickness", 1.5, env);
+                const double k = num_param(params, "k_factor", 0.44, env);
+                const double rad = num_param(params, "radius", 1.5, env);
+                const double ang = num_param(params, "angle_rad", 1.5707963267948966, env);
+                f.params["flat_length"] = sheet::flat_length(length, length, thick, k, rad, ang);
+                TopoDS_Shape base = shape::make_box(length, length, thick);
+                shape::Placement wall;
+                wall.origin = {0, 0, thick};
+                TopoDS_Shape up = shape::make_box(thick, length, length, wall);
+                BRepAlgoAPI_Fuse fuse(base, up);
+                if (!fuse.IsDone()) return fail("flange fuse failed");
+                if (params.contains("target") && params["target"].is_string()) {
+                    EntityId target = find_feature_body("target");
+                    const Body* tb = doc.body(target);
+                    if (!tb) return fail("missing flange target");
+                    BRepAlgoAPI_Fuse onto(tb->shape, fuse.Shape());
+                    if (!onto.IsDone()) return fail("flange onto target failed");
+                    doc.replace_body_shape(target, onto.Shape());
+                } else {
+                    put_body(doc, f.output_body, fuse.Shape(), f.name);
+                }
+                return true;
+            }
+
+            case FeatureType::Knit: {
+                if (!params.contains("targets") || !params["targets"].is_array())
+                    return fail("knit needs targets");
+                TopoDS_Shape acc;
+                EntityId keep;
+                for (const auto& jt : params["targets"]) {
+                    const Feature* ref = feature(EntityId::from_string(jt.get<std::string>()));
+                    EntityId tid = ref ? ref->output_body : EntityId{};
+                    const Body* b = doc.body(tid);
+                    if (!b) continue;
+                    if (acc.IsNull()) {
+                        acc = b->shape;
+                        keep = tid;
+                    } else {
+                        BRepAlgoAPI_Fuse fuse(acc, b->shape);
+                        if (!fuse.IsDone()) return fail("knit fuse failed");
+                        acc = fuse.Shape();
+                    }
+                }
+                if (acc.IsNull() || keep.is_null()) return fail("knit empty");
+                doc.replace_body_shape(keep, acc);
+                return true;
+            }
+
+            case FeatureType::ReplaceFace: {
+                EntityId target = find_feature_body("target");
+                const Body* tb = doc.body(target);
+                if (!tb) return fail("missing target body");
+                const double off = num_param(params, "offset", 2.0, env);
+                // Offset the whole solid (face-local replace is a later OCCT path).
+                BRepOffsetAPI_MakeOffsetShape mk;
+                mk.PerformBySimple(tb->shape, off);
+                if (!mk.IsDone()) return fail("replace face offset failed");
+                doc.replace_body_shape(target, mk.Shape());
+                return true;
+            }
+
+            case FeatureType::FrameMember: {
+                if (!params.contains("path") || !params["path"].is_array() ||
+                    params["path"].size() < 2)
+                    return fail("frame path needs two points");
+                const double w = num_param(params, "profile_w", 20.0, env);
+                const double h = num_param(params, "profile_h", 20.0, env);
+                gp_Pnt a = pnt_from(params["path"][0]);
+                gp_Pnt b = pnt_from(params["path"][1]);
+                gp_Vec v(a, b);
+                const double len = v.Magnitude();
+                if (len < 1e-9) return fail("zero-length frame");
+                shape::Placement pl;
+                pl.origin = {a.X(), a.Y(), a.Z()};
+                gp_Dir z(v);
+                pl.z_dir = {z.X(), z.Y(), z.Z()};
+                const gp_Dir ref = (std::abs(z.Dot(gp_Dir(0, 0, 1))) < 0.9) ? gp_Dir(0, 0, 1)
+                                                                            : gp_Dir(1, 0, 0);
+                const gp_Dir x = z.Crossed(ref);
+                pl.x_dir = {x.X(), x.Y(), x.Z()};
+                TopoDS_Shape bar = shape::make_box(w, h, len, pl);
+                put_body(doc, f.output_body, bar, f.name);
+                f.params["cut_length"] = len;
                 return true;
             }
         }

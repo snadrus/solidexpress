@@ -192,7 +192,45 @@ Round 19 test state: kernel 210 cases / 7043 assertions; Godot voice 29 + help 1
 ## Later phases
 See [plan README](README.md) (where to park later ideas), [roadmap](roadmap.md) (Waves 0–4, picks A1–A20), and [landing-protocol](landing-protocol.md) (chrome + film ids). Friendliness plan (phases 21-27) + AI-first solver upgrade for unmatched voice.
 
-**Assembly data-model note:** shipped mates are face-pair (Fixed / plane-coincident / parallel / concentric). Roadmap Wave 0.1 migrates them onto Onshape-style mate connectors; do not extend the old struct with more mate types.
+**Assembly data-model note:** face-pair mates still load. Wave 0.1 adds `MateType::Fastened` plus implicit connectors (`implicit_connector`); do not add gear/cam/width onto the face-pair struct (Wave 4.10 uses connectors).
+
+## Wave 0 — Daily-driver close (landing protocol)
+- [x] 0.1 Mate connectors + Fastened (`sx/mates.hpp`, AssemblyPanel, `connector_overlay.gd`, film `fasten_bolt`)
+- [x] 0.2 Extrude end conditions (`blind|through_all|to_face|to_next|symmetric`) + PropertyPanel End enum; film `extrude_through_all`
+- [x] 0.3 `FeatureType::DirectEdit` history; import pull commits a timeline row; film `direct_edit_import`
+- [x] 0.4 TriBall gizmo (`triball_gizmo.gd`); film `triball_hole_circle`
+- [x] 0.5/0.6 Concentric/Symmetric/Midpoint/Fix/Collinear + weak dims / Relax; film `sketch_mounting_plate`
+- [x] 0.7 Hole `positions[]` + strip Hole (M6); film `hole_wizard_m6`
+- [x] 0.8 Variable fillet `radius2`; film `fillet_chain_pocket`
+- [x] 0.9 Marking menu + overlapping pick (`marking_menu.gd`, S); film `marking_menu_pick`
+- [x] 0.10 Own DXF R12 + 3MF/glTF export; film `dxf_trace_extrude`
+- [x] 0.11/0.12 Import heal report + interference volume; film `heal_and_clash`
+
+## Wave 1 — Joints + drawings (landing protocol)
+- [x] 1.1 Connector joints + analytic crank-slider (`sx/joints.hpp`, film `crank_slider`)
+- [x] 1.6/1.7 Draw mode rail + `drawing_sheet.gd`; film `drawing_follows_model`
+- [x] 1.8 BOM from instance counts; film `drawing_bom`
+- [x] 1.12 Rib feature + marking-menu verb; film `rib_and_wrap`
+- Parked (same protocol, later PR): snap-on-drop, explode, assembly patterns, in-context Update, drawing section/hatch, DXF/PDF writer, associative convert, 3D sketch
+
+## Wave 2 — Sheet metal, frames, surfaces
+- [x] 2.1 Sheet mode + K-factor flange; film `flange_box_flat`
+- [x] 2.2 Split folded|flat overlay (`sheet_metal_view.gd`); film `flat_edits_folded`
+- [x] 2.4 Flat on drawing SVG; film `flat_on_drawing`
+- [x] 2.5 Frame members + cut_length; film `frame_cutlist`
+- Parked: convert-to-sheet, weld symbols, knit-to-solid film, zebra shader, face-local replace
+
+## Wave 3 — Queries, cards, rules
+- [x] 3.1 `type=` `created-by=` queries; film `query_hole_walls`
+- [x] 3.2 Card digest sentence; film `card_digest`
+- [x] 3.7 `if width > 100 then suppress rib`; film `rules_three_configs`
+- Parked: user-feature language, intent→mate, What’s Wrong rematch, auto-dim, CLI binary, propose-on-select, `nl_four_holes`
+
+## Wave 4 — Specialized (spike → film)
+- [x] 4.3 2.5-axis pocket + own post; Cam rail; film `cam_pocket`
+- [x] 4.4 Cantilever deflection scales with L cubed; Sim rail; film `fea_bracket`
+- [x] 4.12 In-base catalog M6x20; film `catalog_fastener`
+- Parked: configs v2, C2 fillets, SubD, PDM-lite, routing, mold, mesh boolean, gear mate, PMI, ECAD
 
 ## Environment notes
 - System deps installed via apt: ninja-build, zip, libocct-*-dev (7.9.2), libeigen3-dev, libboost-dev

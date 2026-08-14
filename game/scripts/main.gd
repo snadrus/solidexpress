@@ -29,6 +29,8 @@ var variables_panel: VariablesPanel
 var ops_panel: OpsPanel
 var assembly_panel: AssemblyPanel
 var view_hud: ViewHud
+var drawing_sheet: DrawingSheet
+var sheet_metal_view: SheetMetalView
 var palette: PanelContainer
 var dim_value: SpinBox
 var finish_op: OptionButton
@@ -38,10 +40,12 @@ var notes_edit: TextEdit
 var file_dialog: FileDialog
 var confirm_dialog: ConfirmationDialog
 var current_path := ""
-enum FileAction { NONE, OPEN, SAVE_AS, IMPORT_STEP, IMPORT_STL, EXPORT_STEP, EXPORT_STL, EXPORT_CONTEXT, EXPORT_DRAWING, INSERT_SXP }
+enum FileAction { NONE, OPEN, SAVE_AS, IMPORT_STEP, IMPORT_STL, EXPORT_STEP, EXPORT_STL, EXPORT_CONTEXT, EXPORT_DRAWING, INSERT_SXP, IMPORT_DXF, EXPORT_3MF, EXPORT_GLTF }
 var _file_action: FileAction = FileAction.NONE
 var _pending_discard: Callable = Callable()
 var _file_popup: PopupMenu
+var _mode_popup: PopupMenu
+var _work_mode := "Model"
 var _edit_popup: PopupMenu
 var _recent_menu: PopupMenu
 var _paste_special_dialog: ConfirmationDialog
@@ -234,8 +238,11 @@ func _build_ui() -> void:
 	_file_popup.add_separator()
 	_file_popup.add_item("Import STEP...", 4)
 	_file_popup.add_item("Import STL...", 9)
+	_file_popup.add_item("Import DXF...", 10)
 	_file_popup.add_item("Export STEP...", 5)
 	_file_popup.add_item("Export STL...", 6)
+	_file_popup.add_item("Export 3MF...", 11)
+	_file_popup.add_item("Export glTF...", 12)
 	_file_popup.add_separator()
 	_file_popup.add_item("Export AI Context...", 7)
 	_file_popup.add_item("Export Drawing (SVG)...", 8)
@@ -289,6 +296,21 @@ func _build_ui() -> void:
 	insert_popup.add_item("Datum Point at Origin", 6)
 	insert_popup.id_pressed.connect(_on_insert_menu)
 
+	var mode_btn := MenuButton.new()
+	mode_btn.name = "ModeRail"
+	mode_btn.text = "Mode"
+	mode_btn.flat = false
+	mode_btn.tooltip_text = "Draw / Sheet / Cam / Sim / Form — one rail, replaces Modify"
+	menu_row.add_child(mode_btn)
+	_mode_popup = mode_btn.get_popup()
+	_mode_popup.add_item("Model", 0)
+	_mode_popup.add_item("Draw", 1)
+	_mode_popup.add_item("Sheet", 2)
+	_mode_popup.add_item("Cam", 3)
+	_mode_popup.add_item("Sim", 4)
+	_mode_popup.add_item("Form", 5)
+	_mode_popup.id_pressed.connect(_on_mode_menu)
+
 	# View menu: entry points for panels that auto-hide when they have no data,
 	# plus active-plane pick / reset.
 	var view_btn := MenuButton.new()
@@ -320,6 +342,12 @@ func _build_ui() -> void:
 	interaction.top_chrome = top_chrome
 	ui.add_child(interaction)
 	ui.add_child(top_chrome)
+
+	# Mode overlays sit under chrome and stay hidden in Model (layout suite).
+	drawing_sheet = DrawingSheet.new()
+	ui.add_child(drawing_sheet)
+	sheet_metal_view = SheetMetalView.new()
+	ui.add_child(sheet_metal_view)
 
 	file_dialog = FileDialog.new()
 	file_dialog.access = FileDialog.ACCESS_FILESYSTEM
@@ -1153,6 +1181,16 @@ func _update_panel_visibility() -> void:
 	_schedule_card_dock()
 
 
+func _on_mode_menu(id: int) -> void:
+	var names := ["Model", "Draw", "Sheet", "Cam", "Sim", "Form"]
+	if id < 0 or id >= names.size():
+		return
+	_work_mode = names[id]
+	_on_status(_work_mode + " mode")
+	_update_left_rail()
+	_update_mode_overlays()
+
+
 func _update_left_rail() -> void:
 	if palette == null or ops_panel == null:
 		return
@@ -1170,12 +1208,27 @@ func _update_left_rail() -> void:
 	# Selected body → Modify tools occupy the left palette slot.
 	# Idle / place-armed → Primitives palette; OpsPanel stays on the right
 	# (and hides itself when there is no selection).
+	if _work_mode != "Model":
+		# Specialized rails replace Modify — they do not stack a second dock.
+		palette.visible = false
+		ops_panel.visible = false
+		return
 	if has_body and not placing:
 		palette.visible = false
 		_dock_ops_left()
 	else:
 		palette.visible = true
 		_dock_ops_right()
+
+
+func _update_mode_overlays() -> void:
+	if drawing_sheet != null:
+		drawing_sheet.show_sheet(_work_mode == "Draw")
+	if sheet_metal_view != null:
+		var flat := 0.0
+		if view != null and view.doc != null:
+			flat = view.doc.sheet_flat_length(30.0, 30.0, 1.5, 0.44, 1.5)
+		sheet_metal_view.show_split(_work_mode == "Sheet", flat, 0.44)
 
 
 ## Selection card sits under the visible left rail (palette / modify / sketch).
@@ -1450,6 +1503,12 @@ func _on_file_menu(id: int) -> void:
 			_show_file_dialog(FileAction.EXPORT_CONTEXT, FileDialog.FILE_MODE_SAVE_FILE, "*.md ; Markdown")
 		8:
 			_show_file_dialog(FileAction.EXPORT_DRAWING, FileDialog.FILE_MODE_SAVE_FILE, "*.svg ; SVG drawing")
+		10:
+			_show_file_dialog(FileAction.IMPORT_DXF, FileDialog.FILE_MODE_OPEN_FILE, "*.dxf ; DXF")
+		11:
+			_show_file_dialog(FileAction.EXPORT_3MF, FileDialog.FILE_MODE_SAVE_FILE, "*.3mf ; 3MF")
+		12:
+			_show_file_dialog(FileAction.EXPORT_GLTF, FileDialog.FILE_MODE_SAVE_FILE, "*.gltf ; glTF")
 
 
 func _do_new() -> void:
@@ -1649,6 +1708,17 @@ func _on_file_selected(path: String) -> void:
 				_on_status("Drawing export failed (empty document?)")
 		FileAction.INSERT_SXP:
 			insert_components_from(path)
+		FileAction.IMPORT_DXF:
+			var fid: String = view.doc.import_dxf(path)
+			if fid == "":
+				_on_status("DXF import failed")
+			else:
+				view.graph_changed()
+				_on_status("Imported DXF sketch")
+		FileAction.EXPORT_3MF:
+			_on_status("Exported 3MF" if view.doc.export_3mf(path) else "3MF export failed")
+		FileAction.EXPORT_GLTF:
+			_on_status("Exported glTF" if view.doc.export_gltf(path) else "glTF export failed")
 
 
 ## OS drag-and-drop onto the window (STL / SVG / STEP / .sxp).
@@ -1671,6 +1741,11 @@ func _on_files_dropped(files: PackedStringArray) -> void:
 		elif lower.ends_with(".svg"):
 			if _import_svg_to_surface(path):
 				handled += 1
+		elif lower.ends_with(".dxf"):
+			if view.doc.import_dxf(path) != "":
+				view.graph_changed()
+				handled += 1
+				_on_status("Imported DXF")
 		else:
 			_on_status("Unsupported drop: " + path.get_file())
 	if handled == 0 and files.size() > 0:

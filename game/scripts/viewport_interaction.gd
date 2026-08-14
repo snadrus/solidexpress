@@ -75,6 +75,12 @@ var _strip_plane: Button
 var _strip_fuse: Button
 var _strip_cut: Button
 var _strip_common: Button
+var _strip_hole: Button
+var _strip_clash: Button
+var _strip_triball: Button
+var connector_overlay: ConnectorOverlay
+var triball: TriBallGizmo
+var marking_menu: MarkingMenu
 ## RMB: click = context menu, drag = orbit (peer FreeCAD / SW-like).
 var _rmb_pressed := false
 var _rmb_press_pos := Vector2.ZERO
@@ -186,6 +192,7 @@ func _ready() -> void:
 	focus_mode = Control.FOCUS_ALL
 	_mount_world_gizmos()
 	_mount_measure_overlay()
+	_mount_wave0_chrome()
 	_build_place_snap_ui()
 	_build_transform_hud()
 	_build_context_menu()
@@ -263,6 +270,24 @@ func _build_selection_strip() -> void:
 	_strip_common = UIIcons.button("common", "Intersect", "Keep only the common volume of the selection")
 	_strip_common.pressed.connect(func() -> void: _ctx_boolean("common"))
 	row.add_child(_strip_common)
+	_strip_hole = Button.new()
+	_strip_hole.name = "StripHole"
+	_strip_hole.text = "Hole"
+	_strip_hole.tooltip_text = "M6 through-all on the selected face / sketch points"
+	_strip_hole.pressed.connect(_ctx_hole_m6)
+	row.add_child(_strip_hole)
+	_strip_clash = Button.new()
+	_strip_clash.name = "StripClash"
+	_strip_clash.text = "Clash"
+	_strip_clash.tooltip_text = "Interference volume of two selected bodies"
+	_strip_clash.pressed.connect(_ctx_clash)
+	row.add_child(_strip_clash)
+	_strip_triball = Button.new()
+	_strip_triball.name = "StripTriBall"
+	_strip_triball.text = "TriBall"
+	_strip_triball.tooltip_text = "Rotate-copy about a ring (primary handle)"
+	_strip_triball.pressed.connect(_ctx_triball)
+	row.add_child(_strip_triball)
 	_strip_fillet = Button.new()
 	_strip_fillet.text = "Fillet"
 	_strip_fillet.pressed.connect(func() -> void: _ctx_fillet())
@@ -767,6 +792,149 @@ func _mount_world_gizmos() -> void:
 	world_gizmos = WorldGizmos.new()
 	world_gizmos.name = "WorldGizmos"
 	model_space.add_child(world_gizmos)
+
+
+func _mount_wave0_chrome() -> void:
+	if model_space != null and model_space.get_node_or_null("ConnectorOverlay") == null:
+		connector_overlay = ConnectorOverlay.new()
+		connector_overlay.name = "ConnectorOverlay"
+		connector_overlay.view = view
+		model_space.add_child(connector_overlay)
+	elif model_space != null:
+		connector_overlay = model_space.get_node("ConnectorOverlay") as ConnectorOverlay
+		if connector_overlay != null:
+			connector_overlay.view = view
+	if model_space != null and model_space.get_node_or_null("TriBallGizmo") == null:
+		triball = TriBallGizmo.new()
+		triball.name = "TriBallGizmo"
+		triball.view = view
+		triball.status.connect(func(t: String) -> void: status.emit(t))
+		triball.copy_committed.connect(_on_triball_copy)
+		model_space.add_child(triball)
+	elif model_space != null:
+		triball = model_space.get_node("TriBallGizmo") as TriBallGizmo
+	if get_node_or_null("MarkingMenu") == null:
+		marking_menu = MarkingMenu.new()
+		marking_menu.name = "MarkingMenu"
+		add_child(marking_menu)
+		marking_menu.verb_picked.connect(_on_marking_verb)
+		marking_menu.pick_chosen.connect(_on_marking_pick)
+	else:
+		marking_menu = get_node("MarkingMenu") as MarkingMenu
+
+
+func _ctx_hole_m6() -> void:
+	if view == null or view.selected_body == "":
+		status.emit("Hole: select a body")
+		return
+	var info: Dictionary = view.feature_info(view.selected_body)
+	var target := str(info.get("id", ""))
+	if target == "":
+		status.emit("Hole: body is not on the timeline")
+		return
+	var pos := Vector3(20, 20, 8)
+	if view.selected_face != "":
+		var mid: Variant = view.doc.face_midpoint(view.selected_face)
+		if mid is Vector3:
+			pos = mid
+	var positions := PackedVector3Array()
+	positions.append(pos)
+	var hid := view.doc.graph_add_holes(target, "simple", positions, Vector3(0, 0, -1), 6.0, 0.0)
+	status.emit("M6 hole" if hid != "" else "Hole failed")
+	view._after_mutation()
+
+
+func _ctx_clash() -> void:
+	if view == null or view.selected_bodies.size() < 2:
+		status.emit("Clash: select two bodies")
+		return
+	var v: float = view.doc.interference_volume(view.selected_bodies[0], view.selected_bodies[1])
+	if v < 0.0:
+		status.emit("Clash: not solids")
+		return
+	status.emit("Interference %.1f mm³" % v)
+
+
+func _ctx_triball() -> void:
+	if view == null or view.selected_body == "" or triball == null:
+		status.emit("TriBall: select a body")
+		return
+	var bb: Dictionary = view.doc.measure_bbox(view.selected_body)
+	var mn: Vector3 = bb.get("min", Vector3.ZERO)
+	var mx: Vector3 = bb.get("max", Vector3.ONE)
+	var mid := (mn + mx) * 0.5
+	triball.begin(mid, Vector3.UP, 6)
+	status.emit("TriBall — drag the ring, then click TriBall again to commit")
+
+
+func _ctx_rib() -> void:
+	if view == null or view.selected_body == "":
+		status.emit("Rib: select a body")
+		return
+	var info: Dictionary = view.feature_info(view.selected_body)
+	var target := str(info.get("id", ""))
+	if target == "":
+		status.emit("Rib: body is not on the timeline")
+		return
+	var hid := view.doc.graph_add_rib(target, 2.0, 8.0, Vector3(9, 0, 4))
+	status.emit("Rib" if hid != "" else "Rib failed")
+	view._after_mutation()
+
+
+func _on_triball_copy(count: int, angle_rad: float) -> void:
+	if view == null or view.selected_body == "" or count < 2:
+		return
+	var info: Dictionary = view.feature_info(view.selected_body)
+	var target := str(info.get("id", ""))
+	if target == "":
+		return
+	var bb: Dictionary = view.doc.measure_bbox(view.selected_body)
+	var mn: Vector3 = bb.get("min", Vector3.ZERO)
+	var mx: Vector3 = bb.get("max", Vector3.ONE)
+	var mid := (mn + mx) * 0.5
+	var total := angle_rad if absf(angle_rad) > 1e-3 else TAU
+	if view.doc.has_method("circular_pattern"):
+		view.doc.circular_pattern(view.selected_body, mid, Vector3.UP, count, total)
+	status.emit("TriBall copied %d" % count)
+	view._after_mutation()
+
+
+func _on_marking_verb(verb: String) -> void:
+	match verb:
+		"Fillet":
+			_ctx_fillet()
+		"Hole":
+			_ctx_hole_m6()
+		"Clash":
+			_ctx_clash()
+		"TriBall":
+			_ctx_triball()
+		"Rib":
+			_ctx_rib()
+		"Look at":
+			_ctx_look_at()
+		_:
+			status.emit(verb)
+
+
+func _on_marking_pick(entity_id: String) -> void:
+	if view == null or entity_id == "":
+		return
+	view.select_entity(entity_id, "")
+	status.emit("Picked " + entity_id.substr(0, 8))
+
+
+func _open_marking_menu(screen_pos: Vector2) -> void:
+	if marking_menu == null:
+		return
+	var verbs := PackedStringArray(["Fillet", "Hole", "TriBall", "Rib", "Look at"])
+	if view != null and view.selected_bodies.size() >= 2:
+		verbs.append("Clash")
+	var picks: Array = []
+	if view != null and view.selected_face != "" and view.selected_body != "":
+		picks.append({"id": view.selected_face, "label": "Face " + view.selected_face.substr(0, 8)})
+		picks.append({"id": view.selected_body, "label": "Body " + view.selected_body.substr(0, 8)})
+	marking_menu.show_for(screen_pos, verbs, picks)
 
 
 func _mount_measure_overlay() -> void:
@@ -2470,6 +2638,11 @@ func _gui_key(event: InputEventKey) -> bool:
 				view.isolate(ids)
 				status.emit("All shown" if ids.is_empty() else "Isolated")
 				return true
+		KEY_S:
+			if not event.ctrl_pressed and _place_kind == "" \
+					and (sketch_mode == null or not sketch_mode.active):
+				_open_marking_menu(get_global_mouse_position())
+				return true
 		KEY_SPACE:
 			# SolidWorks Spacebar / Onshape S-lite: orientation + named views.
 			if not event.ctrl_pressed and _place_kind == "" \
@@ -3188,6 +3361,9 @@ func _refresh_selection_strip() -> void:
 	_strip_cut.visible = multi_body
 	_strip_common.visible = multi_body
 	_strip_fillet.visible = not has_instance
+	_strip_hole.visible = not has_instance
+	_strip_clash.visible = multi_body
+	_strip_triball.visible = not has_instance
 	_strip_sketch.visible = not has_instance and view.selected_face != ""
 	_strip_look.visible = not has_instance and view.selected_face != ""
 	_strip_plane.visible = not has_instance and view.selected_face != ""

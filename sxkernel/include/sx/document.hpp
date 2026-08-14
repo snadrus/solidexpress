@@ -146,6 +146,13 @@ public:
     // Used by the .sxp loader to restore persisted mates exactly.
     void restore_mate(Mate&& m);
 
+    // Explicit mate connectors (Onshape-style). Implicit connectors are
+    // inferred from faces at apply time; these persist user-named frames.
+    EntityId add_connector(MateConnector c);
+    bool remove_connector(const EntityId& id);
+    const std::vector<MateConnector>& connectors() const { return connectors_; }
+    void restore_connector(MateConnector&& c);
+
     // --- configurations (named snapshots of the variable table) ---
     // Saving captures the graph's current variable expressions under `name`
     // (overwriting an existing snapshot of that name). Activating replaces
@@ -180,6 +187,7 @@ private:
     std::vector<Instance> instances_;
     std::unordered_map<EntityId, size_t> instance_index_;
     std::vector<Mate> mates_;
+    std::vector<MateConnector> connectors_;
     std::vector<Configuration> configurations_;
     std::string active_configuration_;
     std::unique_ptr<CardRegistry> cards_;

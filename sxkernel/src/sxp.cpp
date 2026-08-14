@@ -86,6 +86,9 @@ bool save_sxp(const Document& doc, const std::string& path, std::string* err) {
     json mates_json = json::array();
     for (const auto& m : doc.mates()) mates_json.push_back(m);
 
+    json connectors_json = json::array();
+    for (const auto& c : doc.connectors()) connectors_json.push_back(c);
+
     json configs_json;
     configs_json["active"] = doc.active_configuration();
     configs_json["configurations"] = json::array();
@@ -101,6 +104,7 @@ bool save_sxp(const Document& doc, const std::string& path, std::string* err) {
     ok = ok && add("datums.json", datums_json.dump(2));
     ok = ok && add("instances.json", instances_json.dump(2));
     ok = ok && add("mates.json", mates_json.dump(2));
+    ok = ok && add("connectors.json", connectors_json.dump(2));
     ok = ok && add("configurations.json", configs_json.dump(2));
     ok = ok && add("manifest.json", manifest.dump(2));
     ok = ok && mz_zip_writer_finalize_archive(&zip) == MZ_TRUE;
@@ -279,6 +283,20 @@ bool load_sxp(Document& doc, const std::string& path, std::string* err) {
             }
         } catch (const std::exception& e) {
             log::warn(std::string("sxp: ignoring bad mates.json: ") + e.what());
+        }
+    }
+
+    std::string connectors_text = read_entry(zip, "connectors.json", &found);
+    if (found) {
+        try {
+            json cj = json::parse(connectors_text);
+            for (const auto& jc : cj) {
+                MateConnector c = jc.get<MateConnector>();
+                if (c.id.is_null()) c.id = EntityId::generate();
+                doc.restore_connector(std::move(c));
+            }
+        } catch (const std::exception& e) {
+            log::warn(std::string("sxp: ignoring bad connectors.json: ") + e.what());
         }
     }
 

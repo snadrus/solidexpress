@@ -206,6 +206,65 @@ struct Xlate {
                 sys.addConstraintL2LAngle(a->second, b->second, &dim_values.back(), tag);
                 return true;
             }
+            case ConstraintType::Concentric: {
+                if (c.refs.size() < 2) return false;
+                GCS::Point a = point_of({c.refs[0].entity, PointRole::Center}, ok1);
+                GCS::Point b = point_of({c.refs[1].entity, PointRole::Center}, ok2);
+                if (!ok1 || !ok2) return false;
+                sys.addConstraintP2PCoincident(a, b, tag);
+                return true;
+            }
+            case ConstraintType::Symmetric: {
+                if (c.refs.size() < 3) return false;
+                GCS::Point p1 = point_of(c.refs[0], ok1);
+                GCS::Point p2 = point_of(c.refs[1], ok2);
+                auto l = lines.find(c.refs[2].entity);
+                if (!ok1 || !ok2 || l == lines.end()) return false;
+                sys.addConstraintMidpointOnLine(p1, p2, l->second.p1, l->second.p2, tag);
+                sys.addConstraintPerpendicular(p1, p2, l->second, tag);
+                return true;
+            }
+            case ConstraintType::Midpoint: {
+                if (c.refs.size() < 2) return false;
+                GCS::Point p = point_of(c.refs[0], ok1);
+                auto l = lines.find(c.refs[1].entity);
+                if (!ok1 || l == lines.end()) return false;
+                sys.addConstraintPointOnLine(p, l->second, tag);
+                sys.addConstraintPointOnPerpBisector(p, l->second, tag);
+                return true;
+            }
+            case ConstraintType::Fix: {
+                GCS::Point p = point_of(c.refs.at(0), ok1);
+                if (!ok1) return false;
+                auto pos = sketch.point_pos(c.refs[0]);
+                if (!pos) return false;
+                dim_values.push_back((*pos)[0]);
+                sys.addConstraintCoordinateX(p, &dim_values.back(), tag);
+                dim_values.push_back((*pos)[1]);
+                sys.addConstraintCoordinateY(p, &dim_values.back(), tag);
+                return true;
+            }
+            case ConstraintType::Collinear: {
+                if (c.refs.size() >= 2) {
+                    auto a = lines.find(c.refs[0].entity);
+                    auto b = lines.find(c.refs[1].entity);
+                    if (a != lines.end() && b != lines.end()) {
+                        sys.addConstraintPointOnLine(b->second.p1, a->second, tag);
+                        sys.addConstraintPointOnLine(b->second.p2, a->second, tag);
+                        return true;
+                    }
+                }
+                if (c.refs.size() >= 3) {
+                    GCS::Point p0 = point_of(c.refs[0], ok1);
+                    GCS::Point p1 = point_of(c.refs[1], ok2);
+                    bool ok3 = true;
+                    GCS::Point p2 = point_of(c.refs[2], ok3);
+                    if (!ok1 || !ok2 || !ok3) return false;
+                    sys.addConstraintPointOnLine(p2, p0, p1, tag);
+                    return true;
+                }
+                return false;
+            }
         }
         return false;
     }
@@ -257,6 +316,20 @@ SolveResult PlaneGCSBackendImpl::solve(Sketch& sketch) {
     };
     for (int t : conflicting) result.conflicting.push_back(tag_to_id(t));
     for (int t : redundant) result.redundant.push_back(tag_to_id(t));
+
+    if (result.status == SolveStatus::Failed) {
+        bool dropped = false;
+        for (const auto& id : result.conflicting) {
+            for (const auto& c : sketch.constraints()) {
+                if (c.id == id && c.weak) {
+                    sketch.remove_constraint(id);
+                    dropped = true;
+                    break;
+                }
+            }
+        }
+        if (dropped) return solve(sketch);
+    }
     return result;
 }
 

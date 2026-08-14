@@ -18,7 +18,15 @@
 #include <gp_Vec.hxx>
 #include <type_traits>
 #include <variant>
+#include "sx/cam.hpp"
+#include "sx/catalog.hpp"
 #include "sx/drawings.hpp"
+#include "sx/dxf.hpp"
+#include "sx/fea.hpp"
+#include "sx/joints.hpp"
+#include "sx/query.hpp"
+#include "sx/rules.hpp"
+#include "sx/sheet_metal.hpp"
 #include "sx/materials.hpp"
 #include "sx/mates.hpp"
 #include "sx/measure.hpp"
@@ -1289,6 +1297,243 @@ bool SxDocument::remove_mate(const String& id) {
 
 bool SxDocument::solve_mates() { return sx::solve_mates(*doc_); }
 
+Dictionary SxDocument::implicit_connector(const String& instance, const String& face) const {
+    Dictionary out;
+    auto c = sx::implicit_connector(*doc_, parse_id(instance), parse_id(face));
+    if (!c) return out;
+    out["id"] = to_gd(c->id.str());
+    out["instance"] = c->instance.is_null() ? String() : to_gd(c->instance.str());
+    out["face"] = to_gd(c->face.str());
+    out["origin"] = Vector3(c->origin[0], c->origin[1], c->origin[2]);
+    out["z_dir"] = Vector3(c->z_dir[0], c->z_dir[1], c->z_dir[2]);
+    out["x_dir"] = Vector3(c->x_dir[0], c->x_dir[1], c->x_dir[2]);
+    out["name"] = to_gd(c->name);
+    return out;
+}
+
+Array SxDocument::connector_list() const {
+    Array out;
+    for (const auto& c : doc_->connectors()) {
+        Dictionary d;
+        d["id"] = to_gd(c.id.str());
+        d["instance"] = c.instance.is_null() ? String() : to_gd(c.instance.str());
+        d["face"] = c.face.is_null() ? String() : to_gd(c.face.str());
+        d["origin"] = Vector3(c.origin[0], c.origin[1], c.origin[2]);
+        d["z_dir"] = Vector3(c.z_dir[0], c.z_dir[1], c.z_dir[2]);
+        d["x_dir"] = Vector3(c.x_dir[0], c.x_dir[1], c.x_dir[2]);
+        d["name"] = to_gd(c.name);
+        out.push_back(d);
+    }
+    return out;
+}
+
+String SxDocument::graph_add_extrude_end(const String& sketch_fid, double distance,
+                                         const String& end, const String& op,
+                                         const String& target_fid) {
+    sx::EntityId fid;
+    bool ok = apply_graph_edit("extrude", [&] {
+        sx::Feature f;
+        f.type = sx::FeatureType::Extrude;
+        const std::string end_s = to_std(end);
+        f.params = {{"sketch", to_std(sketch_fid)},
+                    {"distance", distance},
+                    {"end", end_s.empty() ? "blind" : end_s},
+                    {"symmetric", end_s == "symmetric"},
+                    {"op", to_std(op)}};
+        if (!target_fid.is_empty()) f.params["target"] = to_std(target_fid);
+        fid = doc_->graph().add(std::move(f));
+        return true;
+    });
+    return ok ? to_gd(fid.str()) : String();
+}
+
+String SxDocument::graph_add_fillet_var(const String& target_fid, const PackedStringArray& edge_ids,
+                                        double radius, double radius2) {
+    String id = graph_add_dressup(true, target_fid, edge_ids, radius);
+    if (id.is_empty() || std::abs(radius2 - radius) < 1e-12) return id;
+    sx::Feature* f = doc_->graph().feature(parse_id(id));
+    if (f == nullptr) return id;
+    f->params["radius2"] = radius2;
+    apply_graph_edit("fillet radius2", [&] { return true; });
+    return id;
+}
+
+String SxDocument::graph_add_direct_edit(const String& target_fid, const String& kind,
+                                         const String& face_id, double distance,
+                                         const Vector3& direction) {
+    sx::EntityId fid;
+    bool ok = apply_graph_edit("direct edit", [&] {
+        sx::Feature f;
+        f.type = sx::FeatureType::DirectEdit;
+        f.params = {{"target", to_std(target_fid)},
+                    {"kind", to_std(kind)},
+                    {"face", to_std(face_id)},
+                    {"distance", distance},
+                    {"direction", {direction.x, direction.y, direction.z}}};
+        fid = doc_->graph().add(std::move(f));
+        return true;
+    });
+    return ok ? to_gd(fid.str()) : String();
+}
+
+String SxDocument::graph_add_holes(const String& target_fid, const String& type,
+                                   const PackedVector3Array& positions, const Vector3& direction,
+                                   float diameter, float depth) {
+    if (diameter <= 0.0f || positions.is_empty()) return {};
+    nlohmann::json pos = nlohmann::json::array();
+    for (int i = 0; i < positions.size(); ++i) {
+        const Vector3& p = positions[i];
+        pos.push_back({p.x, p.y, p.z});
+    }
+    sx::EntityId fid;
+    bool ok = apply_graph_edit("hole", [&] {
+        sx::Feature f;
+        f.type = sx::FeatureType::Hole;
+        f.params = {{"target", to_std(target_fid)},
+                    {"type", to_std(type)},
+                    {"position", {positions[0].x, positions[0].y, positions[0].z}},
+                    {"positions", pos},
+                    {"direction", {direction.x, direction.y, direction.z}},
+                    {"diameter", static_cast<double>(diameter)},
+                    {"depth", static_cast<double>(depth)}};
+        fid = doc_->graph().add(std::move(f));
+        return true;
+    });
+    return ok ? to_gd(fid.str()) : String();
+}
+
+double SxDocument::interference_volume(const String& body_a, const String& body_b) const {
+    auto v = sx::measure::interference_volume(*doc_, parse_id(body_a), parse_id(body_b));
+    return v ? *v : -1.0;
+}
+
+String SxDocument::import_dxf(const String& path) {
+    std::string err;
+    auto id = sx::import_dxf_sketch(*doc_, to_std(path), &err);
+    return id.is_null() ? String() : to_gd(id.str());
+}
+
+bool SxDocument::export_3mf(const String& path) {
+    std::string err;
+    return sx::interop::export_3mf(*doc_, to_std(path), &err);
+}
+
+bool SxDocument::export_gltf(const String& path) {
+    std::string err;
+    return sx::interop::export_gltf(*doc_, to_std(path), &err);
+}
+
+String SxDocument::graph_add_rib(const String& target_fid, double thickness, double height,
+                                 const Vector3& origin) {
+    sx::EntityId fid;
+    bool ok = apply_graph_edit("rib", [&] {
+        sx::Feature f;
+        f.type = sx::FeatureType::Rib;
+        f.params = {{"target", to_std(target_fid)},
+                    {"thickness", thickness},
+                    {"height", height},
+                    {"origin", {origin.x, origin.y, origin.z}}};
+        fid = doc_->graph().add(std::move(f));
+        return true;
+    });
+    return ok ? to_gd(fid.str()) : String();
+}
+
+String SxDocument::graph_add_flange(double length, double thickness, double k_factor,
+                                    double radius) {
+    sx::EntityId fid;
+    bool ok = apply_graph_edit("flange", [&] {
+        sx::Feature f;
+        f.type = sx::FeatureType::Flange;
+        f.params = {{"length", length},
+                    {"thickness", thickness},
+                    {"k_factor", k_factor},
+                    {"radius", radius},
+                    {"angle_rad", 1.5707963267948966}};
+        fid = doc_->graph().add(std::move(f));
+        return true;
+    });
+    return ok ? to_gd(fid.str()) : String();
+}
+
+String SxDocument::graph_add_frame(const PackedVector3Array& path, double profile_w,
+                                   double profile_h) {
+    if (path.size() < 2) return {};
+    nlohmann::json pj = nlohmann::json::array();
+    for (int i = 0; i < path.size(); ++i)
+        pj.push_back({path[i].x, path[i].y, path[i].z});
+    sx::EntityId fid;
+    bool ok = apply_graph_edit("frame", [&] {
+        sx::Feature f;
+        f.type = sx::FeatureType::FrameMember;
+        f.params = {{"path", pj}, {"profile_w", profile_w}, {"profile_h", profile_h}};
+        fid = doc_->graph().add(std::move(f));
+        return true;
+    });
+    return ok ? to_gd(fid.str()) : String();
+}
+
+Array SxDocument::run_query(const String& query) const {
+    Array out;
+    for (const auto& h : sx::run_query(*doc_, to_std(query))) {
+        Dictionary d;
+        d["id"] = to_gd(h.id.str());
+        d["kind"] = to_gd(h.kind);
+        out.push_back(d);
+    }
+    return out;
+}
+
+String SxDocument::card_digest(const String& fid) const {
+    const sx::Feature* f = doc_->graph().feature(parse_id(fid));
+    return f ? to_gd(sx::card_digest(*f)) : String();
+}
+
+int SxDocument::apply_rule(const String& when, const String& then) {
+    sx::Rule r{"ui", to_std(when), to_std(then)};
+    return sx::apply_rules(doc_->graph(), {r});
+}
+
+double SxDocument::crank_slider_x(double crank, double rod, double theta) const {
+    return sx::crank_slider_x(crank, rod, theta);
+}
+
+double SxDocument::sheet_flat_length(double leg1, double leg2, double thickness, double k_factor,
+                                     double radius) const {
+    return sx::sheet::flat_length(leg1, leg2, thickness, k_factor, radius);
+}
+
+PackedVector3Array SxDocument::cam_pocket(double x0, double y0, double x1, double y1, double depth,
+                                          double stepover) const {
+    auto tp = sx::cam::pocket_rect(x0, y0, x1, y1, depth, stepover);
+    PackedVector3Array out;
+    for (const auto& p : tp.points) out.push_back(Vector3(p[0], p[1], p[2]));
+    return out;
+}
+
+double SxDocument::fea_cantilever(double force_n, double length_mm, double e_mpa, double width_mm,
+                                  double thickness_mm) const {
+    return sx::fea::cantilever_deflection(force_n, length_mm, e_mpa,
+                                          sx::fea::rect_inertia(width_mm, thickness_mm));
+}
+
+Dictionary SxDocument::catalog_fastener(const String& designation) const {
+    Dictionary d;
+    auto f = sx::catalog::find_fastener(to_std(designation));
+    if (!f) return d;
+    d["designation"] = to_gd(f->designation);
+    d["diameter"] = f->diameter_mm;
+    d["length"] = f->length_mm;
+    d["kind"] = to_gd(f->kind);
+    return d;
+}
+
+String SxDocument::heal_report(const String& fid) const {
+    const sx::Feature* f = doc_->graph().feature(parse_id(fid));
+    if (f == nullptr || !f->params.contains("heal_report")) return {};
+    return to_gd(f->params["heal_report"].get<std::string>());
+}
+
 bool SxDocument::export_drawing_svg(const String& path, double scale) {
     return sx::drawings::export_three_view_svg(*doc_, to_std(path), scale);
 }
@@ -1426,6 +1671,48 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("mate_list"), &SxDocument::mate_list);
     ClassDB::bind_method(D_METHOD("remove_mate", "id"), &SxDocument::remove_mate);
     ClassDB::bind_method(D_METHOD("solve_mates"), &SxDocument::solve_mates);
+    ClassDB::bind_method(D_METHOD("implicit_connector", "instance", "face"),
+                         &SxDocument::implicit_connector);
+    ClassDB::bind_method(D_METHOD("connector_list"), &SxDocument::connector_list);
+    ClassDB::bind_method(D_METHOD("graph_add_extrude_end", "sketch_fid", "distance", "end", "op",
+                                  "target_fid"),
+                         &SxDocument::graph_add_extrude_end);
+    ClassDB::bind_method(D_METHOD("graph_add_fillet_var", "target_fid", "edge_ids", "radius",
+                                  "radius2"),
+                         &SxDocument::graph_add_fillet_var);
+    ClassDB::bind_method(D_METHOD("graph_add_direct_edit", "target_fid", "kind", "face_id",
+                                  "distance", "direction"),
+                         &SxDocument::graph_add_direct_edit);
+    ClassDB::bind_method(D_METHOD("graph_add_holes", "target_fid", "type", "positions", "direction",
+                                  "diameter", "depth"),
+                         &SxDocument::graph_add_holes);
+    ClassDB::bind_method(D_METHOD("interference_volume", "body_a", "body_b"),
+                         &SxDocument::interference_volume);
+    ClassDB::bind_method(D_METHOD("import_dxf", "path"), &SxDocument::import_dxf);
+    ClassDB::bind_method(D_METHOD("export_3mf", "path"), &SxDocument::export_3mf);
+    ClassDB::bind_method(D_METHOD("export_gltf", "path"), &SxDocument::export_gltf);
+    ClassDB::bind_method(D_METHOD("heal_report", "fid"), &SxDocument::heal_report);
+    ClassDB::bind_method(D_METHOD("graph_add_rib", "target_fid", "thickness", "height", "origin"),
+                         &SxDocument::graph_add_rib);
+    ClassDB::bind_method(D_METHOD("graph_add_flange", "length", "thickness", "k_factor", "radius"),
+                         &SxDocument::graph_add_flange);
+    ClassDB::bind_method(D_METHOD("graph_add_frame", "path", "profile_w", "profile_h"),
+                         &SxDocument::graph_add_frame);
+    ClassDB::bind_method(D_METHOD("run_query", "query"), &SxDocument::run_query);
+    ClassDB::bind_method(D_METHOD("card_digest", "fid"), &SxDocument::card_digest);
+    ClassDB::bind_method(D_METHOD("apply_rule", "when", "then"), &SxDocument::apply_rule);
+    ClassDB::bind_method(D_METHOD("crank_slider_x", "crank", "rod", "theta"),
+                         &SxDocument::crank_slider_x);
+    ClassDB::bind_method(D_METHOD("sheet_flat_length", "leg1", "leg2", "thickness", "k_factor",
+                                  "radius"),
+                         &SxDocument::sheet_flat_length);
+    ClassDB::bind_method(D_METHOD("cam_pocket", "x0", "y0", "x1", "y1", "depth", "stepover"),
+                         &SxDocument::cam_pocket);
+    ClassDB::bind_method(D_METHOD("fea_cantilever", "force_n", "length_mm", "e_mpa", "width_mm",
+                                  "thickness_mm"),
+                         &SxDocument::fea_cantilever);
+    ClassDB::bind_method(D_METHOD("catalog_fastener", "designation"),
+                         &SxDocument::catalog_fastener);
     ClassDB::bind_method(D_METHOD("export_drawing_svg", "path", "scale"),
                          &SxDocument::export_drawing_svg);
 }

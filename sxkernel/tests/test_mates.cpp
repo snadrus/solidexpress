@@ -195,6 +195,75 @@ TEST_CASE("mates persist through .sxp round trip", "[mates]") {
     CHECK(bb[2] == Approx(12.5).margin(1e-6));
 }
 
+TEST_CASE("fastened mate seats a bolt in a hole (all 6 DOF)", "[mates]") {
+    Document doc;
+    auto hole_cyl = doc.add_body(shape::make_cylinder(10, 40, {{60, 30, 0}}), "Boss");
+    auto pin = doc.add_body(shape::make_cylinder(4, 25), "Bolt");
+    auto inst = doc.add_instance(pin, {-80, 15, 3}, {0, 0.7071068, 0, 0.7071068}, "Bolt-1");
+    auto boss_face = cylindrical_face(doc, hole_cyl);
+    auto pin_face = cylindrical_face(doc, pin);
+    REQUIRE(!boss_face.is_null());
+    REQUIRE(!pin_face.is_null());
+
+    auto ca = implicit_connector(doc, {}, boss_face);
+    auto cb = implicit_connector(doc, inst, pin_face);
+    REQUIRE(ca);
+    REQUIRE(cb);
+
+    Mate m;
+    m.type = MateType::Fastened;
+    m.face_a = boss_face;
+    m.instance_b = inst;
+    m.face_b = pin_face;
+    REQUIRE(!doc.add_mate(m).is_null());
+    REQUIRE(solve_mates(doc));
+
+    auto seated = implicit_connector(doc, inst, pin_face);
+    REQUIRE(seated);
+    CHECK(seated->origin[0] == Approx(ca->origin[0]).margin(1e-4));
+    CHECK(seated->origin[1] == Approx(ca->origin[1]).margin(1e-4));
+    CHECK(seated->origin[2] == Approx(ca->origin[2]).margin(1e-4));
+    gp_Dir za(ca->z_dir[0], ca->z_dir[1], ca->z_dir[2]);
+    gp_Dir zb(seated->z_dir[0], seated->z_dir[1], seated->z_dir[2]);
+    CHECK(std::abs(za.Dot(zb)) == Approx(1.0).margin(1e-5));
+
+    TmpFile f("fastened.sxp");
+    REQUIRE(save_sxp(doc, f.path));
+    Document loaded;
+    REQUIRE(load_sxp(loaded, f.path));
+    REQUIRE(loaded.mates().size() == 1);
+    CHECK(loaded.mates().front().type == MateType::Fastened);
+    REQUIRE(solve_mates(loaded));
+}
+
+TEST_CASE("old coincident mates still load after connector migration", "[mates]") {
+    TmpFile f("legacy_coincident.sxp");
+    EntityId inst_id;
+    {
+        Document doc;
+        auto base = doc.add_body(shape::make_box(50, 50, 10), "Base");
+        auto top = planar_face_with_normal(doc, base, gp_Dir(0, 0, 1));
+        auto block = doc.add_body(shape::make_box(10, 10, 10, {{100, 0, 0}}), "Blk");
+        auto bottom = planar_face_with_normal(doc, block, gp_Dir(0, 0, -1));
+        inst_id = doc.add_instance(block, {0, 0, 50}, {0, 0, 0, 1}, "Blk-1");
+        Mate m;
+        m.type = MateType::PlaneCoincident;
+        m.face_a = top;
+        m.instance_b = inst_id;
+        m.face_b = bottom;
+        REQUIRE(!doc.add_mate(m).is_null());
+        REQUIRE(save_sxp(doc, f.path));
+    }
+    Document loaded;
+    REQUIRE(load_sxp(loaded, f.path));
+    REQUIRE(loaded.mates().size() == 1);
+    CHECK(loaded.mates().front().type == MateType::PlaneCoincident);
+    REQUIRE(solve_mates(loaded));
+    double bb[6];
+    world_bbox(loaded, *loaded.instance(inst_id), bb);
+    CHECK(bb[2] == Approx(10.0).margin(1e-6));
+}
+
 TEST_CASE("plane parallel mate aligns normals without closing the gap", "[mates]") {
     Document doc;
     auto base = doc.add_body(shape::make_box(50, 50, 10), "Base");

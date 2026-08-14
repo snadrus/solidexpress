@@ -35,6 +35,11 @@ const char* to_string(ConstraintType t) {
         case ConstraintType::Distance: return "distance";
         case ConstraintType::Radius: return "radius";
         case ConstraintType::Angle: return "angle";
+        case ConstraintType::Concentric: return "concentric";
+        case ConstraintType::Symmetric: return "symmetric";
+        case ConstraintType::Midpoint: return "midpoint";
+        case ConstraintType::Fix: return "fix";
+        case ConstraintType::Collinear: return "collinear";
     }
     return "unknown";
 }
@@ -170,6 +175,24 @@ bool Sketch::set_constraint_value(const EntityId& id, double value) {
             return true;
         }
     return false;
+}
+
+bool Sketch::set_constraint_weak(const EntityId& id, bool weak) {
+    for (auto& c : constraints_)
+        if (c.id == id) {
+            c.weak = weak;
+            ++revision_;
+            return true;
+        }
+    return false;
+}
+
+int Sketch::drop_weak_constraints() {
+    const auto before = constraints_.size();
+    std::erase_if(constraints_, [](const SketchConstraint& c) { return c.weak; });
+    const int n = static_cast<int>(before - constraints_.size());
+    if (n > 0) ++revision_;
+    return n;
 }
 
 std::optional<std::array<double, 2>> Sketch::point_pos(const PointRef& ref) const {

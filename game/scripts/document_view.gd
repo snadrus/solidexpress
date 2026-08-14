@@ -1288,10 +1288,18 @@ func push_pull_selected(distance: float) -> bool:
 		return false
 	var face := selected_face
 	var body := selected_body
+	var info := feature_info(body)
+	if not info.is_empty() and str(info.get("type", "")).begins_with("import"):
+		var conn: Dictionary = doc.implicit_connector("", face)
+		var dir: Vector3 = conn.get("z_dir", Vector3.UP) if not conn.is_empty() else Vector3.UP
+		var de := doc.graph_add_direct_edit(str(info["id"]), "push_pull", face, distance, dir)
+		if de != "":
+			_after_mutation()
+			select_entity(body, "")
+			return true
 	var ok := doc.push_pull(face, distance)
 	if ok and is_primitive_body(body):
 		# Bake pull into cylinder/cone params without rebuilding (keeps length).
-		var info := feature_info(body)
 		var params := feature_params(body)
 		if not info.is_empty() and not params.is_empty():
 			_sync_cyl_cone_params_from_body(body, params)

@@ -28,6 +28,7 @@ func _init() -> void:
 	await howto_extrude_s_shape(main)
 	await howto_extrude_letter_a(main)
 	await howto_horizontal_hole(main)
+	await howto_landing_bindings(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
@@ -328,4 +329,32 @@ func howto_horizontal_hole(main) -> void:
 			has_boolean = true
 			break
 	check(has_boolean, "Subtract recorded as a timeline boolean feature")
+	await process_frame
+
+
+## docs/howto/{crank-slider,flange-box-flat,catalog-fastener,fea-bracket}.md
+func howto_landing_bindings(main) -> void:
+	print("- howto_landing_bindings (W1–W4)")
+	var view: DocumentView = main.view
+	view.new_document()
+	var x0: float = view.doc.crank_slider_x(20.0, 80.0, 0.0)
+	check(absf(x0 - 100.0) < 1e-4, "crank-slider x(0)=100")
+	var flat: float = view.doc.sheet_flat_length(30.0, 30.0, 1.5, 0.44, 1.5)
+	check(flat > 30.0, "flange flat length > leg")
+	var cat: Dictionary = view.doc.catalog_fastener("M6x20")
+	check(str(cat.get("designation", "")) == "M6x20", "catalog M6x20")
+	check(absf(float(cat.get("diameter", 0)) - 6.0) < 1e-6, "catalog Ø6")
+	var d1: float = view.doc.fea_cantilever(100.0, 50.0, 210000.0, 20.0, 4.0)
+	var d2: float = view.doc.fea_cantilever(100.0, 100.0, 210000.0, 20.0, 4.0)
+	check(d1 > 0.0 and d2 / d1 > 7.5, "FEA L³ scale")
+	var pts: PackedVector3Array = view.doc.cam_pocket(0, 0, 20, 10, 2.0, 2.0)
+	check(pts.size() >= 8, "CAM pocket zig-zag")
+	var mode := main.find_child("ModeRail", true, false) as MenuButton
+	check(mode != null, "Mode rail on the top bar")
+	check(main.drawing_sheet != null and not main.drawing_sheet.visible, "drawing sheet hidden in Model")
+	check(main.sheet_metal_view != null and not main.sheet_metal_view.visible, "sheet split hidden in Model")
+	main._on_mode_menu(1)
+	check(main.drawing_sheet.visible, "Draw mode shows the sheet")
+	main._on_mode_menu(0)
+	check(not main.drawing_sheet.visible, "Model hides the sheet")
 	await process_frame
