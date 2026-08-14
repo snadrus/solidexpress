@@ -54,7 +54,7 @@ Useful details:
 | `sxcore/` | GDExtension shared library binding the kernel into Godot; output is `game/bin/libsxcore.so`. |
 | `game/` | Godot 4.7 project: orbit camera, viewport interaction (select / move / push-pull / sketch), timeline / ops / card / variables panels, headless tests under `game/tests/`. |
 | `thirdparty/` | Vendored dependencies (godot-cpp, PlaneGCS + shim, miniz, nlohmann/json, Catch2, extension API dump). |
-| `docs/` | Competitive survey (`docs/survey/`) and implementation plan / live status (`docs/plan/`). |
+| `docs/` | Competitive survey (`docs/survey/`), tool-approach picks (`docs/survey/tool-approaches.md`), product roadmap (`docs/plan/roadmap.md`), and live status (`docs/plan/STATUS.md`). |
 
 PlaneGCS is built as a **shared** library (`libplanegcs.so`) to satisfy LGPL dynamic-link policy; the kernel links it through the solver seam.
 

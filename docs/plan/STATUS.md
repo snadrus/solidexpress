@@ -190,7 +190,9 @@ Round 19 test state: kernel 210 cases / 7043 assertions; Godot voice 29 + help 1
 - [x] Video 8 — Reference geometry after insert: existing Insert → Datum Plane/Axis/Point flow verified alongside inserted components (UI test).
 
 ## Later phases
-See friendliness plan (phases 21-27) + AI-first solver upgrade for unmatched voice.
+See the product [roadmap](roadmap.md) (Waves 0–4, tool picks A1–A20) and friendliness plan (phases 21-27) + AI-first solver upgrade for unmatched voice.
+
+**Assembly data-model note:** shipped mates are face-pair (Fixed / plane-coincident / parallel / concentric). Roadmap Wave 0.1 migrates them onto Onshape-style mate connectors; do not extend the old struct with more mate types.
 
 ## Environment notes
 - System deps installed via apt: ninja-build, zip, libocct-*-dev (7.9.2), libeigen3-dev, libboost-dev
