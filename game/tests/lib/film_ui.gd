@@ -223,6 +223,7 @@ static func enter_sketch(ctx: FilmContext) -> void:
 	if sm != null and sm.active:
 		await wait_frames(ctx.tree, 2)
 		return
+	await ensure_create_rail(ctx)
 	var b := find_palette_sketch_button(ctx.main)
 	if not await click_control(ctx, b, FilmUICues.toolbar_sketch()):
 		return
@@ -475,7 +476,21 @@ static func sweep_along_path_ui(ctx: FilmContext) -> void:
 		ctx.chrome.clear_keys()
 
 
+static func ensure_create_rail(ctx: FilmContext) -> void:
+	# After a place, the body stays selected and the palette hides. Click empty
+	# viewport so the next create verb is visible — same path a user takes.
+	var pal: CanvasItem = ctx.main.palette if ctx.main != null else null
+	if pal != null and pal.is_visible_in_tree():
+		return
+	await viewport_click(ctx, viewport_empty_click_pos(ctx),
+			FilmUICues.alert("Click", "Clear selection — show create rail"))
+	if ctx.main != null and ctx.main.has_method("_update_panel_visibility"):
+		ctx.main._update_panel_visibility()
+	await wait_frames(ctx.tree, 2)
+
+
 static func place_primitive(ctx: FilmContext, kind: String) -> void:
+	await ensure_create_rail(ctx)
 	var b := find_palette_button(ctx.main, kind)
 	if not await click_control(ctx, b, FilmUICues.place_primitive(kind)):
 		return
