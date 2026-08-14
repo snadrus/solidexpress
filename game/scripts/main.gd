@@ -598,12 +598,13 @@ func _build_ui() -> void:
 		var b := UIIcons.button(entry[1], "", entry[2])
 		b.pressed.connect(sketch_mode.set_tool.bind(entry[0]))
 		rows.add_child(b)
-	var auto_def := UIIcons.button("dimension", "Auto-define", "Promote weak dims until DOF 0")
+	# Icon-only like the rest of the rail — a text label widens the 44px
+	# column into the finish-bar dim blank (layout suite).
+	var auto_def := UIIcons.button("dimension", "",
+		"Auto-define — promote weak dims until DOF 0")
+	auto_def.name = "AutoDefine"
 	auto_def.pressed.connect(func() -> void: sketch_mode.auto_define())
 	rows.add_child(auto_def)
-	var propose := UIIcons.button("parallel", "Propose", "Promote a proposed parallel / equal")
-	propose.pressed.connect(func() -> void: sketch_mode.promote_propose())
-	rows.add_child(propose)
 	rows.add_child(HSeparator.new())
 	dof_label = Label.new()
 	dof_label.text = "—"
@@ -716,6 +717,7 @@ func _on_sketch_solve(dofs: int, solve_status: String, conflicts: int) -> void:
 	else:
 		dof_label.text = "%d" % dofs
 		dof_label.add_theme_color_override("font_color", Color(0.55, 0.75, 1.0))
+	_on_sketch_selection_chips()
 
 
 func _apply_constraint(type: String, value: float) -> void:
@@ -1018,6 +1020,10 @@ func _on_sketch_action(action: String) -> void:
 		"horizontal", "vertical", "parallel", "perpendicular", "equal", "coincident", \
 		"tangent", "midpoint", "symmetric", "concentric", "collinear":
 			_apply_constraint(action, 0.0)
+		"parallel?", "perpendicular?", "equal?":
+			var verb := action.trim_suffix("?")
+			var cid := sketch_mode.promote_propose(verb)
+			_on_status("Proposed %s" % verb if cid != "" else "Nothing to propose")
 		_:
 			_on_status("Sketch action: %s" % action)
 
@@ -1102,10 +1108,16 @@ func _on_sketch_selection_chips() -> void:
 	if sketch_chrome == null or not sketch_mode.active:
 		return
 	var acts: Array = sketch_mode.selection_actions()
+	for verb in sketch_mode.propose_verbs():
+		if verb not in acts:
+			acts.append(verb)
 	if acts.is_empty():
 		sketch_chrome.hide_selection_actions()
 	else:
-		sketch_chrome.show_selection_actions(acts, get_viewport().get_mouse_position())
+		# Keep chips off the 44px icon rail and the finish bar at (60, 42).
+		var mouse := get_viewport().get_mouse_position()
+		var pos := mouse if mouse.x > 56.0 else Vector2(60, 80)
+		sketch_chrome.show_selection_actions(acts, pos)
 
 
 func _on_sketch_variant(kind: String, variant: String) -> void:

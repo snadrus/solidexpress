@@ -9,6 +9,6 @@ func run_film(ctx: FilmContext) -> void:
 	var sm = ctx.main.sketch_mode
 	await FilmUI.draw_line(ctx, sm, Vector2(180, 180), Vector2(360, 184))
 	await FilmUI.draw_line(ctx, sm, Vector2(180, 260), Vector2(360, 268))
-	await FilmUI.click_button(ctx, "Propose")
+	await FilmUI.click_button(ctx, "parallel?")
 	await ctx.beat("Proposed parallel", 0.8)
 	await ctx.camera.showcase_smooth(0.7, 14.0)
