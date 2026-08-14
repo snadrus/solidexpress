@@ -273,6 +273,16 @@ public:
                                          const godot::String& face) const;
     godot::Array connector_list() const;
 
+    // DOF joints on connectors: the two picked faces become the joint frames.
+    godot::String add_joint(const godot::String& type, const godot::String& instance_a,
+                            const godot::String& face_a, const godot::String& instance_b,
+                            const godot::String& face_b, const godot::String& name);
+    godot::Array joint_list() const;
+    bool remove_joint(const godot::String& id);
+    // Drives the free degree of freedom (radians or mm) and re-poses the part.
+    bool set_joint_value(const godot::String& id, double value);
+    int solve_joints();
+
     godot::String graph_add_extrude_end(const godot::String& sketch_fid, double distance,
                                         const godot::String& end, const godot::String& op,
                                         const godot::String& target_fid);

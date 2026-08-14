@@ -32,11 +32,18 @@ struct Joint {
     JointType type = JointType::Revolute;
     MateConnector a;
     MateConnector b;
+    // Current position of the free degree of freedom: radians for revolute /
+    // cylindrical / ball, mm for slider. Dragging a jointed part writes here,
+    // so a posed mechanism survives save and reload.
+    double value = 0.0;
     double limit_min = 0.0;
     double limit_max = 0.0;
     bool has_limits = false;
     std::string name;
 };
+
+// Unit the free DOF is measured in ("deg" or "mm"), for live badges.
+const char* joint_unit(JointType t);
 
 void to_json(nlohmann::json& j, const Joint& jnt);
 void from_json(const nlohmann::json& j, Joint& jnt);
@@ -44,6 +51,10 @@ void from_json(const nlohmann::json& j, Joint& jnt);
 // Places instance of connector B (via b.instance) so the joint is satisfied
 // at parameter `s` (radians for revolute/ball, mm for slider).
 bool apply_joint(Document& doc, const Joint& jnt, double s = 0.0);
+
+// Pose every joint in the document at its stored value, in insertion order.
+// Returns how many applied.
+int solve_joints(Document& doc);
 
 // Analytic crank-slider: crank length a, rod b, angle theta → slider x.
 double crank_slider_x(double crank, double rod, double theta);

@@ -206,8 +206,32 @@ See [plan README](README.md) (where to park later ideas), [roadmap](roadmap.md) 
 - [x] 0.10 Own DXF R12 + 3MF/glTF export; film `dxf_trace_extrude`
 - [x] 0.11/0.12 Import heal report + interference volume; film `heal_and_clash`
 
+## Tier 0 — honest kernel (audit of earlier stand-ins)
+Six feature cases passed their tests while standing in for the real operation
+(fused boxes, whole-body offsets). Replaced with real OCCT ops in
+`sx/surface_ops.hpp` + `sx/sheet_metal.hpp`, each with a `[tier0]` Catch2 case
+only the real thing passes:
+- [x] `Flange` sweeps a bend section with a cylindrical face; `build_flange`
+  returns folded **and** flat, and they agree on material to within K vs 0.5
+- [x] `Knit` sews with `BRepBuilderAPI_Sewing` (six sheets → one solid) and
+  consumes the sewn bodies
+- [x] `ReplaceFace` trims to a tool surface with `BRepAlgoAPI_Splitter`, honours
+  the picked face, and fails by name when the tool misses
+- [x] `Rib` is swept from an open sketch profile (a second leg adds material)
+- [x] `Wrap` engraves along the surface (`surface_stamp`), silhouette unchanged
+- [x] `Thicken` turns a surface into a solid and refuses a solid
+- [x] Connector hover glyphs are fed from `_update_hover` (the overlay was
+  mounted but `set_hover` was never called); AssemblyPanel shows on a body
+  selection so the *first* instance is placeable
+
 ## Wave 1 — Joints + drawings (landing protocol)
 - [x] 1.1 Connector joints + analytic crank-slider (`sx/joints.hpp`, film `crank_slider`)
+- [x] 1.1b Joints are a product feature, not a kernel stub: `joints.json` in the
+  `.sxp` (posed value included), `add_joint` / `joint_list` / `set_joint_value` /
+  `solve_joints` bindings, joint types in the *same* AssemblyPanel type list as
+  mates, joint rows reading the live value, and dragging a jointed part drives
+  its one free DOF (screen-space projection of the axis). `apply_joint` is now
+  absolute, so driving a value is repeatable and zero returns the part home.
 - [x] 1.6/1.7 Draw mode rail + `drawing_sheet.gd`; film `drawing_follows_model`
 - [x] 1.8 BOM from instance counts; film `drawing_bom`
 - [x] 1.12 Rib feature + marking-menu verb; film `rib_and_wrap`

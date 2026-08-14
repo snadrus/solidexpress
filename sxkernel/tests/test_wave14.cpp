@@ -1,12 +1,15 @@
 #include <catch.hpp>
 
 #include <cmath>
+#include <cstdio>
+#include <string>
 
 #include "sx/cam.hpp"
 #include "sx/catalog.hpp"
 #include "sx/document.hpp"
 #include "sx/fea.hpp"
 #include "sx/features.hpp"
+#include "sx/instances.hpp"
 #include "sx/joints.hpp"
 #include "sx/measure.hpp"
 #include "sx/query.hpp"
@@ -14,6 +17,7 @@
 #include "sx/shape_utils.hpp"
 #include "sx/sheet_metal.hpp"
 #include "sx/sketch.hpp"
+#include "sx/sxp.hpp"
 
 using namespace sx;
 
@@ -34,11 +38,94 @@ TEST_CASE("revolute joint seats connector origins", "[wave1][joints]") {
     j.a.origin = {5, 5, 10};
     j.a.z_dir = {0, 0, 1};
     j.b.instance = inst;
-    j.b.origin = {80, 3, 3};
+    j.b.origin = {80, 3, 3};  // the arm's pin, in the arm's own coordinates
     j.b.z_dir = {0, 0, 1};
     REQUIRE(apply_joint(doc, j, 0.0));
-    CHECK(doc.instance(inst)->translation[0] == Approx(5.0 - 80.0 + 40.0).margin(2.0));
+
+    // Wherever the part started, its pin ends up on the ground connector.
+    const Instance* placed = doc.instance(inst);
+    REQUIRE(placed);
+    gp_Trsf t = transform_of(*placed);
+    gp_Pnt pin(j.b.origin[0], j.b.origin[1], j.b.origin[2]);
+    pin.Transform(t);
+    CHECK(pin.X() == Approx(5.0).margin(1e-6));
+    CHECK(pin.Y() == Approx(5.0).margin(1e-6));
+    CHECK(pin.Z() == Approx(10.0).margin(1e-6));
     (void)base;
+}
+
+TEST_CASE("joints survive save and reload posed", "[wave1][joints]") {
+    const std::string path = "/tmp/sx_joints_roundtrip.sxp";
+    EntityId jid;
+    {
+        Document doc;
+        auto base = doc.add_body(shape::make_box(20, 20, 10), "Base");
+        auto arm = doc.add_body(shape::make_box(40, 8, 8, {{0, 0, 10}}), "Arm");
+        auto inst = doc.add_instance(arm, {0, 0, 0}, {0, 0, 0, 1}, "Arm-1");
+        Joint j;
+        j.type = JointType::Revolute;
+        j.name = "Elbow";
+        j.a.origin = {10, 10, 10};
+        j.a.z_dir = {0, 0, 1};
+        j.b.instance = inst;
+        j.b.origin = {0, 4, 14};
+        j.b.z_dir = {0, 0, 1};
+        j.has_limits = true;
+        j.limit_min = -1.0;
+        j.limit_max = 1.0;
+        jid = doc.add_joint(std::move(j));
+        REQUIRE_FALSE(jid.is_null());
+
+        // Limits clamp the drive; the posed value is what gets saved.
+        REQUIRE(doc.set_joint_value(jid, 5.0));
+        CHECK(doc.joint(jid)->value == Approx(1.0));
+        CHECK(solve_joints(doc) == 1);
+        std::string err;
+        REQUIRE(save_sxp(doc, path, &err));
+        (void)base;
+    }
+    Document loaded;
+    std::string err;
+    REQUIRE(load_sxp(loaded, path, &err));
+    REQUIRE(loaded.joints().size() == 1);
+    const Joint* j = loaded.joint(jid);
+    REQUIRE(j != nullptr);
+    CHECK(std::string(to_string(j->type)) == "revolute");
+    CHECK(j->name == "Elbow");
+    CHECK(j->value == Approx(1.0));
+    CHECK(j->has_limits);
+    CHECK(solve_joints(loaded) == 1);
+    std::remove(path.c_str());
+}
+
+TEST_CASE("a revolute joint sweeps its instance about the axis", "[wave1][joints]") {
+    Document doc;
+    auto arm = doc.add_body(shape::make_box(40, 8, 8), "Arm");
+    auto inst = doc.add_instance(arm, {0, 0, 0}, {0, 0, 0, 1}, "Arm-1");
+    Joint j;
+    j.type = JointType::Revolute;
+    j.a.origin = {0, 0, 0};
+    j.a.z_dir = {0, 0, 1};
+    j.b.instance = inst;
+    j.b.origin = {0, 0, 0};
+    j.b.z_dir = {0, 0, 1};
+    auto jid = doc.add_joint(std::move(j));
+    REQUIRE_FALSE(jid.is_null());
+
+    // Document::set_joint_value records the drive; solve_joints poses the part.
+    REQUIRE(doc.set_joint_value(jid, 0.0));
+    REQUIRE(solve_joints(doc) == 1);
+    const auto at_zero = doc.instance(inst)->rotation_quat;
+    REQUIRE(doc.set_joint_value(jid, 1.5707963267948966));
+    REQUIRE(solve_joints(doc) == 1);
+    const auto at_right = doc.instance(inst)->rotation_quat;
+    // A quarter turn about Z is a different orientation, and reversible.
+    CHECK(std::abs(at_right[3] - at_zero[3]) > 1e-3);
+    CHECK(std::abs(at_right[2]) == Approx(0.7071067811865476).margin(1e-6));
+    REQUIRE(doc.set_joint_value(jid, 0.0));
+    REQUIRE(solve_joints(doc) == 1);
+    for (int i = 0; i < 4; ++i)
+        CHECK(doc.instance(inst)->rotation_quat[i] == Approx(at_zero[i]).margin(1e-6));
 }
 
 TEST_CASE("drawing dim follows a resized box", "[wave1][draw]") {

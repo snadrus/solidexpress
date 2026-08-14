@@ -1713,6 +1713,57 @@ func _update_hover(screen_pos: Vector2) -> void:
 		status.emit("Body — click to select · drag empty space / Alt / two-finger to orbit")
 
 
+## The joint driving `instance_id`, or {} when the part is free.
+func _joint_for_instance(instance_id: String) -> Dictionary:
+	if view == null or instance_id == "":
+		return {}
+	for j in view.doc.joint_list():
+		if str(j.get("instance_b", "")) == instance_id:
+			return j
+	return {}
+
+
+## Convert an instance drag into the joint's one free value: mm along the axis
+## for sliders, degrees about it for revolutes. Returns false when the part has
+## no joint, so the caller falls back to a free move.
+func _drive_joint_from_drag(pos: Vector2) -> bool:
+	var joint := _joint_for_instance(_drag_instance_id)
+	if joint.is_empty():
+		return false
+	var frame: Dictionary = view.doc.implicit_connector("", str(joint.get("face_a", "")))
+	if frame.is_empty():
+		return false
+	var origin: Vector3 = frame.get("origin", Vector3.ZERO)
+	var axis: Vector3 = (frame.get("z_dir", Vector3.UP) as Vector3).normalized()
+	# Measure the gesture against the axis as drawn on screen, so a vertical
+	# slider reads a vertical drag and a hinge reads a sweep around its pin.
+	var pivot := _model_to_screen(origin)
+	var axis_screen := _model_to_screen(origin + axis) - pivot
+	var unit := str(joint.get("unit", "mm"))
+	var value := float(joint.get("value", 0.0))
+	if unit == "mm":
+		if axis_screen.length() < 0.5:
+			return false  # axis points at the camera: nothing to drag along
+		var mm_per_px := 1.0 / axis_screen.length()
+		value += (pos - _press_pos).dot(axis_screen.normalized()) * mm_per_px
+	else:
+		var from := _press_pos - pivot
+		var to := pos - pivot
+		if from.length() < 4.0 or to.length() < 4.0:
+			return false  # too close to the pin to read an angle
+		var swept := from.angle_to(to)
+		# Screen Y grows downward, and a receding axis sweeps the other way.
+		if axis.dot(-camera.global_transform.basis.z) > 0.0:
+			swept = -swept
+		value += swept
+	if not view.doc.set_joint_value(str(joint.get("id", "")), value):
+		return false
+	view.refresh()
+	var shown := rad_to_deg(value) if unit == "deg" else value
+	status.emit("%s %.1f %s" % [str(joint.get("name", "Joint")), shown, unit])
+	return true
+
+
 ## Onshape-style: the mate frame appears on the face under the cursor, so mates
 ## and joints are picked from geometry rather than from a list of frames.
 func _update_connector_hover(face_id: String, instance_id := "") -> void:
@@ -2481,6 +2532,14 @@ func _on_release(pos: Vector2) -> void:
 			return
 		DragMode.MOVE_INSTANCE:
 			var inode := view.instance_node(_drag_instance_id)
+			# A jointed part has one degree of freedom; the drag drives it.
+			if not was_click and inode != null and _drive_joint_from_drag(pos):
+				_drag_mode = DragMode.NONE
+				_drag_instance_id = ""
+				_box_drag = false
+				_additive_click = false
+				_press_travel = 0.0
+				return
 			if not was_click and inode != null:
 				var rot := _instance_rotation(_drag_instance_id)
 				if view.doc.set_instance_transform(_drag_instance_id,

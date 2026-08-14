@@ -20,6 +20,7 @@
 #include "sx/entity.hpp"
 #include "sx/ids.hpp"
 #include "sx/instances.hpp"
+#include "sx/joints.hpp"
 #include "sx/mates.hpp"
 
 namespace sx {
@@ -153,6 +154,17 @@ public:
     const std::vector<MateConnector>& connectors() const { return connectors_; }
     void restore_connector(MateConnector&& c);
 
+    // --- DOF joints on connectors (see sx/joints.hpp) ---
+    // Returns the joint id, or a null id when the joint's B connector does not
+    // name an instance. `value` is the joint's current position (radians for
+    // revolute / ball, mm for slider), so a mechanism can be posed and saved.
+    EntityId add_joint(Joint j);
+    bool remove_joint(const EntityId& id);
+    bool set_joint_value(const EntityId& id, double value);
+    const std::vector<Joint>& joints() const { return joints_; }
+    const Joint* joint(const EntityId& id) const;
+    void restore_joint(Joint&& j);
+
     // --- configurations (named snapshots of the variable table) ---
     // Saving captures the graph's current variable expressions under `name`
     // (overwriting an existing snapshot of that name). Activating replaces
@@ -188,6 +200,7 @@ private:
     std::unordered_map<EntityId, size_t> instance_index_;
     std::vector<Mate> mates_;
     std::vector<MateConnector> connectors_;
+    std::vector<Joint> joints_;
     std::vector<Configuration> configurations_;
     std::string active_configuration_;
     std::unique_ptr<CardRegistry> cards_;

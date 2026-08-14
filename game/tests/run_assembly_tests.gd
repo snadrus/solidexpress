@@ -32,9 +32,140 @@ func _init() -> void:
 	await test_drag_resnap_with_mate(main)
 	await test_mate_error_badge_and_anchor(main)
 	await test_connector_hover_glyph(main)
+	await test_joint_from_face_flow(main)
+	await test_drag_drives_joint(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
+
+
+## Slice H: joints share the mate flow — same two faces, one type list.
+func test_joint_from_face_flow(main) -> void:
+	print("- revolute joint from the two-click face flow")
+	var view: DocumentView = main.view
+	view.new_document()
+	var panel := _mount_panel(main)
+	var doc: SxDocument = view.doc
+	var base: String = view.insert_primitive("box", Vector3.ZERO)
+	var arm: String = doc.add_box(40, 8, 8, Vector3(0, 0, 0))
+	view.select_entity(arm, "")
+	panel._place_instance()
+	await process_frame
+	check(doc.instance_list().size() == 1, "arm instanced")
+
+	var joint_idx := -1
+	for i in range(panel._type_option.item_count):
+		if panel._type_option.get_item_text(i) == "revolute":
+			joint_idx = i
+	check(joint_idx >= 0, "revolute offered in the same type list as mates")
+	panel._type_option.select(joint_idx)
+
+	var face_a := _top_face(doc, base)
+	var face_b := _top_face(doc, arm)
+	check(face_a != "" and face_b != "", "faces resolved for both sides")
+	panel._arm_mate()
+	panel._mate_face_a = face_a
+	view.select_entity(arm, face_b)
+	panel._resolve_mate_b(arm, face_b)
+	await process_frame
+
+	var joints: Array = doc.joint_list()
+	check(joints.size() == 1, "joint recorded on the document")
+	if joints.is_empty():
+		panel.queue_free()
+		return
+	check(str(joints[0].get("type", "")) == "revolute", "joint type is revolute")
+	check(str(joints[0].get("unit", "")) == "deg", "revolute is driven in degrees")
+	check(panel.visible, "assembly panel lists it")
+	var rows := 0
+	for c in panel._mates_list.get_children():
+		if c.has_meta("joint_id"):
+			rows += 1
+	check(rows == 1, "one joint row in the panel")
+
+	# Driving the same value twice lands in the same place.
+	var jid: String = str(joints[0]["id"])
+	check(doc.set_joint_value(jid, 0.5), "joint driven to 0.5 rad")
+	var once: Vector3 = doc.instance_list()[0]["translation"]
+	check(doc.set_joint_value(jid, 0.5), "joint driven again")
+	var twice: Vector3 = doc.instance_list()[0]["translation"]
+	check(once.distance_to(twice) < 1e-4,
+		"driving is absolute, not cumulative (%s vs %s)" % [str(once), str(twice)])
+	check(doc.solve_joints() == 1, "solve_joints poses one joint")
+	panel.queue_free()
+
+
+## Dragging a jointed part drives its one free value instead of moving it freely.
+func test_drag_drives_joint(main) -> void:
+	print("- dragging a jointed instance drives the joint")
+	var view: DocumentView = main.view
+	var vi: ViewportInteraction = main.interaction
+	view.new_document()
+	var panel := _mount_panel(main)
+	var doc: SxDocument = view.doc
+	var base: String = view.insert_primitive("box", Vector3.ZERO)
+	var arm: String = doc.add_box(40, 8, 8, Vector3.ZERO)
+	view.select_entity(arm, "")
+	panel._place_instance()
+	await process_frame
+	var iid: String = doc.instance_list()[0]["id"]
+
+	panel._type_option.select(_type_index(panel, "slider"))
+	panel._arm_mate()
+	panel._mate_face_a = _top_face(doc, base)
+	panel._resolve_mate_b(arm, _top_face(doc, arm))
+	await process_frame
+	var joints: Array = doc.joint_list()
+	check(joints.size() == 1, "slider joint added")
+	if joints.is_empty():
+		panel.queue_free()
+		return
+	check(str(joints[0].get("unit", "")) == "mm", "slider is driven in mm")
+	var before: float = float(joints[0].get("value", 0.0))
+
+	# Simulate the drag the interaction layer sees on release: pull along the
+	# joint axis as it appears on screen, which is what a user aims at.
+	vi._drag_instance_id = iid
+	vi._instance_grab_point = Vector3(0, 0, 10)
+	root.size = Vector2i(1280, 720)
+	vi.size = Vector2(1280, 720)
+	main.camera.frame_contents()
+	await process_frame
+	var frame: Dictionary = doc.implicit_connector("", str(joints[0]["face_a"]))
+	var origin: Vector3 = frame.get("origin", Vector3.ZERO)
+	var axis: Vector3 = (frame.get("z_dir", Vector3.UP) as Vector3).normalized()
+	var pivot: Vector2 = vi._model_to_screen(origin)
+	var axis_screen: Vector2 = (vi._model_to_screen(origin + axis) - pivot).normalized()
+	vi._press_pos = Vector2(640, 360)
+	var drove: bool = vi._drive_joint_from_drag(vi._press_pos + axis_screen * 60.0)
+	check(drove, "drag routed into the joint")
+	var after: float = float(doc.joint_list()[0].get("value", 0.0))
+	check(absf(after - before) > 1e-3, "joint value moved (%.2f → %.2f mm)" % [before, after])
+	check(doc.remove_joint(str(joints[0]["id"])), "joint removable")
+	vi._drag_instance_id = ""
+	panel.queue_free()
+
+
+func _type_index(panel: AssemblyPanel, text: String) -> int:
+	for i in range(panel._type_option.item_count):
+		if panel._type_option.get_item_text(i) == text:
+			return i
+	return 0
+
+
+## Face id of the highest planar face that offers a connector.
+func _top_face(doc: SxDocument, body: String) -> String:
+	var best := ""
+	var best_z := -1e30
+	for f in doc.get_face_ids(body):
+		var c: Dictionary = doc.implicit_connector("", f)
+		if c.is_empty():
+			continue
+		var o: Vector3 = c.get("origin", Vector3.ZERO)
+		if o.z > best_z:
+			best_z = o.z
+			best = f
+	return best
 
 
 ## Wave 0.1 chrome: hovering a face shows its mate frame on the geometry.

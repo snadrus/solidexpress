@@ -12,6 +12,7 @@
 #include "sx/document.hpp"
 #include "sx/features.hpp"
 #include "sx/instances.hpp"
+#include "sx/joints.hpp"
 #include "sx/log.hpp"
 #include "sx/mates.hpp"
 #include "sx/shape_utils.hpp"
@@ -89,6 +90,9 @@ bool save_sxp(const Document& doc, const std::string& path, std::string* err) {
     json connectors_json = json::array();
     for (const auto& c : doc.connectors()) connectors_json.push_back(c);
 
+    json joints_json = json::array();
+    for (const auto& j : doc.joints()) joints_json.push_back(j);
+
     json configs_json;
     configs_json["active"] = doc.active_configuration();
     configs_json["configurations"] = json::array();
@@ -105,6 +109,7 @@ bool save_sxp(const Document& doc, const std::string& path, std::string* err) {
     ok = ok && add("instances.json", instances_json.dump(2));
     ok = ok && add("mates.json", mates_json.dump(2));
     ok = ok && add("connectors.json", connectors_json.dump(2));
+    ok = ok && add("joints.json", joints_json.dump(2));
     ok = ok && add("configurations.json", configs_json.dump(2));
     ok = ok && add("manifest.json", manifest.dump(2));
     ok = ok && mz_zip_writer_finalize_archive(&zip) == MZ_TRUE;
@@ -297,6 +302,26 @@ bool load_sxp(Document& doc, const std::string& path, std::string* err) {
             }
         } catch (const std::exception& e) {
             log::warn(std::string("sxp: ignoring bad connectors.json: ") + e.what());
+        }
+    }
+
+    // Joints are optional: documents saved before DOF joints existed have none.
+    std::string joints_text = read_entry(zip, "joints.json", &found);
+    if (found) {
+        try {
+            json jj = json::parse(joints_text);
+            for (const auto& j : jj) {
+                Joint jnt = j.get<Joint>();
+                if (jnt.id.is_null()) jnt.id = EntityId::generate();
+                if (!doc.instance(jnt.b.instance)) {
+                    log::warn("sxp: dropping joint '" + jnt.name + "' — missing instance " +
+                              jnt.b.instance.str());
+                    continue;
+                }
+                doc.restore_joint(std::move(jnt));
+            }
+        } catch (const std::exception& e) {
+            log::warn(std::string("sxp: ignoring bad joints.json: ") + e.what());
         }
     }
 

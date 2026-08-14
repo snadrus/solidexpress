@@ -3,6 +3,7 @@
 #include <TopExp.hxx>
 #include <TopTools_IndexedMapOfShape.hxx>
 
+#include <algorithm>
 #include <cmath>
 #include <sstream>
 #include <type_traits>
@@ -511,6 +512,50 @@ bool Document::remove_connector(const EntityId& id) {
 
 void Document::restore_connector(MateConnector&& c) {
     connectors_.push_back(std::move(c));
+    bump_revision();
+}
+
+EntityId Document::add_joint(Joint j) {
+    if (!instance(j.b.instance)) return {};
+    if (j.id.is_null()) j.id = EntityId::generate();
+    if (j.name.empty())
+        j.name = std::string(to_string(j.type)) + " " + std::to_string(joints_.size() + 1);
+    const EntityId id = j.id;
+    joints_.push_back(std::move(j));
+    bump_revision();
+    return id;
+}
+
+bool Document::remove_joint(const EntityId& id) {
+    for (size_t i = 0; i < joints_.size(); ++i) {
+        if (joints_[i].id == id) {
+            joints_.erase(joints_.begin() + static_cast<long>(i));
+            bump_revision();
+            return true;
+        }
+    }
+    return false;
+}
+
+bool Document::set_joint_value(const EntityId& id, double value) {
+    for (auto& j : joints_) {
+        if (j.id != id) continue;
+        j.value = j.has_limits ? std::clamp(value, j.limit_min, j.limit_max) : value;
+        bump_revision();
+        return true;
+    }
+    return false;
+}
+
+const Joint* Document::joint(const EntityId& id) const {
+    for (const auto& j : joints_) {
+        if (j.id == id) return &j;
+    }
+    return nullptr;
+}
+
+void Document::restore_joint(Joint&& j) {
+    joints_.push_back(std::move(j));
     bump_revision();
 }
 

@@ -7,6 +7,7 @@
 #include <stdexcept>
 
 #include <gp_Ax1.hxx>
+#include <gp_Ax3.hxx>
 #include <gp_Quaternion.hxx>
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
@@ -38,12 +39,25 @@ JointType joint_type_from_string(const std::string& s) {
     throw std::invalid_argument("unknown joint type: " + s);
 }
 
+const char* joint_unit(JointType t) {
+    switch (t) {
+        case JointType::Slider:
+        case JointType::PinSlot:
+        case JointType::Planar: return "mm";
+        case JointType::Revolute:
+        case JointType::Cylindrical:
+        case JointType::Ball: return "deg";
+    }
+    return "";
+}
+
 void to_json(nlohmann::json& j, const Joint& jnt) {
     j = nlohmann::json{
         {"uuid", jnt.id.str()},
         {"type", to_string(jnt.type)},
         {"a", jnt.a},
         {"b", jnt.b},
+        {"value", jnt.value},
         {"limit_min", jnt.limit_min},
         {"limit_max", jnt.limit_max},
         {"has_limits", jnt.has_limits},
@@ -56,6 +70,7 @@ void from_json(const nlohmann::json& j, Joint& jnt) {
     jnt.type = joint_type_from_string(j.at("type").get<std::string>());
     if (j.contains("a")) jnt.a = j["a"].get<MateConnector>();
     if (j.contains("b")) jnt.b = j["b"].get<MateConnector>();
+    jnt.value = j.value("value", 0.0);
     jnt.limit_min = j.value("limit_min", 0.0);
     jnt.limit_max = j.value("limit_max", 0.0);
     jnt.has_limits = j.value("has_limits", false);
@@ -64,77 +79,66 @@ void from_json(const nlohmann::json& j, Joint& jnt) {
 
 namespace {
 
-bool move_instance(Document& doc, const EntityId& instance_id, const gp_Trsf& correction) {
-    const Instance* inst = doc.instance(instance_id);
-    if (!inst) return false;
-    gp_Trsf t = correction * transform_of(*inst);
-    gp_Quaternion q = t.GetRotation();
-    gp_XYZ tr = t.TranslationPart();
+bool set_pose(Document& doc, const EntityId& instance_id, const gp_Trsf& pose) {
+    if (!doc.instance(instance_id)) return false;
+    gp_Quaternion q = pose.GetRotation();
+    gp_XYZ tr = pose.TranslationPart();
     return doc.set_instance_transform(instance_id, {tr.X(), tr.Y(), tr.Z()},
                                       {q.X(), q.Y(), q.Z(), q.W()});
 }
 
-gp_Trsf rotation_about(const gp_Pnt& about, const gp_Dir& from, const gp_Dir& to) {
-    gp_Trsf out;
-    gp_Quaternion q{gp_Vec(from), gp_Vec(to)};
-    gp_Trsf rot;
-    rot.SetRotation(q);
-    gp_Trsf to_origin, back;
-    to_origin.SetTranslation(gp_Vec(about.XYZ().Reversed()));
-    back.SetTranslation(gp_Vec(about.XYZ()));
-    return back * rot * to_origin;
+// Transform taking connector-local coordinates into the frame's own space.
+gp_Trsf frame_of(const MateConnector& c) {
+    const gp_Pnt origin(c.origin[0], c.origin[1], c.origin[2]);
+    const gp_Dir z(c.z_dir[0], c.z_dir[1], c.z_dir[2]);
+    gp_Dir x(c.x_dir[0], c.x_dir[1], c.x_dir[2]);
+    // Keep X perpendicular to Z; a face-derived X can drift onto the axis.
+    if (std::abs(x.Dot(z)) > 1.0 - 1e-9) {
+        const gp_Dir ref = std::abs(z.Dot(gp_Dir(0, 0, 1))) < 0.9 ? gp_Dir(0, 0, 1)
+                                                                  : gp_Dir(1, 0, 0);
+        x = z.Crossed(ref);
+    }
+    gp_Trsf to_local;
+    to_local.SetTransformation(gp_Ax3(origin, z, x));
+    return to_local.Inverted();
 }
 
 }  // namespace
 
 bool apply_joint(Document& doc, const Joint& jnt, double s) {
     if (jnt.b.instance.is_null() || !doc.instance(jnt.b.instance)) return false;
-    gp_Pnt oa(jnt.a.origin[0], jnt.a.origin[1], jnt.a.origin[2]);
-    gp_Pnt ob(jnt.b.origin[0], jnt.b.origin[1], jnt.b.origin[2]);
-    gp_Dir za(jnt.a.z_dir[0], jnt.a.z_dir[1], jnt.a.z_dir[2]);
-    gp_Dir zb(jnt.b.z_dir[0], jnt.b.z_dir[1], jnt.b.z_dir[2]);
     double param = s;
     if (jnt.has_limits) param = std::clamp(s, jnt.limit_min, jnt.limit_max);
 
+    // Absolute pose: take the part's own connector frame onto the ground frame,
+    // with the joint's one free degree of freedom applied in between. Driving
+    // the same value twice lands in the same place, and returning to zero
+    // returns the part home.
+    gp_Trsf drive;
     switch (jnt.type) {
-        case JointType::Ball: {
-            gp_Trsf shift;
-            shift.SetTranslation(gp_Vec(ob, oa));
-            return move_instance(doc, jnt.b.instance, shift);
-        }
-        case JointType::Slider: {
-            gp_Trsf corr = rotation_about(ob, zb, za);
-            gp_Pnt dest = oa.Translated(gp_Vec(za) * param);
-            gp_Trsf shift;
-            shift.SetTranslation(gp_Vec(ob, dest));
-            return move_instance(doc, jnt.b.instance, shift * corr);
-        }
         case JointType::Revolute:
-        case JointType::Cylindrical: {
-            gp_Trsf corr = rotation_about(ob, zb, za);
-            gp_Trsf spin;
-            spin.SetRotation(gp_Ax1(ob, za), param);
-            gp_Pnt dest = (jnt.type == JointType::Cylindrical)
-                              ? oa.Translated(gp_Vec(za) * 0.0)
-                              : oa;
-            gp_Trsf shift;
-            shift.SetTranslation(gp_Vec(ob, dest));
-            return move_instance(doc, jnt.b.instance, shift * spin * corr);
-        }
+        case JointType::Cylindrical:
+        case JointType::Ball:
+            drive.SetRotation(gp_Ax1(gp_Pnt(0, 0, 0), gp_Dir(0, 0, 1)), param);
+            break;
+        case JointType::Slider:
+            drive.SetTranslation(gp_Vec(0, 0, param));
+            break;
         case JointType::Planar:
-        case JointType::PinSlot: {
-            gp_Trsf corr = rotation_about(ob, zb, za);
-            gp_Vec v(ob, oa);
-            gp_Vec axial = gp_Vec(za) * v.Dot(gp_Vec(za));
-            gp_Trsf shift;
-            if (jnt.type == JointType::PinSlot)
-                shift.SetTranslation(v - axial);  // kill radial, keep slide
-            else
-                shift.SetTranslation(gp_Vec(za) * (v.Dot(gp_Vec(za))));  // close normal
-            return move_instance(doc, jnt.b.instance, shift * corr);
-        }
+        case JointType::PinSlot:
+            drive.SetTranslation(gp_Vec(param, 0, 0));
+            break;
     }
-    return false;
+    const gp_Trsf pose = frame_of(jnt.a) * drive * frame_of(jnt.b).Inverted();
+    return set_pose(doc, jnt.b.instance, pose);
+}
+
+int solve_joints(Document& doc) {
+    int applied = 0;
+    for (const auto& j : doc.joints()) {
+        if (apply_joint(doc, j, j.value)) ++applied;
+    }
+    return applied;
 }
 
 double crank_slider_x(double crank, double rod, double theta) {

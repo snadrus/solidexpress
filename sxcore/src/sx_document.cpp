@@ -1311,6 +1311,65 @@ Dictionary SxDocument::implicit_connector(const String& instance, const String& 
     return out;
 }
 
+String SxDocument::add_joint(const String& type, const String& instance_a, const String& face_a,
+                             const String& instance_b, const String& face_b, const String& name) {
+    sx::Joint j;
+    try {
+        j.type = sx::joint_type_from_string(to_std(type));
+    } catch (const std::exception&) {
+        return {};
+    }
+    // Joints ride on connectors, so the two picked faces become the frames.
+    // B is captured in the source body's own coordinates: apply_joint places
+    // that frame onto A absolutely, so driving a value is repeatable.
+    auto ca = sx::implicit_connector(*doc_, parse_id(instance_a), parse_id(face_a));
+    auto cb = sx::implicit_connector(*doc_, sx::EntityId{}, parse_id(face_b));
+    if (!ca || !cb) return {};
+    j.a = *ca;
+    j.b = *cb;
+    j.b.instance = parse_id(instance_b);
+    j.name = to_std(name);
+    auto id = doc_->add_joint(std::move(j));
+    if (id.is_null()) return {};
+    const sx::Joint* stored = doc_->joint(id);
+    if (stored) sx::apply_joint(*doc_, *stored, stored->value);
+    return to_gd(id.str());
+}
+
+Array SxDocument::joint_list() const {
+    Array out;
+    for (const auto& j : doc_->joints()) {
+        Dictionary d;
+        d["id"] = to_gd(j.id.str());
+        d["type"] = to_gd(sx::to_string(j.type));
+        d["instance_b"] = j.b.instance.is_null() ? String() : to_gd(j.b.instance.str());
+        d["face_a"] = j.a.face.is_null() ? String() : to_gd(j.a.face.str());
+        d["face_b"] = j.b.face.is_null() ? String() : to_gd(j.b.face.str());
+        d["value"] = j.value;
+        d["unit"] = to_gd(sx::joint_unit(j.type));
+        d["limit_min"] = j.limit_min;
+        d["limit_max"] = j.limit_max;
+        d["has_limits"] = j.has_limits;
+        d["name"] = to_gd(j.name);
+        out.push_back(d);
+    }
+    return out;
+}
+
+bool SxDocument::remove_joint(const String& id) {
+    auto jid = parse_id(id);
+    return !jid.is_null() && doc_->remove_joint(jid);
+}
+
+bool SxDocument::set_joint_value(const String& id, double value) {
+    auto jid = parse_id(id);
+    if (jid.is_null() || !doc_->set_joint_value(jid, value)) return false;
+    const sx::Joint* j = doc_->joint(jid);
+    return j != nullptr && sx::apply_joint(*doc_, *j, j->value);
+}
+
+int SxDocument::solve_joints() { return sx::solve_joints(*doc_); }
+
 Array SxDocument::connector_list() const {
     Array out;
     for (const auto& c : doc_->connectors()) {
@@ -1676,6 +1735,13 @@ void SxDocument::_bind_methods() {
     ClassDB::bind_method(D_METHOD("implicit_connector", "instance", "face"),
                          &SxDocument::implicit_connector);
     ClassDB::bind_method(D_METHOD("connector_list"), &SxDocument::connector_list);
+    ClassDB::bind_method(D_METHOD("add_joint", "type", "instance_a", "face_a", "instance_b",
+                                  "face_b", "name"),
+                         &SxDocument::add_joint);
+    ClassDB::bind_method(D_METHOD("joint_list"), &SxDocument::joint_list);
+    ClassDB::bind_method(D_METHOD("remove_joint", "id"), &SxDocument::remove_joint);
+    ClassDB::bind_method(D_METHOD("set_joint_value", "id", "value"), &SxDocument::set_joint_value);
+    ClassDB::bind_method(D_METHOD("solve_joints"), &SxDocument::solve_joints);
     ClassDB::bind_method(D_METHOD("graph_add_extrude_end", "sketch_fid", "distance", "end", "op",
                                   "target_fid"),
                          &SxDocument::graph_add_extrude_end);
