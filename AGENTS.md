@@ -1,5 +1,21 @@
 # AGENTS.md
 
+## Where product intent lives (limited context)
+
+Do not keep “we should do this later” only in chat, a PR comment, or a
+transient plan. Write it into the file that owns that decision, then stop
+repeating it. Index: [`docs/plan/README.md`](docs/plan/README.md).
+
+| Question | File |
+|----------|------|
+| What / order / whose tool | `docs/plan/roadmap.md`, `docs/survey/tool-approaches.md` |
+| How it must land (chrome, film) | `docs/plan/landing-protocol.md` |
+| What has shipped | `docs/plan/STATUS.md` |
+| Architecture / licenses | `docs/plan/implementation-plan.md` |
+
+Execute Wave 0 first. Waves 1–4 are fully specified in those files so a
+fresh agent can resume without prior conversation.
+
 ## Cursor Cloud specific instructions
 
 SolidExpress is a single offline desktop parametric CAD app: a C++20 kernel

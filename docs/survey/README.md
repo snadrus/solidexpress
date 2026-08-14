@@ -17,6 +17,7 @@ A survey of the seven major commercial parametric mechanical CAD (MCAD) applicat
 | [interaction-patterns.md](interaction-patterns.md) | How peers make actions visually discoverable (hover, gizmos, context chrome) and how SolidExpress maps those patterns. |
 | [tool-approaches.md](tool-approaches.md) | How the best *tools* work — including Shapr3D, Plasticity, IronCAD, Solid Edge, FreeCAD — and the binding SolidExpress picks (A1–A20). |
 | [../plan/roadmap.md](../plan/roadmap.md) | Sequenced feature waves that implement those picks against current STATUS. |
+| [../plan/landing-protocol.md](../plan/landing-protocol.md) | How each wave row lands: chrome budget, L1–L5, film ids, slices. |
 | [profiles/](profiles/) | One deep-dive per product: positioning, architecture (kernel, formats, deployment), standout features, weaknesses, licensing/pricing, ecosystem. |
 
 ## Products and versions surveyed

@@ -155,5 +155,7 @@ Each row is a product decision. Implementation tasks in [roadmap.md](../plan/roa
 
 - [README.md](README.md) — original seven-product survey
 - [interaction-patterns.md](interaction-patterns.md) — hover, gizmos, chrome already mapped into SX
+- [../plan/README.md](../plan/README.md) — where to park later-wave intent
 - [../plan/roadmap.md](../plan/roadmap.md) — sequenced feature waves that implement these picks
+- [../plan/landing-protocol.md](../plan/landing-protocol.md) — chrome, L1–L5, film ids
 - [../plan/implementation-plan.md](../plan/implementation-plan.md) — architecture and phase machinery

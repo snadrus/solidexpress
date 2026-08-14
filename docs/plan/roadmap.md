@@ -4,6 +4,8 @@ What to add next, in what order, and **whose tool we copy**.
 
 This is the product sequence. The [implementation plan](implementation-plan.md) is the architecture and phase machinery. [STATUS.md](STATUS.md) is what has already landed. [Tool approaches](../survey/tool-approaches.md) are the binding picks (A1–A20) this roadmap implements.
 
+**How each row lands** (chrome budget, L1–L5 checklist, film id, parallel slices): [landing-protocol.md](landing-protocol.md). Doc index: [README.md](README.md). Do not keep later-wave intent only in chat — park it here or in the landing protocol.
+
 When a pick conflicts with the plan's "majority of the seven" default, the pick wins on *how the tool works*. Architecture, licensing, and the card/`SolverBackend` seams do not move.
 
 ---
@@ -80,6 +82,8 @@ flowchart LR
 
 **Wave 0 exit:** the existing 12-part workflow suite (`run_workflow_tests`) plus a new "imported dumb bracket → direct-edit + holes + fasteners + drawing SVG" path, all green. A SW-trained user does not need a workaround for through-all, a hole pattern, or a fastened bolt.
 
+Films, chrome, and slices: [landing-protocol.md](landing-protocol.md#wave-0--daily-driver-close-execute-first) (`fasten_bolt`, `extrude_through_all`, `direct_edit_import`, `triball_hole_circle`, `sketch_mounting_plate`, `hole_wizard_m6`, `fillet_chain_pocket`, `marking_menu_pick`, `dxf_trace_extrude`, `heal_and_clash`).
+
 ---
 
 ### Wave 1 — Joints that move, drawings that dimension
@@ -103,6 +107,8 @@ flowchart LR
 
 **Wave 1 exit:** scripted gearbox (12 components, 4 joint types, pattern, explode) + a 2-sheet dimensioned drawing with BOM that survives a parameter edit.
 
+Films, chrome, and slices: [landing-protocol.md](landing-protocol.md#wave-1--joints-that-move-drawings-that-dimension) (`crank_slider`, `snap_bolt_drop`, `explode_gearbox`, `bolt_circle_pattern`, `context_update`, `drawing_section`, `drawing_follows_model`, `drawing_bom`, `convert_survives_edit`, `sweep_3d_polyline`, `rib_and_wrap`).
+
 ---
 
 ### Wave 2 — Sheet metal, frames, surfaces
@@ -125,6 +131,8 @@ flowchart LR
 
 **Explicitly not in this wave:** aerospace joggles, Class-A, SubD (spike in Wave 4), composites, mold wizard.
 
+Films, chrome, and slices: [landing-protocol.md](landing-protocol.md#wave-2--sheet-metal-frames-surfaces) (`flange_box_flat`, `flat_edits_folded`, `convert_thin_box`, `flat_on_drawing`, `frame_cutlist`, `weld_on_sheet`, `knit_to_box`, `zebra_cylinder`, `replace_face`).
+
 ---
 
 ### Wave 3 — AI-first surface and user features
@@ -144,6 +152,8 @@ flowchart LR
 | 3.9 | **NX-style propose-on-select** | A3 | Selecting sketch entities shows inferred relations to promote, without requiring them up front. | Select two near-parallel lines → "parallel?" chip |
 
 **Wave 3 exit:** mocked-LLM demo — "four M6 clearance holes near the corners of the top face, symmetric" — produces the constrained hole pattern via queries + intents + user features.
+
+Films, chrome, and slices: [landing-protocol.md](landing-protocol.md#wave-3--ai-first-surface-and-user-features) (`query_hole_walls`, `card_digest`, `user_csink`, `intent_flush`, `whats_wrong_fillet`, `auto_define_plate`, `rules_three_configs`, `cli_bracket_step`, `propose_parallel`, `nl_four_holes`).
 
 ---
 
@@ -166,6 +176,8 @@ Ordered. Each item is a spike-then-product; do not start until its dependency wa
 | 4.11 | MBD / PMI | A13 first, Creo later | 1.7 | 3D dims on faces + AP242 only after 2D dims are trusted |
 | 4.12 | Standard-parts catalog | A1, SW Toolbox *in base* | 0.1, 1.2 | ISO fasteners that snap to hole connectors |
 | 4.13 | ECAD board-in-enclosure | A18 Fusion | W1 | IDX/IDF first, not a schematic editor |
+
+Films and chrome for 4.1–4.13: [landing-protocol.md](landing-protocol.md#wave-4--specialized-tracks). Deferred-unscheduled items (Class-A, composites, plant, MBSE, cloud-only, …) are parked in that same section — add a row there instead of leaving the idea in chat.
 
 ---
 
@@ -212,6 +224,8 @@ That is a **daily driver for brackets, enclosures, and small mechanisms**, with 
 
 ## Related
 
+- [README.md](README.md) — plan index (park later ideas here, not in chat)
+- [landing-protocol.md](landing-protocol.md) — chrome, films, slices for every wave
 - [tool-approaches.md](../survey/tool-approaches.md) — picks A1–A20
 - [master-feature-list.md](../survey/master-feature-list.md) — full catalog
 - [feature-matrix.md](../survey/feature-matrix.md) — who has what
