@@ -140,6 +140,13 @@
     "quit_after": 800
   },
   {
+    "id": "snap_bolt_drop",
+    "title": "Drop a bolt on a connector; it fastens itself",
+    "script": "res://tests/films/film_snap_bolt_drop.gd",
+    "enabled": true,
+    "quit_after": 900
+  },
+  {
     "id": "drawing_follows_model",
     "title": "Drawing dim follows a parameter edit",
     "script": "res://tests/films/film_drawing_follows_model.gd",

@@ -94,6 +94,10 @@ var _pending_instance_move := false
 var _drag_instance_id := ""
 var _instance_start_xform := Transform3D.IDENTITY
 var _instance_grab_point := Vector3.ZERO
+## Snap-on-drop: the connector face under the cursor mid-drag (magnet target),
+## and the face of the dragged part that will seat onto it.
+var _snap_target_face := ""
+var _snap_source_face := ""
 ## Spacebar orientation / named-view popup (SW Spacebar / Onshape S lite).
 var _orient_popup: PopupPanel
 ## Click-a-dimension in-viewport editor (sketch SELECT tool).
@@ -1713,6 +1717,67 @@ func _update_hover(screen_pos: Vector2) -> void:
 		status.emit("Body — click to select · drag empty space / Alt / two-finger to orbit")
 
 
+## Face of the dragged part that will seat on the drop target: the connector
+## face nearest where the user grabbed it.
+func _grabbed_connector_face(instance_id: String, grab_point: Vector3) -> String:
+	if view == null:
+		return ""
+	var source := ""
+	for inst in view.doc.instance_list():
+		if str(inst.get("id", "")) == instance_id:
+			source = str(inst.get("source_body", ""))
+	if source == "":
+		return ""
+	var best := ""
+	var best_d := 1e30
+	for f in view.doc.get_face_ids(source):
+		var c: Dictionary = view.doc.implicit_connector(instance_id, f)
+		if c.is_empty():
+			continue
+		var d: float = (c.get("origin", Vector3.ZERO) as Vector3).distance_to(grab_point)
+		if d < best_d:
+			best_d = d
+			best = f
+	return best
+
+
+## Light the connector under the cursor while dragging a part over it.
+func _update_snap_target(pos: Vector2) -> void:
+	_snap_target_face = ""
+	if view == null or _snap_source_face == "":
+		_update_connector_hover("")
+		return
+	var ray := _model_ray(pos)
+	var hit: Dictionary = view.pick_info(ray[0], ray[1])
+	var face := str(hit.get("face", ""))
+	if face == "" or face == _snap_source_face:
+		_update_connector_hover("")
+		return
+	if view.doc.implicit_connector("", face).is_empty():
+		_update_connector_hover("")
+		return
+	_snap_target_face = face
+	_update_connector_hover(face)
+
+
+## Release over a connector: fasten the dragged part to it, the way dropping a
+## bolt into a hole should behave. Returns false when there was no target.
+func _snap_on_drop() -> bool:
+	if _snap_target_face == "" or _snap_source_face == "" or _drag_instance_id == "":
+		return false
+	var mid: String = view.doc.add_mate("fastened", "", _snap_target_face, _drag_instance_id,
+			_snap_source_face, 0.0, false, "Snap")
+	_snap_target_face = ""
+	_update_connector_hover("")
+	if mid == "":
+		return false
+	var solved: bool = view.doc.solve_mates()
+	view.refresh()
+	status.emit("Snapped — fastened to the connector" if solved
+			else "Snapped — solve FAILED")
+	return true
+
+
 ## The joint driving `instance_id`, or {} when the part is free.
 func _joint_for_instance(instance_id: String) -> Dictionary:
 	if view == null or instance_id == "":
@@ -2048,6 +2113,8 @@ func _on_press(pos: Vector2) -> void:
 			_pending_instance_move = true
 			_drag_instance_id = iid
 			_instance_grab_point = ihit["point"]
+			_snap_source_face = _grabbed_connector_face(iid, ihit["point"])
+			_snap_target_face = ""
 			var inode := view.instance_node(iid)
 			_instance_start_xform = inode.transform if inode != null else Transform3D.IDENTITY
 		_press_empty = false
@@ -2276,8 +2343,13 @@ func _on_drag(pos: Vector2) -> void:
 			if inode != null:
 				inode.transform = Transform3D(_instance_start_xform.basis,
 						_instance_start_xform.origin + delta)
-			status.emit("Move instance Δ (%.1f, %.1f) — release re-solves mates"
-					% [delta.x, delta.y])
+			# Magnet: a connector under the cursor lights up and claims the drop.
+			_update_snap_target(pos)
+			if _snap_target_face != "":
+				status.emit("Release to fasten onto the highlighted connector")
+			else:
+				status.emit("Move instance Δ (%.1f, %.1f) — release re-solves mates"
+						% [delta.x, delta.y])
 
 
 func _draw() -> void:
@@ -2532,6 +2604,14 @@ func _on_release(pos: Vector2) -> void:
 			return
 		DragMode.MOVE_INSTANCE:
 			var inode := view.instance_node(_drag_instance_id)
+			# Dropped on a connector: fasten there instead of leaving it loose.
+			if not was_click and inode != null and _snap_on_drop():
+				_drag_mode = DragMode.NONE
+				_drag_instance_id = ""
+				_box_drag = false
+				_additive_click = false
+				_press_travel = 0.0
+				return
 			# A jointed part has one degree of freedom; the drag drives it.
 			if not was_click and inode != null and _drive_joint_from_drag(pos):
 				_drag_mode = DragMode.NONE

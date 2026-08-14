@@ -184,6 +184,34 @@ static func viewport_click(
 	await wait_frames(ctx.tree, 2)
 
 
+## Press, travel, release through Interaction — the drag path a user takes.
+static func viewport_drag(ctx: FilmContext, from: Vector2, to: Vector2, cue: Dictionary,
+		steps: int = 6) -> void:
+	var ix = ctx.main.interaction
+	if ix == null:
+		_fail("interaction missing for viewport drag")
+		return
+	await _cue_click(ctx, from, cue)
+	var down := InputEventMouseButton.new()
+	down.button_index = MOUSE_BUTTON_LEFT
+	down.pressed = true
+	down.position = from
+	ix._input(down)
+	await wait_frames(ctx.tree, 1)
+	for i in range(1, steps + 1):
+		var mm := InputEventMouseMotion.new()
+		mm.button_mask = MOUSE_BUTTON_MASK_LEFT
+		mm.position = from.lerp(to, float(i) / steps)
+		ix._input(mm)
+		await wait_frames(ctx.tree, 1)
+	var up := InputEventMouseButton.new()
+	up.button_index = MOUSE_BUTTON_LEFT
+	up.pressed = false
+	up.position = to
+	ix._input(up)
+	await wait_frames(ctx.tree, 3)
+
+
 static func model_to_screen(ctx: FilmContext, model_pt: Vector3) -> Vector2:
 	var ix = ctx.main.interaction
 	if ix != null and ix.has_method("_model_to_screen"):

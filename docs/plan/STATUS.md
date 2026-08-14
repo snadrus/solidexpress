@@ -232,6 +232,9 @@ only the real thing passes:
   mates, joint rows reading the live value, and dragging a jointed part drives
   its one free DOF (screen-space projection of the axis). `apply_joint` is now
   absolute, so driving a value is repeatable and zero returns the part home.
+- [x] 1.2 Snap-to-mate on drop: the connector under the cursor lights up mid-drag
+  and the release creates the fastened mate on the part's own nearest connector;
+  film `snap_bolt_drop`
 - [x] 1.6/1.7 Draw mode rail + `drawing_sheet.gd`; film `drawing_follows_model`
 - [x] 1.8 BOM from instance counts; film `drawing_bom`
 - [x] 1.12 Rib feature + marking-menu verb; film `rib_and_wrap`

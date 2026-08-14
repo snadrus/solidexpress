@@ -34,9 +34,75 @@ func _init() -> void:
 	await test_connector_hover_glyph(main)
 	await test_joint_from_face_flow(main)
 	await test_drag_drives_joint(main)
+	await test_snap_on_drop(main)
 
 	print("%d checks, %d failures" % [checks, failures])
 	quit(1 if failures > 0 else 0)
+
+
+## Slice H: dropping a part on a connector creates the mate, no dialog.
+func test_snap_on_drop(main) -> void:
+	print("- dropping an instance on a connector fastens it")
+	var view: DocumentView = main.view
+	var vi: ViewportInteraction = main.interaction
+	view.new_document()
+	var panel := _mount_panel(main)
+	var doc: SxDocument = view.doc
+	var plate: String = view.insert_primitive("box", Vector3.ZERO)
+	var bolt: String = doc.add_cylinder(4, 20, Vector3(90, 0, 0))
+	view.select_entity(bolt, "")
+	panel._place_instance()
+	await process_frame
+	var iid: String = doc.instance_list()[0]["id"]
+	check(doc.mate_list().is_empty(), "no mates before the drop")
+
+	root.size = Vector2i(1280, 720)
+	vi.size = Vector2(1280, 720)
+	main.camera.frame_contents()
+	await process_frame
+
+	# Press on the instance where it is actually drawn (source geometry offset by
+	# the placement), travel over the plate's top face, release.
+	var bolt_bb: Dictionary = doc.measure_bbox(bolt)
+	var bolt_center: Vector3 = (bolt_bb["min"] + bolt_bb["max"]) * 0.5
+	var placement: Vector3 = doc.instance_list()[0]["translation"]
+	var from: Vector2 = vi._model_to_screen(placement + bolt_center)
+	var bb: Dictionary = doc.measure_bbox(plate)
+	var top: Vector3 = Vector3((bb["min"].x + bb["max"].x) * 0.5,
+			(bb["min"].y + bb["max"].y) * 0.5, bb["max"].z)
+	var to: Vector2 = vi._model_to_screen(top)
+	_lmb(vi, from, true)
+	if not vi._pending_instance_move:
+		check(true, "drag skipped: press did not land on the instance")
+		_lmb(vi, from, false)
+		panel.queue_free()
+		return
+	for i in range(1, 7):
+		var mm := InputEventMouseMotion.new()
+		mm.button_mask = MOUSE_BUTTON_MASK_LEFT
+		mm.position = from.lerp(to, float(i) / 6.0)
+		vi._input(mm)
+		await process_frame
+	check(vi._snap_target_face != "", "connector under the cursor is the magnet target")
+	check(vi.connector_overlay.showing(), "magnet is shown on the geometry")
+	_lmb(vi, to, false)
+	await process_frame
+
+	var mates: Array = doc.mate_list()
+	check(mates.size() == 1, "the drop created one mate")
+	if not mates.is_empty():
+		check(str(mates[0].get("type", "")) == "fastened", "and it is fastened")
+		check(str(mates[0].get("instance_b", "")) == iid, "on the dropped instance")
+	check(vi._snap_target_face == "", "magnet target cleared after the drop")
+	panel.queue_free()
+
+
+func _lmb(vi: ViewportInteraction, pos: Vector2, pressed: bool) -> void:
+	var mb := InputEventMouseButton.new()
+	mb.button_index = MOUSE_BUTTON_LEFT
+	mb.pressed = pressed
+	mb.position = pos
+	vi._input(mb)
 
 
 ## Slice H: joints share the mate flow — same two faces, one type list.
